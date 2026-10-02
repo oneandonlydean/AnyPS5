@@ -17,6 +17,16 @@ std::uint32_t parity(std::uint32_t value) {
     return static_cast<std::uint32_t>(std::popcount(value)) & 1u;
 }
 
+std::uint32_t standardOffset(std::uint32_t x, std::uint32_t y, std::uint32_t elementBytes) {
+    switch (elementBytes) {
+        case 1u: return ((y << 4) & 0x1f0u) ^ ((y << 5) & 0x400u) ^ (x & 0x00fu) ^ ((x << 5) & 0x200u) ^ ((x << 6) & 0x800u);
+        case 2u: return ((y << 4) & 0x070u) ^ ((y << 5) & 0x100u) ^ ((y << 6) & 0x400u) ^ ((x << 1) & 0x00eu) ^ ((x << 4) & 0x080u) ^ ((x << 5) & 0x200u) ^ ((x << 6) & 0x800u);
+        case 4u: return ((y << 4) & 0x070u) ^ ((y << 5) & 0x100u) ^ ((y << 6) & 0x400u) ^ ((x << 2) & 0x00cu) ^ ((x << 5) & 0x080u) ^ ((x << 6) & 0x200u) ^ ((x << 7) & 0x800u);
+        case 8u: return ((y << 4) & 0x030u) ^ ((y << 6) & 0x100u) ^ ((y << 7) & 0x400u) ^ ((x << 3) & 0x008u) ^ ((x << 5) & 0x0c0u) ^ ((x << 6) & 0x200u) ^ ((x << 7) & 0x800u);
+        default: return ((y << 4) & 0x030u) ^ ((y << 6) & 0x100u) ^ ((y << 7) & 0x400u) ^ ((x << 6) & 0x0c0u) ^ ((x << 7) & 0x200u) ^ ((x << 8) & 0x800u);
+    }
+}
+
 }
 
 ColorTileMode DecodeColorTileMode(std::uint32_t attrib3) {
@@ -24,7 +34,7 @@ ColorTileMode DecodeColorTileMode(std::uint32_t attrib3) {
     const auto mode = (attrib3 >> 14u) & 0x1fu;
     const auto fmaskMode = (attrib3 >> 19u) & 0x1fu;
     require(fmaskMode == 0 || fmaskMode == 0x18, "AGC graphics: unsupported color FMASK swizzle mode");
-    require(mode == 0 || mode == 0x1b, "AGC graphics: unsupported color tile mode");
+    require(mode == 0 || mode == 5 || mode == 0x1b, "AGC graphics: unsupported color tile mode");
     return static_cast<ColorTileMode>(mode);
 }
 
@@ -59,6 +69,20 @@ const SwizzleTables& renderTargetTables(std::uint32_t bytesPerElement, std::uint
     return tables[index];
 }
 
+const SwizzleTables& standardTables(std::uint32_t bytesPerElement, std::uint32_t blockWidth, std::uint32_t blockHeight) {
+    static std::once_flag once[5];
+    static SwizzleTables tables[5];
+    const auto index = static_cast<std::size_t>(std::countr_zero(bytesPerElement));
+    std::call_once(once[index], [&] {
+        auto& table = tables[index];
+        table.x.resize(blockWidth);
+        table.y.resize(blockHeight);
+        for (std::uint32_t x = 0; x < blockWidth; ++x) table.x[x] = standardOffset(x, 0, bytesPerElement);
+        for (std::uint32_t y = 0; y < blockHeight; ++y) table.y[y] = standardOffset(0, y, bytesPerElement);
+    });
+    return tables[index];
+}
+
 }
 
 ColorTargetLayout::ColorTargetLayout(std::uint32_t width, std::uint32_t height, ColorTileMode mode, std::uint32_t bytesPerElement) : width(width), height(height), pitch(width), mode(mode), bytes(0), elementBytes(bytesPerElement) {
@@ -83,6 +107,17 @@ ColorTargetLayout::ColorTargetLayout(std::uint32_t width, std::uint32_t height, 
             yOffsets = tables.y.data();
             break;
         }
+        case ColorTileMode::Standard4KB: {
+            const auto log2Bytes = static_cast<std::uint32_t>(std::countr_zero(bytesPerElement));
+            blockWidth = 1u << (6u - (log2Bytes + 1u) / 2u);
+            blockHeight = 1u << (6u - log2Bytes / 2u);
+            pitch = (width + blockWidth - 1u) / blockWidth * blockWidth;
+            paddedHeight = (height + blockHeight - 1u) / blockHeight * blockHeight;
+            const auto& tables = standardTables(bytesPerElement, blockWidth, blockHeight);
+            xOffsets = tables.x.data();
+            yOffsets = tables.y.data();
+            break;
+        }
         default: throw std::runtime_error("AGC graphics: unsupported color tile mode");
     }
     const auto size = static_cast<std::uint64_t>(pitch) * paddedHeight * bytesPerElement;
@@ -93,7 +128,7 @@ ColorTargetLayout::ColorTargetLayout(std::uint32_t width, std::uint32_t height, 
 std::size_t ColorTargetLayout::offset(std::uint32_t x, std::uint32_t y) const {
     if (mode == ColorTileMode::Linear) return (static_cast<std::size_t>(y) * pitch + x) * elementBytes;
     const auto block = static_cast<std::size_t>(y / blockHeight) * (pitch / blockWidth) + x / blockWidth;
-    return block * 65536u + (xOffsets[x % blockWidth] ^ yOffsets[y % blockHeight]);
+    return block * Alignment() + (xOffsets[x % blockWidth] ^ yOffsets[y % blockHeight]);
 }
 
 std::size_t ColorTargetLayout::Offset(std::uint32_t x, std::uint32_t y) const {

@@ -768,7 +768,9 @@ ColorTarget DecodeColorBuffer(const Registers& cx, std::uint32_t slot) {
     Require((info & 0x8000u) != 0 || number == 7 || number == 4 || number == 5, "unclamped normalized color is unsupported");
     // CB_COLOR_VIEW: MIP_LEVEL (bits 26-29) selects the rendered mip; array slices are not modeled.
     const auto view = read(cx, 0x31b + stride);
-    Require((view & ~0x3c000000u) == 0, "color array views are unsupported");
+    Require((view & ~0x3fffffffu) == 0, "reserved CB_COLOR_VIEW bits are set");
+    const auto slice = view & 0x1fffu;
+    Require(slice == ((view >> 13u) & 0x1fffu), "color views of several array slices are unsupported");
     const auto viewMip = (view >> 26u) & 0xfu;
     zero(cx, 0x31d + stride, ~0u, "color samples, fragments or destination alpha override");
     const auto attrib2 = read(cx, 0x3b0 + slot);
@@ -784,7 +786,7 @@ ColorTarget DecodeColorBuffer(const Registers& cx, std::uint32_t slot) {
     color.mip = viewMip;
     if (maxMip != 0) {
         // A mipmapped surface is addressed like a texture; the view renders into one mip of it.
-        const auto mips = ComputeElementMipLayout(color.tileMode == ColorTileMode::Linear ? TextureTileMode::kLinear : TextureTileMode::kR64KBX, color.elementBytes, color.extent.width, color.extent.height, maxMip + 1u);
+        const auto mips = ComputeElementMipLayout(ColorTextureTileMode(color.tileMode), color.elementBytes, color.extent.width, color.extent.height, maxMip + 1u);
         const auto& mip = mips.at(viewMip);
         mipOffset = mip.tiledOffset;
         color.mipTail = mip.tail;
@@ -794,6 +796,7 @@ ColorTarget DecodeColorBuffer(const Registers& cx, std::uint32_t slot) {
     const auto high = read(cx, 0x390 + slot);
     Require((high & ~0xffu) == 0, "invalid color address extension");
     color.surfaceAddress = (static_cast<std::uint64_t>(high) << 40u) | (static_cast<std::uint64_t>(read(cx, 0x318 + stride)) << 8u);
+    if (slice != 0) color.surfaceAddress += slice * ComputeSurfaceSize(ComputeElementMipLayout(ColorTextureTileMode(color.tileMode), color.elementBytes, color.surfaceExtent.width, color.surfaceExtent.height, color.mipCount), 1);
     color.address = color.surfaceAddress + mipOffset;
     color.bytes = colorLayout.Bytes();
     GuestMemory::CheckRange(reinterpret_cast<const void*>(color.address), color.bytes, colorLayout.Alignment(), true);

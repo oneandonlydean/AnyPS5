@@ -37,6 +37,7 @@ namespace {
 using AgcDriver::Graphics::Require;
 
 alignas(256) std::array<std::byte, 1024> colorMemory{};
+alignas(256) std::array<std::byte, 2048> sliceMemory{};
 
 AgcDriver::QueueState makeState() {
     AgcDriver::QueueState queue;
@@ -132,7 +133,7 @@ void stateTests() {
     queue.context.erase(0x3b8);
     expectFailure([&] { AgcDriver::Graphics::DecodeState(queue); }, "missing register");
     queue = makeState();
-    queue.context[0x3b8] |= 5u << 14u;
+    queue.context[0x3b8] |= 1u << 14u;
     expectFailure([&] { AgcDriver::Graphics::DecodeState(queue); }, "unsupported color tile mode");
     queue = makeState();
     queue.context[0x3b0] = (62u << 14u) | 3u;
@@ -833,7 +834,13 @@ void ColorViewTests() {
     queue.context[0x31b] = 1u << 26u;
     expectFailure([&] { AgcDriver::Graphics::DecodeState(queue); }, "mip exceeds");
     queue.context[0x31b] = 1u << 13u;
-    expectFailure([&] { AgcDriver::Graphics::DecodeState(queue); }, "array views");
+    expectFailure([&] { AgcDriver::Graphics::DecodeState(queue); }, "several array slices");
+    const auto sliced = reinterpret_cast<std::uintptr_t>(sliceMemory.data());
+    queue.context[0x318] = static_cast<std::uint32_t>(sliced >> 8u);
+    queue.context[0x390] = static_cast<std::uint32_t>(sliced >> 40u);
+    queue.context[0x31b] = 1u | (1u << 13u);
+    const auto slice = AgcDriver::Graphics::DecodeState(queue);
+    Require(slice.color.address == sliced + 1024u && slice.color.bytes == 1024u, "a color view of one slice did not move the target by one slice");
 }
 
 alignas(256) std::array<std::uint8_t, 4> dccKeys{};
