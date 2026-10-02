@@ -300,6 +300,32 @@ std::uint32_t EmitFormatStoreComponent(SpirvEmitterState& state, const SpirvBuff
     }
 }
 
+std::uint32_t EmitD16StoreComponent(SpirvEmitterState& state, const SpirvBufferFormatInfo& info, std::uint32_t component, std::uint32_t half) {
+    switch (info.type) {
+    case SpirvFormatComponentType::Uint:
+        return EmitFormatStoreComponent(state, info, component, half);
+    case SpirvFormatComponentType::Sint:
+        return EmitFormatStoreComponent(state, info, component, Unary(state, spv::OpBitcast, TypeU32(state), Binary(state, spv::OpShiftRightArithmetic, TypeI32(state), EmitTBufferBitcastU32ToI32(state, EmitBinaryU32(state, spv::OpShiftLeftLogical, half, ConstantU32(state, 16u))), EmitTBufferBitcastU32ToI32(state, ConstantU32(state, 16u)))));
+    case SpirvFormatComponentType::Float:
+        if (info.componentBits[component] == 16u) return half;
+        break;
+    default:
+        break;
+    }
+    const auto sign = EmitBinaryU32(state, spv::OpShiftLeftLogical, EmitAndConstant(state, half, 0x8000u), ConstantU32(state, 16u));
+    const auto exponent = EmitAndConstant(state, EmitBinaryU32(state, spv::OpShiftRightLogical, half, ConstantU32(state, 10u)), 0x1fu);
+    const auto mantissa = EmitAndConstant(state, half, 0x3ffu);
+    const auto normal = EmitOrU32(state, EmitBinaryU32(state, spv::OpShiftLeftLogical, EmitAddU32(state, exponent, ConstantU32(state, 112u)), ConstantU32(state, 23u)), EmitBinaryU32(state, spv::OpShiftLeftLogical, mantissa, ConstantU32(state, 13u)));
+    const auto special = EmitOrU32(state, ConstantU32(state, 0x7f800000u), EmitBinaryU32(state, spv::OpShiftLeftLogical, mantissa, ConstantU32(state, 13u)));
+    const auto msb = FindMsb(state, EmitSelectValueU32(state, EmitCompareU32Constant(state, spv::OpIEqual, mantissa, 0u), ConstantU32(state, 1u), mantissa));
+    const auto subnormalExponent = EmitBinaryU32(state, spv::OpShiftLeftLogical, EmitAddU32(state, msb, ConstantU32(state, 103u)), ConstantU32(state, 23u));
+    const auto subnormalMantissa = EmitAndConstant(state, EmitBinaryU32(state, spv::OpShiftLeftLogical, mantissa, EmitBinaryU32(state, spv::OpISub, ConstantU32(state, 23u), msb)), 0x7fffffu);
+    const auto subnormal = EmitSelectValueU32(state, EmitCompareU32Constant(state, spv::OpIEqual, mantissa, 0u), ConstantU32(state, 0u), EmitOrU32(state, subnormalExponent, subnormalMantissa));
+    auto magnitude = EmitSelectValueU32(state, EmitCompareU32Constant(state, spv::OpIEqual, exponent, 0u), subnormal, normal);
+    magnitude = EmitSelectValueU32(state, EmitCompareU32Constant(state, spv::OpIEqual, exponent, 31u), special, magnitude);
+    return EmitFormatStoreComponent(state, info, component, EmitOrU32(state, sign, magnitude));
+}
+
 void EmitDeviceAtomicMemoryBarrier(SpirvEmitterState& state) {
     // GCN atomics imply no fence; this device-scope barrier is the acquire side of lock/publish
     // patterns (atomic, then loads of data other waves wrote). It also makes every non-returning

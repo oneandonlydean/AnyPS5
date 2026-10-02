@@ -633,6 +633,15 @@ bool IsBufferMemoryOpcode(RdnaOpcode opcode) {
         case RdnaOpcode::BufferLoadFormatD16Xyz:
         case RdnaOpcode::BufferLoadFormatD16Xyzw:
         case RdnaOpcode::BufferLoadFormatD16HiX:
+        case RdnaOpcode::TbufferStoreFormatD16X:
+        case RdnaOpcode::TbufferStoreFormatD16Xy:
+        case RdnaOpcode::TbufferStoreFormatD16Xyz:
+        case RdnaOpcode::TbufferStoreFormatD16Xyzw:
+        case RdnaOpcode::BufferStoreFormatD16X:
+        case RdnaOpcode::BufferStoreFormatD16Xy:
+        case RdnaOpcode::BufferStoreFormatD16Xyz:
+        case RdnaOpcode::BufferStoreFormatD16Xyzw:
+        case RdnaOpcode::BufferStoreFormatD16HiX:
         case RdnaOpcode::TbufferStoreFormatX:
         case RdnaOpcode::TbufferStoreFormatXy:
         case RdnaOpcode::TbufferStoreFormatXyz:

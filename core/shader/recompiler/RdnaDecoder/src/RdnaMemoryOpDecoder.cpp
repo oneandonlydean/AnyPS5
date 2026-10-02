@@ -95,6 +95,7 @@ constexpr MemoryOpcodeInfo mubufOpcodes[] = {
     {0x24u, RdnaOpcode::BufferLoadShortD16, 1, 16, false, false, false},
     {0x25u, RdnaOpcode::BufferLoadShortD16Hi, 1, 16, false, false, false},
     {0x26u, RdnaOpcode::BufferLoadFormatD16HiX, 1, 32, false, false, true},
+    {0x27u, RdnaOpcode::BufferStoreFormatD16HiX, 1, 32, false, false, true},
     {0x19u, RdnaOpcode::BufferStoreByteD16Hi, 1, 8, false, false, false},
     {0x1bu, RdnaOpcode::BufferStoreShortD16Hi, 1, 16, false, false, false},
     {0x30u, RdnaOpcode::BufferAtomicSwap, 1, 32, false, false, false},
@@ -116,6 +117,10 @@ constexpr MemoryOpcodeInfo mubufOpcodes[] = {
     {0x81u, RdnaOpcode::BufferLoadFormatD16Xy, 2, 32, false, false, true},
     {0x82u, RdnaOpcode::BufferLoadFormatD16Xyz, 3, 32, false, false, true},
     {0x83u, RdnaOpcode::BufferLoadFormatD16Xyzw, 4, 32, false, false, true},
+    {0x84u, RdnaOpcode::BufferStoreFormatD16X, 1, 32, false, false, true},
+    {0x85u, RdnaOpcode::BufferStoreFormatD16Xy, 2, 32, false, false, true},
+    {0x86u, RdnaOpcode::BufferStoreFormatD16Xyz, 3, 32, false, false, true},
+    {0x87u, RdnaOpcode::BufferStoreFormatD16Xyzw, 4, 32, false, false, true},
 };
 
 constexpr MemoryOpcodeInfo mtbufOpcodes[] = {
@@ -131,6 +136,10 @@ constexpr MemoryOpcodeInfo mtbufOpcodes[] = {
     {0x09u, RdnaOpcode::TbufferLoadFormatD16Xy, 2, 32, false, true, true},
     {0x0au, RdnaOpcode::TbufferLoadFormatD16Xyz, 3, 32, false, true, true},
     {0x0bu, RdnaOpcode::TbufferLoadFormatD16Xyzw, 4, 32, false, true, true},
+    {0x0cu, RdnaOpcode::TbufferStoreFormatD16X, 1, 32, false, true, true},
+    {0x0du, RdnaOpcode::TbufferStoreFormatD16Xy, 2, 32, false, true, true},
+    {0x0eu, RdnaOpcode::TbufferStoreFormatD16Xyz, 3, 32, false, true, true},
+    {0x0fu, RdnaOpcode::TbufferStoreFormatD16Xyzw, 4, 32, false, true, true},
 };
 
 constexpr MemoryOpcodeInfo flatOpcodes[] = {

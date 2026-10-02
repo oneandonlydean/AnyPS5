@@ -533,7 +533,7 @@ void StoreFormattedElement(SpirvValueEmitContext& ctx, const MemoryInfo& mem, co
     const auto& info = plan.info;
     std::array<std::uint32_t, 4> encoded{};
     for (std::uint32_t component = 0; component < info.componentCount; component++) {
-        encoded.at(component) = component < components ? EmitFormatStoreComponent(state, info, component, data.at(component)) : ConstantU32(state, 0u);
+        encoded.at(component) = component >= components ? ConstantU32(state, 0u) : mem.d16 ? EmitD16StoreComponent(state, info, component, data.at(component)) : EmitFormatStoreComponent(state, info, component, data.at(component));
     }
     if (info.packedBitfield) {
         auto word = ConstantU32(state, 0u);
@@ -567,6 +567,7 @@ void FormattedStore(SpirvValueEmitContext& ctx, const IrValue& inst, const Memor
         const auto info = MemoryFormatInfo(ctx.state, mem);
         const auto data = ctx.Arg(inst, inst.ArgumentCount() - 2u);
         if (info.type == SpirvFormatComponentType::Unknown) {
+            if (mem.d16) ctx.Fail(inst, "is a D16 format store with an unknown buffer format");
             StoreWordPrepared(ctx, inst, RebaseRawComponent(mem, 0u), resource, data);
             return;
         }
@@ -612,6 +613,7 @@ void StoreWideBuffer(SpirvValueEmitContext& ctx, const IrValue& inst, const Memo
             StoreFormattedValues(ctx, inst, mem, resource, info, data, components);
             return;
         }
+        if (mem.d16) ctx.Fail(inst, "is a D16 format store with an unknown buffer format");
         for (std::uint32_t component = 0; component < components; component++) {
             const auto data = state.module.AllocateId();
             state.module.AddFunction(spv::OpCompositeExtract, TypeU32(state), data, composite, component);

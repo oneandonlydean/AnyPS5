@@ -115,6 +115,37 @@ bool TranslationContext::bufferLoadFormatD16(const RdnaInstruction& inst) {
     return true;
 }
 
+bool TranslationContext::bufferStoreFormatD16(const RdnaInstruction& inst) {
+    MemoryInfo memory = bufferMemoryInfoFromInstruction(inst);
+    memory.coherent = inst.glc || inst.dlc;
+    memory.d16 = true;
+    static constexpr std::array<IrOpcode, 4> opcodes{IrOpcode::StoreBufferU32, IrOpcode::StoreBufferU32x2, IrOpcode::StoreBufferU32x3, IrOpcode::StoreBufferU32x4};
+    const std::uint32_t count = memory.dataDwords;
+    if (count == 0u || count > opcodes.size()) {
+        return false;
+    }
+    IrValue* resource = getBufferResource(memory);
+    const BufferAddress address = readBufferAddress(inst);
+    const bool high = inst.op == RdnaOpcode::BufferStoreFormatD16HiX;
+    std::array<IrValue*, 4> halves{};
+    for (std::uint32_t component = 0u; component < count; ++component) {
+        const IrU32 word = readRawU32(plainOperand(offsetOperand(inst.destination, component / 2u)));
+        const bool upper = high || (component & 1u) != 0u;
+        halves[component] = upper ? &ir.ShiftRightLogical(word.Value(), ir.Constant(16u)) : &ir.BitwiseAnd(word.Value(), ir.Constant(0xffffu));
+    }
+    IrValue* value = halves[0];
+    if (count == 2u) {
+        value = &ir.Emit(IrOpcode::CompositeConstructU32x2, IrType::U32x2, {halves[0], halves[1]});
+    } else if (count == 3u) {
+        value = &ir.Emit(IrOpcode::CompositeConstructU32x3, IrType::U32x3, {halves[0], halves[1], halves[2]});
+    } else if (count == 4u) {
+        value = &ir.Emit(IrOpcode::CompositeConstructU32x4, IrType::U32x4, {halves[0], halves[1], halves[2], halves[3]});
+    }
+    IrValue& exec = ir.GetExec();
+    (void)ir.Emit(opcodes[count - 1u], IrType::Void, {resource, &address.index.Value(), &address.offset.Value(), &address.soffset.Value(), value, &exec}, addMemoryInfo(memory, inst.programCounter));
+    return true;
+}
+
 bool TranslationContext::bufferStore(const RdnaInstruction& inst) {
     MemoryInfo memory = bufferMemoryInfoFromInstruction(inst);
     memory.coherent = inst.glc || inst.dlc;
