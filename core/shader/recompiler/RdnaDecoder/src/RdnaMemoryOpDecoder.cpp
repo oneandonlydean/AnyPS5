@@ -18,10 +18,13 @@ RdnaOperand d16Half(RdnaOperand operand, RdnaOpcode opcode) {
         case RdnaOpcode::FlatLoadShortD16:
         case RdnaOpcode::DsReadU8D16:
         case RdnaOpcode::DsReadI8D16:
-        case RdnaOpcode::DsReadU16D16: operand.sdwaSel = 4u; break;
+        case RdnaOpcode::DsReadU16D16:
+        case RdnaOpcode::BufferLoadFormatD16X:
+        case RdnaOpcode::TbufferLoadFormatD16X: operand.sdwaSel = 4u; break;
         case RdnaOpcode::BufferLoadUbyteD16Hi:
         case RdnaOpcode::BufferLoadSbyteD16Hi:
         case RdnaOpcode::BufferLoadShortD16Hi:
+        case RdnaOpcode::BufferLoadFormatD16HiX:
         case RdnaOpcode::BufferStoreByteD16Hi:
         case RdnaOpcode::BufferStoreShortD16Hi:
         case RdnaOpcode::FlatLoadUbyteD16Hi:
@@ -91,6 +94,7 @@ constexpr MemoryOpcodeInfo mubufOpcodes[] = {
     {0x23u, RdnaOpcode::BufferLoadSbyteD16Hi, 1, 8, true, false, false},
     {0x24u, RdnaOpcode::BufferLoadShortD16, 1, 16, false, false, false},
     {0x25u, RdnaOpcode::BufferLoadShortD16Hi, 1, 16, false, false, false},
+    {0x26u, RdnaOpcode::BufferLoadFormatD16HiX, 1, 32, false, false, true},
     {0x19u, RdnaOpcode::BufferStoreByteD16Hi, 1, 8, false, false, false},
     {0x1bu, RdnaOpcode::BufferStoreShortD16Hi, 1, 16, false, false, false},
     {0x30u, RdnaOpcode::BufferAtomicSwap, 1, 32, false, false, false},
@@ -108,6 +112,10 @@ constexpr MemoryOpcodeInfo mubufOpcodes[] = {
     {0x40u, RdnaOpcode::BufferAtomicFmax, 1, 32, false, false, false},
     {0x50u, RdnaOpcode::BufferAtomicSwapX2, 2, 32, false, false, false},
     {0x5au, RdnaOpcode::BufferAtomicOrX2, 2, 32, false, false, false},
+    {0x80u, RdnaOpcode::BufferLoadFormatD16X, 1, 32, false, false, true},
+    {0x81u, RdnaOpcode::BufferLoadFormatD16Xy, 2, 32, false, false, true},
+    {0x82u, RdnaOpcode::BufferLoadFormatD16Xyz, 3, 32, false, false, true},
+    {0x83u, RdnaOpcode::BufferLoadFormatD16Xyzw, 4, 32, false, false, true},
 };
 
 constexpr MemoryOpcodeInfo mtbufOpcodes[] = {
@@ -119,6 +127,10 @@ constexpr MemoryOpcodeInfo mtbufOpcodes[] = {
     {0x05u, RdnaOpcode::TbufferStoreFormatXy, 2, 32, false, true, true},
     {0x06u, RdnaOpcode::TbufferStoreFormatXyz, 3, 32, false, true, true},
     {0x07u, RdnaOpcode::TbufferStoreFormatXyzw, 4, 32, false, true, true},
+    {0x08u, RdnaOpcode::TbufferLoadFormatD16X, 1, 32, false, true, true},
+    {0x09u, RdnaOpcode::TbufferLoadFormatD16Xy, 2, 32, false, true, true},
+    {0x0au, RdnaOpcode::TbufferLoadFormatD16Xyz, 3, 32, false, true, true},
+    {0x0bu, RdnaOpcode::TbufferLoadFormatD16Xyzw, 4, 32, false, true, true},
 };
 
 constexpr MemoryOpcodeInfo flatOpcodes[] = {
@@ -593,7 +605,7 @@ RdnaInstruction DecodeRdnaMtbuf(std::uint32_t programCounter, std::span<const st
     applyMemoryInfo(instruction, info);
     setRawWords(instruction, code, wordIndex, 2u);
 
-    instruction.destination = vectorRegister(vdata);
+    instruction.destination = d16Half(vectorRegister(vdata), instruction.op);
     instruction.source0 = vectorRegister(vaddr);
     instruction.source1 = scalarDescriptorBase(srsrc * 4u, 4u, "MTBUF resource descriptor register range overflow");
     instruction.source2 = scalarSource(soffsetCode);

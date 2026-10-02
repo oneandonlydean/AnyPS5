@@ -59,6 +59,16 @@ bool TranslationContext::emitMemory(const RdnaInstruction& inst) {
     case RdnaOpcode::TbufferLoadFormatXyz:
     case RdnaOpcode::TbufferLoadFormatXyzw:
         return bufferLoad(inst);
+    case RdnaOpcode::BufferLoadFormatD16X:
+    case RdnaOpcode::BufferLoadFormatD16Xy:
+    case RdnaOpcode::BufferLoadFormatD16Xyz:
+    case RdnaOpcode::BufferLoadFormatD16Xyzw:
+    case RdnaOpcode::BufferLoadFormatD16HiX:
+    case RdnaOpcode::TbufferLoadFormatD16X:
+    case RdnaOpcode::TbufferLoadFormatD16Xy:
+    case RdnaOpcode::TbufferLoadFormatD16Xyz:
+    case RdnaOpcode::TbufferLoadFormatD16Xyzw:
+        return bufferLoadFormatD16(inst);
 
     case RdnaOpcode::BufferStoreFormatX:
     case RdnaOpcode::BufferStoreFormatXy:
