@@ -534,6 +534,40 @@ bool IsVectorAluOpcode(RdnaOpcode opcode) {
         case RdnaOpcode::VCmpxNlgF16:
         case RdnaOpcode::VCmpxNleF16:
         case RdnaOpcode::VCmpxTruF16:
+        case RdnaOpcode::VCmpFF64:
+        case RdnaOpcode::VCmpLtF64:
+        case RdnaOpcode::VCmpEqF64:
+        case RdnaOpcode::VCmpLeF64:
+        case RdnaOpcode::VCmpGtF64:
+        case RdnaOpcode::VCmpLgF64:
+        case RdnaOpcode::VCmpGeF64:
+        case RdnaOpcode::VCmpOF64:
+        case RdnaOpcode::VCmpUF64:
+        case RdnaOpcode::VCmpNgeF64:
+        case RdnaOpcode::VCmpNlgF64:
+        case RdnaOpcode::VCmpNgtF64:
+        case RdnaOpcode::VCmpNleF64:
+        case RdnaOpcode::VCmpNeqF64:
+        case RdnaOpcode::VCmpNltF64:
+        case RdnaOpcode::VCmpTruF64:
+        case RdnaOpcode::VCmpClassF64:
+        case RdnaOpcode::VCmpxFF64:
+        case RdnaOpcode::VCmpxLtF64:
+        case RdnaOpcode::VCmpxEqF64:
+        case RdnaOpcode::VCmpxLeF64:
+        case RdnaOpcode::VCmpxGtF64:
+        case RdnaOpcode::VCmpxLgF64:
+        case RdnaOpcode::VCmpxGeF64:
+        case RdnaOpcode::VCmpxOF64:
+        case RdnaOpcode::VCmpxUF64:
+        case RdnaOpcode::VCmpxNgeF64:
+        case RdnaOpcode::VCmpxNlgF64:
+        case RdnaOpcode::VCmpxNgtF64:
+        case RdnaOpcode::VCmpxNleF64:
+        case RdnaOpcode::VCmpxNeqF64:
+        case RdnaOpcode::VCmpxNltF64:
+        case RdnaOpcode::VCmpxTruF64:
+        case RdnaOpcode::VCmpxClassF64:
         case RdnaOpcode::VCmpxNeU64:
         case RdnaOpcode::VCmpxLtU32:
         case RdnaOpcode::VCmpxEqU32:

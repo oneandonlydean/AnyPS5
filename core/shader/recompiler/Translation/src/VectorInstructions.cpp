@@ -546,6 +546,108 @@ bool TranslationContext::emitVector(const RdnaInstruction& inst) {
     case RdnaOpcode::VCmpxClassF32:
         emitFloatClassCompare(inst, true);
         return true;
+    case RdnaOpcode::VCmpFF64:
+        emitCompareConstant(inst, false, false, false);
+        return true;
+    case RdnaOpcode::VCmpLtF64:
+        emitFloat64Compare(inst, true, false, false, false, false);
+        return true;
+    case RdnaOpcode::VCmpEqF64:
+        emitFloat64Compare(inst, false, true, false, false, false);
+        return true;
+    case RdnaOpcode::VCmpLeF64:
+        emitFloat64Compare(inst, true, true, false, false, false);
+        return true;
+    case RdnaOpcode::VCmpGtF64:
+        emitFloat64Compare(inst, false, false, true, false, false);
+        return true;
+    case RdnaOpcode::VCmpLgF64:
+        emitFloat64Compare(inst, true, false, true, false, false);
+        return true;
+    case RdnaOpcode::VCmpGeF64:
+        emitFloat64Compare(inst, false, true, true, false, false);
+        return true;
+    case RdnaOpcode::VCmpOF64:
+        emitFloat64Compare(inst, true, true, true, false, false);
+        return true;
+    case RdnaOpcode::VCmpUF64:
+        emitFloat64Compare(inst, false, false, false, true, false);
+        return true;
+    case RdnaOpcode::VCmpNgeF64:
+        emitFloat64Compare(inst, true, false, false, true, false);
+        return true;
+    case RdnaOpcode::VCmpNlgF64:
+        emitFloat64Compare(inst, false, true, false, true, false);
+        return true;
+    case RdnaOpcode::VCmpNgtF64:
+        emitFloat64Compare(inst, true, true, false, true, false);
+        return true;
+    case RdnaOpcode::VCmpNleF64:
+        emitFloat64Compare(inst, false, false, true, true, false);
+        return true;
+    case RdnaOpcode::VCmpNeqF64:
+        emitFloat64Compare(inst, true, false, true, true, false);
+        return true;
+    case RdnaOpcode::VCmpNltF64:
+        emitFloat64Compare(inst, false, true, true, true, false);
+        return true;
+    case RdnaOpcode::VCmpTruF64:
+        emitCompareConstant(inst, true, false, false);
+        return true;
+    case RdnaOpcode::VCmpClassF64:
+        emitFloat64ClassCompare(inst, false);
+        return true;
+    case RdnaOpcode::VCmpxFF64:
+        emitCompareConstant(inst, false, false, true);
+        return true;
+    case RdnaOpcode::VCmpxLtF64:
+        emitFloat64Compare(inst, true, false, false, false, true);
+        return true;
+    case RdnaOpcode::VCmpxEqF64:
+        emitFloat64Compare(inst, false, true, false, false, true);
+        return true;
+    case RdnaOpcode::VCmpxLeF64:
+        emitFloat64Compare(inst, true, true, false, false, true);
+        return true;
+    case RdnaOpcode::VCmpxGtF64:
+        emitFloat64Compare(inst, false, false, true, false, true);
+        return true;
+    case RdnaOpcode::VCmpxLgF64:
+        emitFloat64Compare(inst, true, false, true, false, true);
+        return true;
+    case RdnaOpcode::VCmpxGeF64:
+        emitFloat64Compare(inst, false, true, true, false, true);
+        return true;
+    case RdnaOpcode::VCmpxOF64:
+        emitFloat64Compare(inst, true, true, true, false, true);
+        return true;
+    case RdnaOpcode::VCmpxUF64:
+        emitFloat64Compare(inst, false, false, false, true, true);
+        return true;
+    case RdnaOpcode::VCmpxNgeF64:
+        emitFloat64Compare(inst, true, false, false, true, true);
+        return true;
+    case RdnaOpcode::VCmpxNlgF64:
+        emitFloat64Compare(inst, false, true, false, true, true);
+        return true;
+    case RdnaOpcode::VCmpxNgtF64:
+        emitFloat64Compare(inst, true, true, false, true, true);
+        return true;
+    case RdnaOpcode::VCmpxNleF64:
+        emitFloat64Compare(inst, false, false, true, true, true);
+        return true;
+    case RdnaOpcode::VCmpxNeqF64:
+        emitFloat64Compare(inst, true, false, true, true, true);
+        return true;
+    case RdnaOpcode::VCmpxNltF64:
+        emitFloat64Compare(inst, false, true, true, true, true);
+        return true;
+    case RdnaOpcode::VCmpxTruF64:
+        emitCompareConstant(inst, true, false, true);
+        return true;
+    case RdnaOpcode::VCmpxClassF64:
+        emitFloat64ClassCompare(inst, true);
+        return true;
     case RdnaOpcode::VCvtF32Ubyte0:
         vCvtF32Ubyte(inst, 0u);
         return true;

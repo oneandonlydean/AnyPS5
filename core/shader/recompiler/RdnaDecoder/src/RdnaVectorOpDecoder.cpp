@@ -390,6 +390,40 @@ constexpr VopcOpcodeInfo vopcOpcodes[] = {
     {0xfau, RdnaOpcode::VCmpxNlgF16},
     {0xfcu, RdnaOpcode::VCmpxNleF16},
     {0xffu, RdnaOpcode::VCmpxTruF16},
+    {0x20u, RdnaOpcode::VCmpFF64, false},
+    {0x21u, RdnaOpcode::VCmpLtF64, false},
+    {0x22u, RdnaOpcode::VCmpEqF64, false},
+    {0x23u, RdnaOpcode::VCmpLeF64, false},
+    {0x24u, RdnaOpcode::VCmpGtF64, false},
+    {0x25u, RdnaOpcode::VCmpLgF64, false},
+    {0x26u, RdnaOpcode::VCmpGeF64, false},
+    {0x27u, RdnaOpcode::VCmpOF64, false},
+    {0x28u, RdnaOpcode::VCmpUF64, false},
+    {0x29u, RdnaOpcode::VCmpNgeF64, false},
+    {0x2au, RdnaOpcode::VCmpNlgF64, false},
+    {0x2bu, RdnaOpcode::VCmpNgtF64, false},
+    {0x2cu, RdnaOpcode::VCmpNleF64, false},
+    {0x2du, RdnaOpcode::VCmpNeqF64, false},
+    {0x2eu, RdnaOpcode::VCmpNltF64, false},
+    {0x2fu, RdnaOpcode::VCmpTruF64, false},
+    {0x30u, RdnaOpcode::VCmpxFF64, false},
+    {0x31u, RdnaOpcode::VCmpxLtF64, false},
+    {0x32u, RdnaOpcode::VCmpxEqF64, false},
+    {0x33u, RdnaOpcode::VCmpxLeF64, false},
+    {0x34u, RdnaOpcode::VCmpxGtF64, false},
+    {0x35u, RdnaOpcode::VCmpxLgF64, false},
+    {0x36u, RdnaOpcode::VCmpxGeF64, false},
+    {0x37u, RdnaOpcode::VCmpxOF64, false},
+    {0x38u, RdnaOpcode::VCmpxUF64, false},
+    {0x39u, RdnaOpcode::VCmpxNgeF64, false},
+    {0x3au, RdnaOpcode::VCmpxNlgF64, false},
+    {0x3bu, RdnaOpcode::VCmpxNgtF64, false},
+    {0x3cu, RdnaOpcode::VCmpxNleF64, false},
+    {0x3du, RdnaOpcode::VCmpxNeqF64, false},
+    {0x3eu, RdnaOpcode::VCmpxNltF64, false},
+    {0x3fu, RdnaOpcode::VCmpxTruF64, false},
+    {0xa8u, RdnaOpcode::VCmpClassF64, false},
+    {0xb8u, RdnaOpcode::VCmpxClassF64, false},
 };
 
 constexpr VectorOpcodeInfo vop3Opcodes[] = {
@@ -723,7 +757,50 @@ bool isVop1FloatResultOpcode(RdnaOpcode opcode) {
     }
 }
 
+bool isVopcFloat64CompareOpcode(RdnaOpcode opcode) {
+    switch (opcode) {
+        case RdnaOpcode::VCmpFF64:
+        case RdnaOpcode::VCmpLtF64:
+        case RdnaOpcode::VCmpEqF64:
+        case RdnaOpcode::VCmpLeF64:
+        case RdnaOpcode::VCmpGtF64:
+        case RdnaOpcode::VCmpLgF64:
+        case RdnaOpcode::VCmpGeF64:
+        case RdnaOpcode::VCmpOF64:
+        case RdnaOpcode::VCmpUF64:
+        case RdnaOpcode::VCmpNgeF64:
+        case RdnaOpcode::VCmpNlgF64:
+        case RdnaOpcode::VCmpNgtF64:
+        case RdnaOpcode::VCmpNleF64:
+        case RdnaOpcode::VCmpNeqF64:
+        case RdnaOpcode::VCmpNltF64:
+        case RdnaOpcode::VCmpTruF64:
+        case RdnaOpcode::VCmpClassF64:
+        case RdnaOpcode::VCmpxFF64:
+        case RdnaOpcode::VCmpxLtF64:
+        case RdnaOpcode::VCmpxEqF64:
+        case RdnaOpcode::VCmpxLeF64:
+        case RdnaOpcode::VCmpxGtF64:
+        case RdnaOpcode::VCmpxLgF64:
+        case RdnaOpcode::VCmpxGeF64:
+        case RdnaOpcode::VCmpxOF64:
+        case RdnaOpcode::VCmpxUF64:
+        case RdnaOpcode::VCmpxNgeF64:
+        case RdnaOpcode::VCmpxNlgF64:
+        case RdnaOpcode::VCmpxNgtF64:
+        case RdnaOpcode::VCmpxNleF64:
+        case RdnaOpcode::VCmpxNeqF64:
+        case RdnaOpcode::VCmpxNltF64:
+        case RdnaOpcode::VCmpxTruF64:
+        case RdnaOpcode::VCmpxClassF64: return true;
+        default: return false;
+    }
+}
+
 bool isVopcFloatCompareOpcode(RdnaOpcode opcode) {
+    if (isVopcFloat64CompareOpcode(opcode)) {
+        return true;
+    }
     switch (opcode) {
         case RdnaOpcode::VCmpFF32:
         case RdnaOpcode::VCmpLtF32:
@@ -1330,7 +1407,24 @@ bool isVopcCompareExec(RdnaOpcode opcode) {
         case RdnaOpcode::VCmpxGeF16:
         case RdnaOpcode::VCmpxNgtF16:
         case RdnaOpcode::VCmpxNeqF16:
-        case RdnaOpcode::VCmpxNltF16: return true;
+        case RdnaOpcode::VCmpxNltF16:
+        case RdnaOpcode::VCmpxFF64:
+        case RdnaOpcode::VCmpxLtF64:
+        case RdnaOpcode::VCmpxEqF64:
+        case RdnaOpcode::VCmpxLeF64:
+        case RdnaOpcode::VCmpxGtF64:
+        case RdnaOpcode::VCmpxLgF64:
+        case RdnaOpcode::VCmpxGeF64:
+        case RdnaOpcode::VCmpxOF64:
+        case RdnaOpcode::VCmpxUF64:
+        case RdnaOpcode::VCmpxNgeF64:
+        case RdnaOpcode::VCmpxNlgF64:
+        case RdnaOpcode::VCmpxNgtF64:
+        case RdnaOpcode::VCmpxNleF64:
+        case RdnaOpcode::VCmpxNeqF64:
+        case RdnaOpcode::VCmpxNltF64:
+        case RdnaOpcode::VCmpxTruF64:
+        case RdnaOpcode::VCmpxClassF64: return true;
         default: return false;
     }
 }
@@ -1781,6 +1875,9 @@ RdnaInstruction DecodeRdnaVopc(std::uint32_t programCounter, std::span<const std
 
     if (src0 == 249u) {
         instruction.op = lookupVectorOpcode(vopcOpcodes, opcode, "VOPC SDWA modifier is not supported for opcode");
+        if (isVopcFloat64CompareOpcode(instruction.op)) {
+            throw std::invalid_argument("VOPC SDWA modifier is not supported for opcode");
+        }
         instruction.destination.kind = isVopcCompareExec(instruction.op) ? RdnaOperandKind::ExecLo : RdnaOperandKind::VccLo;
         decodeVopcSdwa(programCounter, code, wordIndex, vsrc1, instruction);
         return instruction;

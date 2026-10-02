@@ -51,6 +51,7 @@ private:
     IrU32 readU32(const RdnaOperand& operand);
     std::array<IrU32, 2> readU32Pair(const RdnaOperand& operand);
     IrU64 readU64(const RdnaOperand& operand);
+    std::array<IrU32, 2> readF64Bits(const RdnaOperand& operand);
     IrF32 readF16LaneAsF32(const RdnaOperand& operand, bool highLane, bool packed = false);
     IrF32 readF16AsF32(const RdnaOperand& operand);
     IrU32 readF16SourceBits(const RdnaOperand& operand);
@@ -122,6 +123,10 @@ private:
     void emitInteger64Order(const RdnaInstruction& inst, bool signedValue, bool swap, bool negate, bool cmpx);
     void emitFloatOrderedCompare(const RdnaInstruction& inst, bool ordered, bool half, bool cmpx);
     void emitFloatClassCompare(const RdnaInstruction& inst, bool cmpx);
+    IrU1 float64IsNan(const std::array<IrU32, 2>& bits);
+    IrU64 float64OrderKey(const std::array<IrU32, 2>& bits);
+    void emitFloat64Compare(const RdnaInstruction& inst, bool less, bool equal, bool greater, bool unordered, bool cmpx);
+    void emitFloat64ClassCompare(const RdnaInstruction& inst, bool cmpx);
     void vCvtF32Ubyte(const RdnaInstruction& inst, std::uint32_t byteIndex);
     void vCvtF32U32(const RdnaInstruction& inst);
     void vCvtF32I32(const RdnaInstruction& inst);
