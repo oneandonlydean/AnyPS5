@@ -144,6 +144,18 @@ bool TranslationContext::emitMemory(const RdnaInstruction& inst) {
         return bufferAtomic(inst, IrOpcode::BufferAtomicAnd64);
     case RdnaOpcode::BufferAtomicXorX2:
         return bufferAtomic(inst, IrOpcode::BufferAtomicXor64);
+    case RdnaOpcode::BufferAtomicFcmpswap:
+        return bufferAtomic(inst, IrOpcode::BufferAtomicFCmpSwap32);
+    case RdnaOpcode::BufferAtomicFcmpswapX2:
+        return bufferAtomic(inst, IrOpcode::BufferAtomicFCmpSwap64);
+    case RdnaOpcode::BufferAtomicFminX2:
+        return bufferAtomic(inst, IrOpcode::BufferAtomicFMin64);
+    case RdnaOpcode::BufferAtomicFmaxX2:
+        return bufferAtomic(inst, IrOpcode::BufferAtomicFMax64);
+    case RdnaOpcode::BufferAtomicIncX2:
+        return bufferAtomic(inst, IrOpcode::BufferAtomicInc64);
+    case RdnaOpcode::BufferAtomicDecX2:
+        return bufferAtomic(inst, IrOpcode::BufferAtomicDec64);
     case RdnaOpcode::BufferAtomicXor:
         return bufferAtomic(inst, IrOpcode::BufferAtomicXor32);
     case RdnaOpcode::BufferAtomicFmin:

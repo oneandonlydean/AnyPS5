@@ -209,11 +209,11 @@ bool TranslationContext::bufferAtomic(const RdnaInstruction& inst, IrOpcode opco
     const MemoryFlags flags = addMemoryInfo(memory, inst.programCounter);
     IrValue& exec = ir.GetExec();
     IrValue* result;
-    if (opcode == IrOpcode::BufferAtomicCmpSwap32) {
+    if (opcode == IrOpcode::BufferAtomicCmpSwap32 || opcode == IrOpcode::BufferAtomicFCmpSwap32) {
         const IrU32 desired = readU32(inst.destination);
         const IrU32 comparator = readU32(offsetOperand(inst.destination, 1u));
         result = &ir.Emit(opcode, IrOpcodeType(opcode), {resource, &address.index.Value(), &address.offset.Value(), &address.soffset.Value(), &desired.Value(), &comparator.Value(), &exec}, flags);
-    } else if (opcode == IrOpcode::BufferAtomicCmpSwap64) {
+    } else if (opcode == IrOpcode::BufferAtomicCmpSwap64 || opcode == IrOpcode::BufferAtomicFCmpSwap64) {
         const IrU64 desired = readU64(inst.destination);
         const IrU64 comparator = readU64(offsetOperand(inst.destination, 2u));
         result = &ir.Emit(opcode, IrOpcodeType(opcode), {resource, &address.index.Value(), &address.offset.Value(), &address.soffset.Value(), &desired.Value(), &comparator.Value(), &exec}, flags);

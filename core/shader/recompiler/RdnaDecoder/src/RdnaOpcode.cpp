@@ -628,6 +628,12 @@ bool IsBufferMemoryOpcode(RdnaOpcode opcode) {
         case RdnaOpcode::BufferAtomicUmaxX2:
         case RdnaOpcode::BufferAtomicAndX2:
         case RdnaOpcode::BufferAtomicXorX2:
+        case RdnaOpcode::BufferAtomicFcmpswap:
+        case RdnaOpcode::BufferAtomicFcmpswapX2:
+        case RdnaOpcode::BufferAtomicFminX2:
+        case RdnaOpcode::BufferAtomicFmaxX2:
+        case RdnaOpcode::BufferAtomicIncX2:
+        case RdnaOpcode::BufferAtomicDecX2:
         case RdnaOpcode::BufferAtomicXor:
         case RdnaOpcode::BufferAtomicFmin:
         case RdnaOpcode::BufferAtomicFmax:

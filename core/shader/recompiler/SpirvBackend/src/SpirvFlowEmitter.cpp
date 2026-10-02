@@ -514,6 +514,12 @@ void EmitDirectInstruction(SpirvValueEmitContext& ctx, const IrValue& inst) {
         case IrOpcode::BufferAtomicAnd64: return Invoke(EmitBufferAtomicAnd64, ctx, inst);
         case IrOpcode::BufferAtomicXor64: return Invoke(EmitBufferAtomicXor64, ctx, inst);
         case IrOpcode::BufferAtomicCmpSwap64: return Invoke(EmitBufferAtomicCmpSwap64, ctx, inst);
+        case IrOpcode::BufferAtomicFCmpSwap32: return Invoke(EmitBufferAtomicFCmpSwap32, ctx, inst);
+        case IrOpcode::BufferAtomicFCmpSwap64: return Invoke(EmitBufferAtomicFCmpSwap64, ctx, inst);
+        case IrOpcode::BufferAtomicFMin64: return Invoke(EmitBufferAtomicFMin64, ctx, inst);
+        case IrOpcode::BufferAtomicFMax64: return Invoke(EmitBufferAtomicFMax64, ctx, inst);
+        case IrOpcode::BufferAtomicInc64: return Invoke(EmitBufferAtomicInc64, ctx, inst);
+        case IrOpcode::BufferAtomicDec64: return Invoke(EmitBufferAtomicDec64, ctx, inst);
         case IrOpcode::BufferAtomicXor32: return Invoke(EmitBufferAtomicXor32, ctx, inst);
         case IrOpcode::BufferAtomicFMin32: return Invoke(EmitBufferAtomicFMin32, ctx, inst);
         case IrOpcode::BufferAtomicFMax32: return Invoke(EmitBufferAtomicFMax32, ctx, inst);

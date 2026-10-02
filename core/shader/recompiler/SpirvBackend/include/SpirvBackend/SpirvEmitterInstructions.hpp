@@ -251,6 +251,12 @@ std::uint32_t EmitBufferAtomicUMax64(SpirvValueEmitContext& ctx, const IrValue& 
 std::uint32_t EmitBufferAtomicAnd64(SpirvValueEmitContext& ctx, const IrValue& inst);
 std::uint32_t EmitBufferAtomicXor64(SpirvValueEmitContext& ctx, const IrValue& inst);
 std::uint32_t EmitBufferAtomicCmpSwap64(SpirvValueEmitContext& ctx, const IrValue& inst);
+std::uint32_t EmitBufferAtomicFCmpSwap32(SpirvValueEmitContext& ctx, const IrValue& inst);
+std::uint32_t EmitBufferAtomicFCmpSwap64(SpirvValueEmitContext& ctx, const IrValue& inst);
+std::uint32_t EmitBufferAtomicFMin64(SpirvValueEmitContext& ctx, const IrValue& inst);
+std::uint32_t EmitBufferAtomicFMax64(SpirvValueEmitContext& ctx, const IrValue& inst);
+std::uint32_t EmitBufferAtomicInc64(SpirvValueEmitContext& ctx, const IrValue& inst);
+std::uint32_t EmitBufferAtomicDec64(SpirvValueEmitContext& ctx, const IrValue& inst);
 std::uint32_t EmitBufferAtomicXor32(SpirvValueEmitContext& ctx, const IrValue& inst);
 std::uint32_t EmitBufferAtomicFMin32(SpirvValueEmitContext& ctx, const IrValue& inst);
 std::uint32_t EmitBufferAtomicFMax32(SpirvValueEmitContext& ctx, const IrValue& inst);
