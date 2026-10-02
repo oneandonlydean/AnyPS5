@@ -354,14 +354,23 @@ std::uint32_t EmitFPFrexpExp64(SpirvEmitterState& state, std::uint32_t arg0) {
 
 std::uint32_t EmitConvertF32F64(SpirvEmitterState& state, std::uint32_t arg0) {
     const auto converted = Unary(state, spv::OpBitcast, TypeU32(state), Unary(state, spv::OpFConvert, TypeF32(state), ToF64(state, arg0)));
-    const auto quiet = Binary(state, spv::OpBitwiseOr, TypeU32(state), converted, ConstantU32(state, 0x00400000u));
-    return Unary(state, spv::OpBitcast, TypeF32(state), Select(state, TypeU32(state), Classify(state, arg0).nan, quiet, converted));
+    const auto cls = Classify(state, arg0);
+    const auto sign = Binary(state, spv::OpBitwiseAnd, TypeU32(state), cls.bits.high, ConstantU32(state, 0x80000000u));
+    const auto payloadHigh = Binary(state, spv::OpShiftLeftLogical, TypeU32(state), Binary(state, spv::OpBitwiseAnd, TypeU32(state), cls.bits.high, ConstantU32(state, 0x000fffffu)), ConstantU32(state, 3u));
+    const auto payloadLow = Binary(state, spv::OpShiftRightLogical, TypeU32(state), cls.bits.low, ConstantU32(state, 29u));
+    const auto nan = Binary(state, spv::OpBitwiseOr, TypeU32(state), Binary(state, spv::OpBitwiseOr, TypeU32(state), sign, ConstantU32(state, 0x7fc00000u)), Binary(state, spv::OpBitwiseOr, TypeU32(state), payloadHigh, payloadLow));
+    return Unary(state, spv::OpBitcast, TypeF32(state), Select(state, TypeU32(state), cls.nan, nan, converted));
 }
 
 std::uint32_t EmitConvertF64F32(SpirvEmitterState& state, std::uint32_t arg0) {
     const auto converted = Split(state, FromF64(state, Unary(state, spv::OpFConvert, TypeF64(state), arg0)));
-    const auto nan = Binary(state, spv::OpFUnordNotEqual, TypeBool(state), arg0, arg0);
-    return Join(state, SelectBits(state, nan, Quiet(state, converted), converted));
+    const auto bits = Unary(state, spv::OpBitcast, TypeU32(state), arg0);
+    const auto nan = Binary(state, spv::OpUGreaterThan, TypeBool(state), Binary(state, spv::OpBitwiseAnd, TypeU32(state), bits, ConstantU32(state, 0x7fffffffu)), ConstantU32(state, 0x7f800000u));
+    const auto sign = Binary(state, spv::OpBitwiseAnd, TypeU32(state), bits, ConstantU32(state, 0x80000000u));
+    const auto mantissa = Binary(state, spv::OpBitwiseAnd, TypeU32(state), bits, ConstantU32(state, 0x007fffffu));
+    const auto high = Binary(state, spv::OpBitwiseOr, TypeU32(state), Binary(state, spv::OpBitwiseOr, TypeU32(state), sign, ConstantU32(state, 0x7ff80000u)), Binary(state, spv::OpShiftRightLogical, TypeU32(state), mantissa, ConstantU32(state, 3u)));
+    const auto low = Binary(state, spv::OpShiftLeftLogical, TypeU32(state), mantissa, ConstantU32(state, 29u));
+    return Join(state, SelectBits(state, nan, {low, high}, converted));
 }
 
 std::uint32_t EmitConvertF64S32(SpirvEmitterState& state, std::uint32_t arg0) {
