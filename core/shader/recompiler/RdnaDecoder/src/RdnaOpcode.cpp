@@ -210,6 +210,10 @@ bool IsVectorAluOpcode(RdnaOpcode opcode) {
         case RdnaOpcode::VMovreldB32:
         case RdnaOpcode::VNop:
         case RdnaOpcode::VMovrelsB32:
+        case RdnaOpcode::VMovrelsdB32:
+        case RdnaOpcode::VMovrelsd2B32:
+        case RdnaOpcode::VSwapB32:
+        case RdnaOpcode::VSwaprelB32:
         case RdnaOpcode::VPermlane16B32:
         case RdnaOpcode::VPermlanex16B32:
         case RdnaOpcode::VCubeidF32:
