@@ -279,6 +279,7 @@ public:
     DccKeys UploadedKeys() const { return uploadedKeys; }
     DccKeys FilledKeys() const { return filledKeys; }
     DccKeyProof& KeyProof() const { return keyProof; }
+    DccRangeProof& TargetKeyProof() const { return targetKeyProof; }
     bool ServesKeysAt(std::uint64_t dccAddress) const;
     // Brings the image up to date with guest memory before another use; returns whether its content
     // was still current (nothing uploaded).
@@ -403,6 +404,7 @@ private:
     DccKeys uploadedKeys = DccKeys::Uncompressed;
     DccKeys filledKeys = DccKeys::Uncompressed;
     mutable DccKeyProof keyProof;
+    mutable DccRangeProof targetKeyProof;
     struct ForeignKeyProof {
         std::uint64_t dccAddress = 0;
         DccKeyProof proof;
