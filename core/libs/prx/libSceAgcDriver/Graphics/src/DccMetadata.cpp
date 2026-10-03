@@ -68,6 +68,8 @@ struct ProofCounters {
     std::atomic<std::uint64_t> proved{0};
     std::atomic<std::uint64_t> scanned{0};
     std::atomic<std::uint64_t> unstable{0};
+    std::atomic<std::uint64_t> rangeProved{0};
+    std::atomic<std::uint64_t> rangeScanned{0};
 };
 
 ProofCounters& Proofs() {
@@ -91,7 +93,7 @@ void ReportScans(std::chrono::steady_clock::time_point now) {
     }
     if (nowMs - last < 10000 || !profile.lastReport.compare_exchange_strong(last, nowMs)) return;
     const auto& proofs = Proofs();
-    std::fprintf(stderr, "[dcc] %llu scans, %.1f MiB scanned, %llu memo hits, %llu flush syncs, %.1f ms; uncompressed keys stored: %llu on the GPU (%llu with an unaligned head or tail), %llu on the CPU; key proofs: %llu proved, %llu scanned, %llu unstable\n", static_cast<unsigned long long>(profile.scans.load()), profile.bytes.load() / 1048576.0, static_cast<unsigned long long>(profile.memoHits.load()), static_cast<unsigned long long>(profile.flushSyncs.load()), profile.nanoseconds.load() / 1e6, static_cast<unsigned long long>(profile.gpuStores.load()), static_cast<unsigned long long>(profile.gpuSplitStores.load()), static_cast<unsigned long long>(profile.cpuStores.load()), static_cast<unsigned long long>(proofs.proved.load()), static_cast<unsigned long long>(proofs.scanned.load()), static_cast<unsigned long long>(proofs.unstable.load()));
+    std::fprintf(stderr, "[dcc] %llu scans, %.1f MiB scanned, %llu memo hits, %llu flush syncs, %.1f ms; uncompressed keys stored: %llu on the GPU (%llu with an unaligned head or tail), %llu on the CPU; key proofs: %llu proved, %llu scanned, %llu unstable; target key proofs: %llu proved, %llu scanned\n", static_cast<unsigned long long>(profile.scans.load()), profile.bytes.load() / 1048576.0, static_cast<unsigned long long>(profile.memoHits.load()), static_cast<unsigned long long>(profile.flushSyncs.load()), profile.nanoseconds.load() / 1e6, static_cast<unsigned long long>(profile.gpuStores.load()), static_cast<unsigned long long>(profile.gpuSplitStores.load()), static_cast<unsigned long long>(profile.cpuStores.load()), static_cast<unsigned long long>(proofs.proved.load()), static_cast<unsigned long long>(proofs.scanned.load()), static_cast<unsigned long long>(proofs.unstable.load()), static_cast<unsigned long long>(proofs.rangeProved.load()), static_cast<unsigned long long>(proofs.rangeScanned.load()));
 }
 
 void CountScan(std::size_t bytes, std::chrono::steady_clock::time_point start) {
@@ -441,16 +443,29 @@ DccKeys ReadDccKeys(std::uint64_t metaAddress, std::uint64_t surfaceBytes) {
     return readDccKeys(metaAddress, surfaceBytes, memoized);
 }
 
-DccKeys CurrentDccKeys(std::uint64_t metaAddress, std::uint64_t surfaceBytes) {
+namespace {
+
+DccKeys currentDccKeys(std::uint64_t metaAddress, std::uint64_t surfaceBytes, bool& memoized) {
+    memoized = false;
     const auto count = static_cast<std::size_t>(surfaceBytes / KeyBytes);
     if (metaAddress != 0 && count != 0 && GuestMemory::GpuMutex().HeldByThisThread()) {
         if (auto* recorder = Recorder::Active(); recorder != nullptr && recorder->PendingWriteOverlaps(metaAddress, count)) {
-            if (const auto keys = PendingStoreKeys(*recorder, metaAddress, count)) return *keys;
+            if (const auto keys = PendingStoreKeys(*recorder, metaAddress, count)) {
+                memoized = true;
+                return *keys;
+            }
             Recorder::CountSync(2);
             recorder->SyncThrough(metaAddress, count);
         }
     }
-    return ReadDccKeys(metaAddress, surfaceBytes);
+    return readDccKeys(metaAddress, surfaceBytes, memoized);
+}
+
+}
+
+DccKeys CurrentDccKeys(std::uint64_t metaAddress, std::uint64_t surfaceBytes) {
+    bool memoized = false;
+    return currentDccKeys(metaAddress, surfaceBytes, memoized);
 }
 
 bool IsDccClear(DccKeys keys) {
@@ -566,7 +581,35 @@ DccKeys ProvedClearKeys(const GuestTextureResource& resource, std::uint64_t gues
 
 DccKeyProofCounts KeyProofCounts() {
     const auto& counters = Proofs();
-    return {counters.proved.load(std::memory_order_relaxed), counters.scanned.load(std::memory_order_relaxed), counters.unstable.load(std::memory_order_relaxed)};
+    return {counters.proved.load(std::memory_order_relaxed), counters.scanned.load(std::memory_order_relaxed), counters.unstable.load(std::memory_order_relaxed), counters.rangeProved.load(std::memory_order_relaxed), counters.rangeScanned.load(std::memory_order_relaxed)};
+}
+
+bool RangeKeyProofs() {
+    static const bool enabled = std::getenv("APS5_NO_TARGET_KEY_PROOF") == nullptr;
+    return enabled && KeyFastPath();
+}
+
+DccKeys ProvedCurrentDccKeys(std::uint64_t metaAddress, std::uint64_t surfaceBytes, DccRangeProof& proof) {
+    const auto count = static_cast<std::size_t>(surfaceBytes / KeyBytes);
+    if (metaAddress == 0 || count == 0 || !RangeKeyProofs() || !GuestMemory::GpuMutex().HeldByThisThread()) return CurrentDccKeys(metaAddress, surfaceBytes);
+    auto& counters = Proofs();
+    const auto collected = GuestMemory::CollectWrites(metaAddress, count);
+    if (proof.generation != 0 && proof.address == metaAddress && proof.count == count && collected != 0 && GuestMemory::UnchangedSince(metaAddress, count, proof.generation)) {
+        counters.rangeProved.fetch_add(1, std::memory_order_relaxed);
+        return proof.keys;
+    }
+    bool memoized = false;
+    const auto keys = currentDccKeys(metaAddress, surfaceBytes, memoized);
+    bool stable = collected != 0 && !memoized;
+    if (stable) {
+        if (auto* recorder = Recorder::Active(); recorder != nullptr) {
+            const auto info = recorder->DescribePendingWrite(metaAddress, count);
+            stable = !info.has_value() || info->signaled;
+        }
+    }
+    proof = stable ? DccRangeProof{metaAddress, count, keys, collected} : DccRangeProof{};
+    counters.rangeScanned.fetch_add(1, std::memory_order_relaxed);
+    return keys;
 }
 
 void ReadTextureSurface(const GuestTextureResource& resource, DccKeys keys, std::span<std::byte> bytes) {
