@@ -1754,6 +1754,131 @@ void targetKeyProofTests(const Device& device, Recorder& recorder) {
     Require(ProvedCurrentDccKeys(address, surfaceBytes, proof) == DccKeys::Clear0000 && proofs() == proved + 1, "the proof after the fill landed did not hold");
 }
 
+void refreshProofTests(const Device& device, Recorder& recorder) {
+    const auto& base = device.GetContext();
+    if (base.hostImportAlignment == 0) {
+        std::cout << "host imports unavailable: refresh proofs not tested\n";
+        return;
+    }
+    constexpr std::uint32_t side = 256;
+    constexpr std::size_t surfaceBytes = side * side * 4;
+    constexpr std::size_t keyCount = surfaceBytes / 256;
+    constexpr std::size_t bytes = surfaceBytes + 65536;
+    void* block = AllocateWatched(bytes, 65536);
+    if (block == nullptr) {
+        std::cout << "no write watching: refresh proofs not tested\n";
+        return;
+    }
+    auto* texels = static_cast<std::uint8_t*>(block);
+    auto* keys = texels + surfaceBytes;
+    std::memset(texels, 0x55, surfaceBytes);
+    std::memset(keys, 0xff, keyCount);
+    const auto address = reinterpret_cast<std::uint64_t>(block);
+    {
+        GuestAllocations::Mutation mutation;
+        mutation.Add(block, bytes, true, true);
+    }
+    struct Unregister {
+        const Context& context;
+        void* block;
+        std::uint64_t address;
+        ~Unregister() {
+            {
+                GuestAllocations::Mutation mutation;
+                mutation.Remove(block);
+            }
+            HostImportFor(context, address, bytes);
+        }
+    } unregister{base, block, address};
+    if (HostImportFor(base, address, bytes) == nullptr || !AgcDriver::GuestMemory::Watched(address, bytes)) {
+        std::cout << "no watched host import: refresh proofs not tested\n";
+        return;
+    }
+    TextureDetiler detiler(base);
+    auto context = base;
+    context.detiler = &detiler;
+    GuestTextureResource resource{};
+    resource.baseAddress = address;
+    resource.width = side;
+    resource.height = side;
+    resource.mipCount = 1;
+    resource.tileMode = TextureTileMode::kR64KBX;
+    resource.dimension = TextureDimension::k2D;
+    resource.format = 56;
+    resource.dstSelX = 4;
+    resource.dstSelY = 5;
+    resource.dstSelZ = 6;
+    resource.dstSelW = 7;
+    resource.dccAddress = address + surfaceBytes;
+    const bool enabled = std::getenv("APS5_NO_REFRESH_PROOF") == nullptr;
+    const auto proved = [] { return StorageTexture::RefreshesProved(); };
+    {
+        auto image = std::make_shared<StorageTexture>(context, detiler, resource, 0);
+        const VkImageSubresourceRange range{VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 1};
+        const auto draw = [&](VkClearColorValue value) {
+            const auto commands = recorder.Commands();
+            recorder.Keep(image);
+            RecordMemoryBarrier(context, commands, VK_PIPELINE_STAGE_ALL_COMMANDS_BIT, VK_PIPELINE_STAGE_TRANSFER_BIT, VK_ACCESS_SHADER_WRITE_BIT | VK_ACCESS_TRANSFER_WRITE_BIT | VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT, VK_ACCESS_TRANSFER_WRITE_BIT);
+            context.Function<PFN_vkCmdClearColorImage>("vkCmdClearColorImage")(commands, image->Image(), VK_IMAGE_LAYOUT_GENERAL, &value, 1, &range);
+            RecordMemoryBarrier(context, commands, VK_PIPELINE_STAGE_TRANSFER_BIT, VK_PIPELINE_STAGE_ALL_COMMANDS_BIT, VK_ACCESS_TRANSFER_WRITE_BIT, VK_ACCESS_SHADER_READ_BIT | VK_ACCESS_SHADER_WRITE_BIT | VK_ACCESS_TRANSFER_READ_BIT | VK_ACCESS_TRANSFER_WRITE_BIT);
+            image->MarkDirty();
+        };
+        const auto settle = [&] {
+            image->Refresh();
+            image->Refresh();
+        };
+        const auto expectProved = [&](const char* what) {
+            const auto before = proved();
+            Require(image->Refresh(), what);
+            Require(proved() == before + (enabled ? 1 : 0), what);
+        };
+        const auto expectFull = [&](const char* what) {
+            const auto before = proved();
+            image->Refresh();
+            Require(proved() == before, what);
+        };
+        settle();
+        expectProved("an unchanged surface was not proved current");
+        expectProved("a proved surface was not proved again");
+        if (!enabled) std::cout << "refresh proofs off: every refresh runs in full\n";
+        draw({{1.0f, 0.0f, 0.0f, 1.0f}});
+        settle();
+        expectProved("a target holding its own pending results was not proved current");
+        draw({{0.0f, 1.0f, 0.0f, 1.0f}});
+        expectProved("a draw into an already pending target broke its proof");
+        texels[0] = 0x11;
+        expectFull("a CPU write of the surface was answered from the proof");
+        settle();
+        expectProved("the proof was not taken again after a CPU write");
+        AgcDriver::GuestMemory::MarkWritten(address + 65536, 4096);
+        expectFull("a driver store into the surface was answered from the proof");
+        settle();
+        AgcDriver::GuestMemory::MarkWritten(resource.dccAddress, keyCount);
+        expectFull("a key store over the surface's keys was answered from the proof");
+        settle();
+        expectProved("the proof was not taken again after a key store");
+        auto other = resource;
+        other.dccAddress = 0;
+        auto pending = std::make_shared<StorageTexture>(context, detiler, other, 0);
+        recorder.Keep(pending);
+        pending->MarkDirty();
+        expectFull("another image's pending results over the surface were answered from the proof");
+        settle();
+        expectProved("the proof was not taken again after another image's results were stored");
+        pending->MarkDirty();
+        expectFull("another image's pending results were answered from the proof");
+        Require(!AgcDriver::Graphics::PendingStorageOverlaps(address, surfaceBytes, image.get()), "the full refresh left another image's results pending");
+        auto fresh = std::make_shared<StorageTexture>(context, detiler, resource, 0);
+        const auto before = proved();
+        fresh->Refresh();
+        Require(proved() == before, "a new image of the surface was answered from another image's proof");
+        std::memset(keys, 0x00, keyCount);
+        expectFull("a fast clear of the keys was answered from the proof");
+        recorder.Sync();
+    }
+    recorder.Sync();
+}
+
 // A surface whose DCC metadata moved (the title reallocated the keys, or the memory held another
 // surface with its own keys before): the storage cache's image follows the keys the newest
 // descriptor with metadata names. A fast clear of the new keys reaches the image, and results
@@ -3135,6 +3260,7 @@ int main() {
             storageRefreshTests(device, recorder, false);
             storageRefreshTests(device, recorder, true);
             targetKeyProofTests(device, recorder);
+            refreshProofTests(device, recorder);
             importWatchTests(device);
             staleGenerationTests(device, recorder);
             importWindowTests(device, recorder);

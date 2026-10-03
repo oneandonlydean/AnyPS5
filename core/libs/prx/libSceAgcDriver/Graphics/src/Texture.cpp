@@ -86,6 +86,7 @@ std::atomic<std::uint64_t> pretestSkipped{0}, unregisteredDropped{0}, keyFlipKep
 // Images stored by a FlushPending after a hook skip of theirs (AccessKeptByCpu), of which by the
 // hook for the read site of the last skip; images evictStale dropped (the [hooksync] and [storage] lines).
 std::atomic<std::uint64_t> flushedAfterSkip{0}, flushedAfterSkipSameSite{0}, staleEvicted{0};
+std::atomic<std::uint64_t> refreshesProved{0}, refreshesFull{0};
 
 struct StorageTraffic {
     std::mutex mutex;
@@ -126,7 +127,7 @@ void reportStorageTraffic(StorageTraffic& traffic) {
     const auto take = [](std::atomic<std::uint64_t>& counter) { return static_cast<unsigned long long>(counter.exchange(0, std::memory_order_relaxed)); };
     const auto partialUploadCount = take(partialUploads), partialWriteBackCount = take(partialWriteBacks);
     const auto uploadMiB = take(partialUploadBytes) / 1048576.0, writeBackMiB = take(partialWriteBackBytes) / 1048576.0;
-    std::fprintf(stderr, "[storage] uploads by path (count/MiB, 10 s):%s; %llu write-backs GPU-direct, %llu stored nothing; block units: partial uploads %llu/%.1f, partial write-backs %llu/%.1f, %llu widened to every pending unit, units dropped %llu, superseded %llu, dropped unregistered %llu, kept over a key flip %llu%s, pretest skipped %llu, evicted stale %llu\n", line.c_str(), static_cast<unsigned long long>(traffic.directWriteBacks), take(emptyWriteBacks), partialUploadCount, uploadMiB, partialWriteBackCount, writeBackMiB, take(coalescedWriteBacks), take(unitsDropped), take(unitsSuperseded), take(unregisteredDropped), take(keyFlipKept), ShadowReport().c_str(), take(pretestSkipped), take(staleEvicted));
+    std::fprintf(stderr, "[storage] uploads by path (count/MiB, 10 s):%s; %llu write-backs GPU-direct, %llu stored nothing; block units: partial uploads %llu/%.1f, partial write-backs %llu/%.1f, %llu widened to every pending unit, units dropped %llu, superseded %llu, dropped unregistered %llu, kept over a key flip %llu%s, pretest skipped %llu, evicted stale %llu; refreshes in total: %llu proved, %llu in full\n", line.c_str(), static_cast<unsigned long long>(traffic.directWriteBacks), take(emptyWriteBacks), partialUploadCount, uploadMiB, partialWriteBackCount, writeBackMiB, take(coalescedWriteBacks), take(unitsDropped), take(unitsSuperseded), take(unregisteredDropped), take(keyFlipKept), ShadowReport().c_str(), take(pretestSkipped), take(staleEvicted), static_cast<unsigned long long>(refreshesProved.load(std::memory_order_relaxed)), static_cast<unsigned long long>(refreshesFull.load(std::memory_order_relaxed)));
     traffic.writeBacks.clear();
     traffic.uploadReasons.clear();
     traffic.directWriteBacks = 0;
@@ -1001,7 +1002,7 @@ VkImageView StorageTexture::FirstLayerView(std::uint32_t mip) {
 }
 
 const char* LookupOutcomes::Name(Kind kind) {
-    static constexpr const char* names[Count] = {"sampled fast hit", "sampled fast miss", "sampled hit view", "sampled hit cleared view", "sampled hit snapshot", "sampled made view", "sampled made snapshot", "storage hit", "storage made", "refresh unchanged", "refresh compared", "upload direct", "upload cpu", "upload clear", "dcc scan", "pending flush"};
+    static constexpr const char* names[Count] = {"sampled fast hit", "sampled fast miss", "sampled hit view", "sampled hit cleared view", "sampled hit snapshot", "sampled made view", "sampled made snapshot", "storage hit", "storage made", "refresh unchanged", "refresh compared", "refresh proved", "upload direct", "upload cpu", "upload clear", "dcc scan", "pending flush"};
     return kind < Count ? names[kind] : "?";
 }
 
@@ -1026,6 +1027,14 @@ LookupOutcomes& ThreadLookupOutcomes() {
 bool StorageTexture::Refresh() {
     const bool profile = LookupOutcomes::Profiled();
     auto start = profile ? std::chrono::steady_clock::now() : std::chrono::steady_clock::time_point{};
+    if (refreshProved()) {
+        NoteProved();
+        refreshesProved.fetch_add(1, std::memory_order_relaxed);
+        if (profile) LookupOutcomes::Add(LookupOutcomes::RefreshProved, start);
+        return true;
+    }
+    refreshProof = {};
+    refreshesFull.fetch_add(1, std::memory_order_relaxed);
     struct Exempt {
         const StorageTexture* previous;
         ~Exempt() { refreshing = previous; }
@@ -1167,6 +1176,7 @@ bool StorageTexture::Refresh() {
         ++Profile().storageReused;
         layerGeneration.assign(trackedLayers, current);
         refreshGeneration();
+        takeRefreshProof(alias != nullptr);
         if (profile) LookupOutcomes::Add(stamped ? LookupOutcomes::RefreshUnchanged : LookupOutcomes::RefreshCompared, start);
         return true;
     }
@@ -1271,6 +1281,58 @@ bool StorageTexture::Refresh() {
         uploadedKeys = keys;
     }
     return false;
+}
+
+namespace {
+
+bool RefreshProofs() {
+    static const bool enabled = std::getenv("APS5_NO_REFRESH_PROOF") == nullptr;
+    return enabled;
+}
+
+}
+
+bool StorageTexture::otherPendingOverlaps() const {
+    auto& pending = Pending();
+    std::lock_guard lock(pending.mutex);
+    const auto other = [&](const StorageTexture* texture) { return texture != this && texture->overlaps(descriptor.baseAddress, static_cast<std::size_t>(guestBytes)); };
+    return std::any_of(pending.textures.begin(), pending.textures.end(), other) || std::any_of(pending.flushing.begin(), pending.flushing.end(), other);
+}
+
+bool StorageTexture::refreshProved() {
+    if (refreshProof.generation == 0 || !RefreshProofs()) return false;
+    if (generation != refreshProof.generation || uploadedKeys != refreshProof.keys || !GuestMemory::GpuMutex().HeldByThisThread()) return false;
+    const auto bytes = static_cast<std::size_t>(guestBytes);
+    std::array<GuestMemory::UnchangedQuery, 2> queries{};
+    std::size_t used = 0;
+    if (GuestMemory::CollectWrites(descriptor.baseAddress, bytes) == 0) return false;
+    queries[used++] = {descriptor.baseAddress, bytes, generation};
+    if (descriptor.dccAddress != 0) {
+        const auto keyCount = static_cast<std::size_t>(guestBytes / 256);
+        if (keyCount == 0 || keyProof.generation != refreshProof.keyGeneration || keyProof.keys != uploadedKeys) return false;
+        if (GuestMemory::CollectWrites(descriptor.dccAddress, keyCount) == 0) return false;
+        queries[used++] = {descriptor.dccAddress, keyCount, keyProof.generation};
+    }
+    if (!GuestMemory::UnchangedSinceAll(std::span(queries.data(), used))) return false;
+    const auto serial = PendingSerial();
+    if (serial != refreshProof.pendingSerial) {
+        if (otherPendingOverlaps()) return false;
+        refreshProof.pendingSerial = serial;
+    }
+    return true;
+}
+
+void StorageTexture::takeRefreshProof(bool aliased) {
+    refreshProof = {};
+    if (aliased || generation == 0 || !RefreshProofs() || !GuestMemory::GpuMutex().HeldByThisThread()) return;
+    if (descriptor.dccAddress != 0 && (keyProof.generation == 0 || keyProof.keys != uploadedKeys)) return;
+    const auto serial = PendingSerial();
+    if (otherPendingOverlaps()) return;
+    refreshProof = {generation, serial, keyProof.generation, uploadedKeys};
+}
+
+std::uint64_t StorageTexture::RefreshesProved() {
+    return refreshesProved.load(std::memory_order_relaxed);
 }
 
 bool StorageTexture::ServesKeysAt(std::uint64_t dccAddress) const {
