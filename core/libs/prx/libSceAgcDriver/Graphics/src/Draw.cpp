@@ -48,13 +48,13 @@ GuestTextureResource SurfaceForTarget(const ColorTarget& color) {
     surface.baseAddress = chain ? color.surfaceAddress : color.address;
     surface.width = chain ? color.surfaceExtent.width : color.extent.width;
     surface.height = chain ? color.surfaceExtent.height : color.extent.height;
-    surface.depthOrLastArray = 0;
+    surface.depthOrLastArray = color.depth - 1u;
     surface.baseArray = 0;
     surface.mipCount = color.mipCount;
     surface.baseLevel = 0;
     surface.lastLevel = color.mipCount - 1;
     surface.tileMode = ColorTextureTileMode(color.tileMode);
-    surface.dimension = TextureDimension::k2D;
+    surface.dimension = color.depth > 1 ? TextureDimension::k3D : TextureDimension::k2D;
     surface.format = GuestFormatFor(color.format, color.elementBytes);
     surface.dstSelX = 4;
     surface.dstSelY = 5;
@@ -1592,16 +1592,17 @@ void Draw(const Context& context, const State& state, const Pm4::DrawParameters&
             binding.resident = refreshResidentTarget(context, state, color, outcome, profile, [&] {
                 auto resident = CachedStorageSurface(context, SurfaceForTarget(color));
                 Require(resident->Attachable(), "storage format cannot be a color attachment");
-                Require(color.mipCount > 1 || resident->GuestBytes() == colorLayout.Bytes(), "resident image layout differs from the color layout");
+                Require(color.mipCount > 1 || color.depth > 1 || resident->GuestBytes() == colorLayout.Bytes(), "resident image layout differs from the color layout");
                 return resident;
             });
         }
         if (binding.resident != nullptr) {
             timer.phase(PhaseReadTarget);
-            targetViews.push_back(binding.resident->AttachmentView(color.format, color.mip));
+            targetViews.push_back(binding.resident->AttachmentView(color.format, color.mip, color.depthSlice));
             continue;
         }
         Require(!color.mipTail, "rendering into a packed mip tail needs the resident image of its surface");
+        Require(color.depth == 1, "rendering into a 3D color target needs the resident image of its surface");
         if (binding.gpuTiling) {
             binding.mip = ColorTargetMip(color, colorLayout);
             binding.tiled = std::make_unique<Buffer>(context, colorLayout.Bytes(), copies);

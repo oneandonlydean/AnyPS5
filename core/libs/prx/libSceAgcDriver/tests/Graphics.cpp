@@ -841,6 +841,15 @@ void ColorViewTests() {
     queue.context[0x31b] = 1u | (1u << 13u);
     const auto slice = AgcDriver::Graphics::DecodeState(queue);
     Require(slice.color.address == sliced + 1024u && slice.color.bytes == 1024u, "a color view of one slice did not move the target by one slice");
+    queue.context[0x3b8] = 0x0a000003;
+    queue.context[0x31b] = 2u | (2u << 13u);
+    const auto volume = AgcDriver::Graphics::DecodeState(queue);
+    Require(volume.color.address == sliced && volume.color.depth == 4u && volume.color.depthSlice == 2u, "a color view of one 3D depth slice did not keep the surface address and select the slice");
+    queue.context[0x31b] = 4u | (4u << 13u);
+    expectFailure([&] { AgcDriver::Graphics::DecodeState(queue); }, "beyond the 3D surface");
+    queue.context[0x31b] = 0;
+    queue.context[0x31c] |= 0x10000000;
+    expectFailure([&] { AgcDriver::Graphics::DecodeState(queue); }, "DCC 3D color targets");
 }
 
 alignas(256) std::array<std::uint8_t, 4> dccKeys{};
