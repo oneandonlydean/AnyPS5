@@ -655,7 +655,7 @@ State DecodeState(const QueueState& queue) {
         const auto slotExport = (exportFormat >> (4u * index)) & 0xfu;
         if (slotExport == 0 || slotExport == 7 || slotExport == 8 || slotExport > 9) throw std::runtime_error("AGC graphics: color export format " + std::to_string(slotExport) + " is unsupported");
         auto color = DecodeColorBuffer(cx, slot);
-        color.attachment = index;
+        color.exportIndex = index;
         APS5_LOG_OUT_DEBUG("Color %u address=0x%llx extent=%ux%u bytes=%llu VkFormat=%u", slot, static_cast<unsigned long long>(color.address), color.extent.width, color.extent.height, static_cast<unsigned long long>(color.bytes), static_cast<unsigned>(color.format));
         if (result.colors.empty()) {
             result.renderExtent = color.extent;
@@ -706,7 +706,7 @@ State DecodeState(const QueueState& queue) {
     APS5_LOG_OUT_DEBUG("Scissor offset=(%d,%d) extent=%ux%u", result.scissor.offset.x, result.scissor.offset.y, result.scissor.extent.width, result.scissor.extent.height);
     result.blends.assign(slotCount, VkPipelineColorBlendAttachmentState{});
     for (const auto& color : result.colors) {
-        const auto slot = exportSlots[color.attachment];
+        const auto slot = color.slot;
         const auto blend = read(cx, 0x1e0 + slot);
         APS5_LOG_OUT_DEBUG("Blend %u control=0x%x", slot, blend);
         Require((blend & 0x0000e000u) == 0, "reserved blend control bits");
@@ -733,9 +733,9 @@ State DecodeState(const QueueState& queue) {
             }
             for (std::uint32_t i = 0; i < 4; ++i) result.blendConstants[i] = readFloat(cx, 0x105 + i);
         }
-        result.blends[color.attachment] = state;
+        result.blends[color.exportIndex] = state;
     }
-    if (!result.colors.empty()) result.blend = result.blends[result.colors.front().attachment];
+    if (!result.colors.empty()) result.blend = result.blends[result.colors.front().exportIndex];
     APS5_LOG_OUT_DEBUG("DecodeState done colorTarget=%u render=%ux%u topology=%u", result.hasColorTarget ? 1u : 0u, result.renderExtent.width, result.renderExtent.height, static_cast<unsigned>(result.topology));
     return result;
 }
@@ -744,6 +744,7 @@ State DecodeState(const QueueState& queue) {
 ColorTarget DecodeColorBuffer(const Registers& cx, std::uint32_t slot) {
     const auto stride = slot * 0xfu;
     ColorTarget color{};
+    color.slot = slot;
     const auto info = read(cx, 0x31c + stride);
     const auto number = (info >> 8u) & 7u;
     const auto swap = (info >> 11u) & 3u;
@@ -887,7 +888,7 @@ std::array<std::uint8_t, 8> ExportMappings(const State& state) {
     std::array<std::uint8_t, 8> mappings{};
     mappings.fill(0xe4u);
     for (const auto& color : state.colors) {
-        if (color.attachment < mappings.size()) mappings[color.attachment] = color.componentMapping;
+        if (color.exportIndex < mappings.size()) mappings[color.exportIndex] = color.componentMapping;
     }
     return mappings;
 }

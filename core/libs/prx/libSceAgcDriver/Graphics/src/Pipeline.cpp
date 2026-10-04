@@ -53,7 +53,7 @@ Pipeline::Pipeline(const Context& context, const State& state, const VertexInput
     // A cached pipeline may outlive its device's teardown (see ClearCachedPipelines); it must not keep
     // the buffer pool, which is reset with the device, alive past it.
     this->context.bufferPool.reset();
-    Require(state.colors.size() <= state.blends.size() && std::all_of(state.colors.begin(), state.colors.end(), [&](const ColorTarget& color) { return color.attachment < state.blends.size(); }), "blend states do not match decoded color state");
+    Require(state.colors.size() <= state.blends.size() && std::all_of(state.colors.begin(), state.colors.end(), [&](const ColorTarget& color) { return color.exportIndex < state.blends.size(); }), "blend states do not match decoded color state");
     Require(state.blends.size() <= context.limits.maxColorAttachments, "color targets exceed device attachment limits");
     Require(state.hasColorTarget || state.depth.attached || (context.limits.framebufferNoAttachmentsSampleCounts & VK_SAMPLE_COUNT_1_BIT) != 0, "device does not support single-sample rendering without attachments");
     Require(!depthBounds || context.depthBounds, "depth bounds require the depthBounds feature");
@@ -120,7 +120,7 @@ Pipeline::Pipeline(const Context& context, const State& state, const VertexInput
             color.initialLayout = attachmentLayout;
             color.finalLayout = attachmentLayout;
             colors.push_back(color);
-            references[state.colors[index].attachment] = {index, attachmentLayout};
+            references.at(state.colors[index].exportIndex) = {index, attachmentLayout};
         }
         VkAttachmentReference depthReference{};
         if (state.depth.attached) {
@@ -384,7 +384,7 @@ std::vector<std::byte> pipelineKey(const Context& context, const State& state, c
     append(key, state.colors.size());
     for (const auto& color : state.colors) {
         append(key, color.format);
-        append(key, color.attachment);
+        append(key, color.exportIndex);
     }
     const auto& depth = state.depth;
     append(key, depth.attached);

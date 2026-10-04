@@ -918,7 +918,7 @@ std::uint64_t renderPassKey(const State& state, std::span<const VkImageView> vie
     };
     for (const auto view : views) mix(reinterpret_cast<std::uint64_t>(view));
     mix(state.blends.size());
-    for (const auto& color : state.colors) mix(color.attachment);
+    for (const auto& color : state.colors) mix(color.exportIndex);
     if (depthView != VK_NULL_HANDLE) mix(reinterpret_cast<std::uint64_t>(depthView));
     mix(extent.width);
     mix(extent.height);
@@ -1631,7 +1631,7 @@ void Draw(const Context& context, const State& state, const Pm4::DrawParameters&
             }
         }
         timer.phase(PhaseReadTarget);
-        binding.target = std::make_unique<RenderTarget>(context, color, state.blends[color.attachment].blendEnable != 0);
+        binding.target = std::make_unique<RenderTarget>(context, color, state.blends.at(color.exportIndex).blendEnable != 0);
         targetViews.push_back(binding.target->View());
     }
     // The depth attachment is always the resident image of the surface (DepthTarget.hpp).
