@@ -1,0 +1,61 @@
+== Navi10 (gb_addr_config 0x44)
+SW_64KB_R_X 1920x1080 64 bpp, 6 levels: surfSize 0x1640000, firstMipIdInTail 5, mipChainInTail 0, mipChainPitch 0, mipChainHeight 0
+  level  0 1920x1080 offset 0x00650000 macroBlockOffset 0x00650000 mipTailOffset 0x00000 tailCoord (0, 0) pitch 1920 height 1088 texel(0,0) 0x650000 texel(last) 0x163f9f8
+  level  1  960x540  offset 0x001d0000 macroBlockOffset 0x001d0000 mipTailOffset 0x00000 tailCoord (0, 0) pitch 1024 height 576 texel(0,0) 0x1d0000 texel(last) 0x6468f8
+  level  2  480x270  offset 0x00090000 macroBlockOffset 0x00090000 mipTailOffset 0x00000 tailCoord (0, 0) pitch 512 height 320 texel(0,0) 0x90000 texel(last) 0x1cb678
+  level  3  240x135  offset 0x00030000 macroBlockOffset 0x00030000 mipTailOffset 0x00000 tailCoord (0, 0) pitch 256 height 192 texel(0,0) 0x30000 texel(last) 0x8bde8
+  level  4  120x67   offset 0x00010000 macroBlockOffset 0x00010000 mipTailOffset 0x00000 tailCoord (0, 0) pitch 128 height 128 texel(0,0) 0x10000 texel(last) 0x286e8
+  level  5   60x33   offset 0x00008000 macroBlockOffset 0x00000000 mipTailOffset 0x08000 tailCoord (64, 0) pitch 64 height 64 texel(0,0) 0x8400 texel(last) 0xab28
+SW_64KB_R_X 1920x1080 64 bpp, 7 levels: surfSize 0x1640000, firstMipIdInTail 5, mipChainInTail 0, mipChainPitch 0, mipChainHeight 0
+  level  0 1920x1080 offset 0x00650000 macroBlockOffset 0x00650000 mipTailOffset 0x00000 tailCoord (0, 0) pitch 1920 height 1088 texel(0,0) 0x650000 texel(last) 0x163f9f8
+  level  1  960x540  offset 0x001d0000 macroBlockOffset 0x001d0000 mipTailOffset 0x00000 tailCoord (0, 0) pitch 1024 height 576 texel(0,0) 0x1d0000 texel(last) 0x6468f8
+  level  2  480x270  offset 0x00090000 macroBlockOffset 0x00090000 mipTailOffset 0x00000 tailCoord (0, 0) pitch 512 height 320 texel(0,0) 0x90000 texel(last) 0x1cb678
+  level  3  240x135  offset 0x00030000 macroBlockOffset 0x00030000 mipTailOffset 0x00000 tailCoord (0, 0) pitch 256 height 192 texel(0,0) 0x30000 texel(last) 0x8bde8
+  level  4  120x67   offset 0x00010000 macroBlockOffset 0x00010000 mipTailOffset 0x00000 tailCoord (0, 0) pitch 128 height 128 texel(0,0) 0x10000 texel(last) 0x286e8
+  level  5   60x33   offset 0x00008000 macroBlockOffset 0x00000000 mipTailOffset 0x08000 tailCoord (64, 0) pitch 64 height 64 texel(0,0) 0x8400 texel(last) 0xab28
+  level  6   30x16   offset 0x00004000 macroBlockOffset 0x00000000 mipTailOffset 0x04000 tailCoord (0, 32) pitch 32 height 32 texel(0,0) 0x400 texel(last) 0x36d8
+SW_64KB_R_X 1920x1080 64 bpp, 9 levels: surfSize 0x1640000, firstMipIdInTail 5, mipChainInTail 0, mipChainPitch 0, mipChainHeight 0
+  level  0 1920x1080 offset 0x00650000 macroBlockOffset 0x00650000 mipTailOffset 0x00000 tailCoord (0, 0) pitch 1920 height 1088 texel(0,0) 0x650000 texel(last) 0x163f9f8
+  level  1  960x540  offset 0x001d0000 macroBlockOffset 0x001d0000 mipTailOffset 0x00000 tailCoord (0, 0) pitch 1024 height 576 texel(0,0) 0x1d0000 texel(last) 0x6468f8
+  level  2  480x270  offset 0x00090000 macroBlockOffset 0x00090000 mipTailOffset 0x00000 tailCoord (0, 0) pitch 512 height 320 texel(0,0) 0x90000 texel(last) 0x1cb678
+  level  3  240x135  offset 0x00030000 macroBlockOffset 0x00030000 mipTailOffset 0x00000 tailCoord (0, 0) pitch 256 height 192 texel(0,0) 0x30000 texel(last) 0x8bde8
+  level  4  120x67   offset 0x00010000 macroBlockOffset 0x00010000 mipTailOffset 0x00000 tailCoord (0, 0) pitch 128 height 128 texel(0,0) 0x10000 texel(last) 0x286e8
+  level  5   60x33   offset 0x00008000 macroBlockOffset 0x00000000 mipTailOffset 0x08000 tailCoord (64, 0) pitch 64 height 64 texel(0,0) 0x8400 texel(last) 0xab28
+  level  6   30x16   offset 0x00004000 macroBlockOffset 0x00000000 mipTailOffset 0x04000 tailCoord (0, 32) pitch 32 height 32 texel(0,0) 0x400 texel(last) 0x36d8
+  level  7   15x8    offset 0x00002000 macroBlockOffset 0x00000000 mipTailOffset 0x02000 tailCoord (32, 0) pitch 16 height 16 texel(0,0) 0x800 texel(last) 0x39f0
+  level  8    7x4    offset 0x00001000 macroBlockOffset 0x00000000 mipTailOffset 0x01000 tailCoord (0, 16) pitch 8 height 8 texel(0,0) 0x4200 texel(last) 0x42f0
+SW_64KB_R_X 1920x1080 64 bpp, 11 levels: surfSize 0x1640000, firstMipIdInTail 5, mipChainInTail 0, mipChainPitch 0, mipChainHeight 0
+  level  0 1920x1080 offset 0x00650000 macroBlockOffset 0x00650000 mipTailOffset 0x00000 tailCoord (0, 0) pitch 1920 height 1088 texel(0,0) 0x650000 texel(last) 0x163f9f8
+  level  1  960x540  offset 0x001d0000 macroBlockOffset 0x001d0000 mipTailOffset 0x00000 tailCoord (0, 0) pitch 1024 height 576 texel(0,0) 0x1d0000 texel(last) 0x6468f8
+  level  2  480x270  offset 0x00090000 macroBlockOffset 0x00090000 mipTailOffset 0x00000 tailCoord (0, 0) pitch 512 height 320 texel(0,0) 0x90000 texel(last) 0x1cb678
+  level  3  240x135  offset 0x00030000 macroBlockOffset 0x00030000 mipTailOffset 0x00000 tailCoord (0, 0) pitch 256 height 192 texel(0,0) 0x30000 texel(last) 0x8bde8
+  level  4  120x67   offset 0x00010000 macroBlockOffset 0x00010000 mipTailOffset 0x00000 tailCoord (0, 0) pitch 128 height 128 texel(0,0) 0x10000 texel(last) 0x286e8
+  level  5   60x33   offset 0x00008000 macroBlockOffset 0x00000000 mipTailOffset 0x08000 tailCoord (64, 0) pitch 64 height 64 texel(0,0) 0x8400 texel(last) 0xab28
+  level  6   30x16   offset 0x00004000 macroBlockOffset 0x00000000 mipTailOffset 0x04000 tailCoord (0, 32) pitch 32 height 32 texel(0,0) 0x400 texel(last) 0x36d8
+  level  7   15x8    offset 0x00002000 macroBlockOffset 0x00000000 mipTailOffset 0x02000 tailCoord (32, 0) pitch 16 height 16 texel(0,0) 0x800 texel(last) 0x39f0
+  level  8    7x4    offset 0x00001000 macroBlockOffset 0x00000000 mipTailOffset 0x01000 tailCoord (0, 16) pitch 8 height 8 texel(0,0) 0x4200 texel(last) 0x42f0
+  level  9    3x2    offset 0x00000800 macroBlockOffset 0x00000000 mipTailOffset 0x00800 tailCoord (16, 0) pitch 8 height 4 texel(0,0) 0x200 texel(last) 0x230
+  level 10    1x1    offset 0x00000600 macroBlockOffset 0x00000000 mipTailOffset 0x00600 tailCoord (8, 8) pitch 8 height 4 texel(0,0) 0x2000 texel(last) 0x2000
+SW_64KB_R_X 1920x1080 64 bpp, 1 levels: surfSize 0xff0000, firstMipIdInTail 1, mipChainInTail 0, mipChainPitch 0, mipChainHeight 0
+  level  0 1920x1080 offset 0x00000000 macroBlockOffset 0x00000000 mipTailOffset 0x00000 tailCoord (0, 0) pitch 1920 height 1088 texel(0,0) 0x0 texel(last) 0xfef9f8
+SW_64KB_R_X 1920x1080 64 bpp, 2 levels: surfSize 0x1470000, firstMipIdInTail 2, mipChainInTail 0, mipChainPitch 0, mipChainHeight 0
+  level  0 1920x1080 offset 0x00480000 macroBlockOffset 0x00480000 mipTailOffset 0x00000 tailCoord (0, 0) pitch 1920 height 1088 texel(0,0) 0x480000 texel(last) 0x146f9f8
+  level  1  960x540  offset 0x00000000 macroBlockOffset 0x00000000 mipTailOffset 0x00000 tailCoord (0, 0) pitch 1024 height 576 texel(0,0) 0x0 texel(last) 0x4768f8
+SW_LINEAR 16x16 32 bpp, 2 levels: surfSize 0x1800, firstMipIdInTail 0, mipChainInTail 0, mipChainPitch 0, mipChainHeight 0
+  level  0   16x16   offset 0x00000800 macroBlockOffset 0x00000800 mipTailOffset 0x00000 tailCoord (0, 0) pitch 64 height 16 texel(0,0) 0x800 texel(last) 0x173c
+  level  1    8x8    offset 0x00000000 macroBlockOffset 0x00000000 mipTailOffset 0x00000 tailCoord (0, 0) pitch 64 height 8 texel(0,0) 0x0 texel(last) 0x71c
+SW_LINEAR 16x16 32 bpp, 3 levels: surfSize 0x1c00, firstMipIdInTail 0, mipChainInTail 0, mipChainPitch 0, mipChainHeight 0
+  level  0   16x16   offset 0x00000c00 macroBlockOffset 0x00000c00 mipTailOffset 0x00000 tailCoord (0, 0) pitch 64 height 16 texel(0,0) 0xc00 texel(last) 0x1b3c
+  level  1    8x8    offset 0x00000400 macroBlockOffset 0x00000400 mipTailOffset 0x00000 tailCoord (0, 0) pitch 64 height 8 texel(0,0) 0x400 texel(last) 0xb1c
+  level  2    4x4    offset 0x00000000 macroBlockOffset 0x00000000 mipTailOffset 0x00000 tailCoord (0, 0) pitch 64 height 4 texel(0,0) 0x0 texel(last) 0x30c
+SW_64KB_R_X 256x256 32 bpp, 3 levels: surfSize 0x60000, firstMipIdInTail 2, mipChainInTail 0, mipChainPitch 0, mipChainHeight 0
+  level  0  256x256  offset 0x00020000 macroBlockOffset 0x00020000 mipTailOffset 0x00000 tailCoord (0, 0) pitch 256 height 256 texel(0,0) 0x20000 texel(last) 0x5f0fc
+  level  1  128x128  offset 0x00010000 macroBlockOffset 0x00010000 mipTailOffset 0x00000 tailCoord (0, 0) pitch 128 height 128 texel(0,0) 0x10000 texel(last) 0x1f0fc
+  level  2   64x64   offset 0x00008000 macroBlockOffset 0x00000000 mipTailOffset 0x08000 tailCoord (64, 0) pitch 64 height 128 texel(0,0) 0x8400 texel(last) 0xb8fc
+SW_64KB_R_X 256x256 32 bpp, 4 levels: surfSize 0x60000, firstMipIdInTail 2, mipChainInTail 0, mipChainPitch 0, mipChainHeight 0
+  level  0  256x256  offset 0x00020000 macroBlockOffset 0x00020000 mipTailOffset 0x00000 tailCoord (0, 0) pitch 256 height 256 texel(0,0) 0x20000 texel(last) 0x5f0fc
+  level  1  128x128  offset 0x00010000 macroBlockOffset 0x00010000 mipTailOffset 0x00000 tailCoord (0, 0) pitch 128 height 128 texel(0,0) 0x10000 texel(last) 0x1f0fc
+  level  2   64x64   offset 0x00008000 macroBlockOffset 0x00000000 mipTailOffset 0x08000 tailCoord (64, 0) pitch 64 height 128 texel(0,0) 0x8400 texel(last) 0xb8fc
+  level  3   32x32   offset 0x00004000 macroBlockOffset 0x00000000 mipTailOffset 0x04000 tailCoord (0, 64) pitch 32 height 64 texel(0,0) 0x4800 texel(last) 0x78fc
+  texels of level 3 (4 levels), x 0..7, y 0: 0x4800 0x4804 0x4808 0x480c 0x4880 0x4884 0x4888 0x488c
+  texels of level 2 (3 levels), x 0..7, y 0: 0x8400 0x8404 0x8408 0x840c 0x8480 0x8484 0x8488 0x848c
