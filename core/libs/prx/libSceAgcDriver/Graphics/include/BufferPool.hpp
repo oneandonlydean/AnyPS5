@@ -3,11 +3,9 @@
 
 #include "prx/libSceAgcDriver/Graphics/include/Context.hpp"
 #include <cstdint>
-#include <deque>
 #include <memory>
 #include <mutex>
 #include <optional>
-#include <unordered_map>
 #include <vector>
 
 namespace AgcDriver::Graphics {
@@ -90,22 +88,10 @@ private:
         BufferAllocation allocation;
         std::uint64_t lastUse;
     };
-    struct SlotKey {
-        std::size_t bytes;
-        VkBufferUsageFlags usage;
-        VkMemoryPropertyFlags properties;
-        bool operator==(const SlotKey&) const = default;
-    };
-    struct SlotKeyHash {
-        std::size_t operator()(const SlotKey& key) const noexcept {
-            return std::hash<std::size_t>{}(key.bytes) ^ (static_cast<std::size_t>(key.usage) << 32u) ^ (static_cast<std::size_t>(key.properties) << 48u);
-        }
-    };
     // One retention tier: its slots, their bytes, the byte budget they are evicted under and its
     // counters (APS5_PROFILE_DRAW, reported every 10 s from Take).
     struct Tier {
-        std::unordered_map<SlotKey, std::deque<Slot>, SlotKeyHash> free;
-        std::size_t slots = 0;
+        std::vector<Slot> free;
         VkDeviceSize retainedBytes = 0;
         VkDeviceSize budget = 0;
         std::uint64_t hits = 0;
@@ -140,16 +126,12 @@ private:
     std::unordered_map<std::uint64_t, Slab> slabs;
     std::unordered_map<VkDeviceMemory, std::unique_ptr<SlabBlock>> slabBlocks;
     static constexpr VkDeviceSize budget = 512ull * 1024 * 1024;
-    // The small tier's own budget: pinned host memory the large tier's budget does not count.
+    // The small tier's own budget (512 slots of at most half a MiB each): pinned host memory the
+    // large tier's budget does not count.
     static constexpr VkDeviceSize smallBudget = 64ull * 1024 * 1024;
     // Requests of this size and more keep their exact size and go to the large tier.
     static constexpr std::size_t classLimit = std::size_t{1} << 20u;
-    // Once Astro Bot records thousands of draws per second (each with its index, vertex and data
-    // buffers, kept until their batch completed, in size classes per usage), 512 slots evicted
-    // ~2400 small allocations per second only to create them again (vkAllocateMemory and
-    // vkFreeMemory, kernel time not seen in user profiles): ~0.5 ms per draw. About 1700 small
-    // slots (~55 MiB, inside the budget) circulate there; the budgets still bound the bytes.
-    static constexpr std::size_t defaultSlots = 4096;
+    static constexpr std::size_t defaultSlots = 512;
 };
 
 std::shared_ptr<BufferPool> GetBufferPool(const Context& context);
