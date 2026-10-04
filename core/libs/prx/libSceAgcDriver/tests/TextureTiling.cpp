@@ -135,6 +135,13 @@ void RunTextureTilingTests() {
         Require(geometry.mips[0].tiledOffset == 40960 && geometry.mips[0].tiledSize == 131072, "3D mip 0 must end each slab");
         Require(geometry.layerBytes == 172032 && geometry.guestBytes == 172032ull * 4, "3D slabs must hold the whole mip chain");
         Require(geometry.HasLayer(1, 15) && !geometry.HasLayer(1, 16) && !geometry.HasLayer(2, 8), "3D mips must halve their depth");
+        volume.width = 33;
+        volume.height = 20;
+        volume.depthOrLastArray = 11;
+        volume.mipCount = 2;
+        const auto odd = DescribeSurface(volume);
+        Require(odd.mips[1].width == 16 && odd.mips[1].blocksPerRow == 3 && odd.mips[1].tiledSize == 12288, "a 3D level must be padded from its size rounded up, as addrlib does");
+        Require(odd.mips[0].blocksPerRow == 5 && odd.mips[0].tiledOffset == 12288 && odd.mips[0].tiledSize == 40960, "3D mip 0 of a non-power-of-two volume changed");
         volume.width = 8;
         volume.height = 8;
         volume.depthOrLastArray = 7;

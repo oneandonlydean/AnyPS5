@@ -286,14 +286,17 @@ ThickLayout ComputeThickLayout(TextureTileMode tileMode, std::uint32_t format, s
         mip.tail = false;
         mip.tailX = 0;
         mip.tailY = 0;
-        const auto paddedWidth = AlignUp(mip.width, block[0]);
+        const bool tiled = tileMode != TextureTileMode::kLinear;
+        const auto levelWidth = tiled ? std::max((width + (1u << level) - 1u) >> level, 1u) : mip.width;
+        const auto levelHeight = tiled ? std::max((height + (1u << level) - 1u) >> level, 1u) : mip.height;
+        const auto paddedWidth = AlignUp(levelWidth, block[0]);
         mip.pitchBytes = paddedWidth * bytesPerElement;
-        if (tileMode == TextureTileMode::kLinear) {
+        if (!tiled) {
             mip.blocksPerRow = paddedWidth;
             mip.tiledSize = static_cast<std::uint64_t>(mip.pitchBytes) * mip.height;
         } else {
             mip.blocksPerRow = paddedWidth / block[0];
-            mip.tiledSize = static_cast<std::uint64_t>(mip.blocksPerRow) * (AlignUp(mip.height, block[1]) / block[1]) * blockBytes;
+            mip.tiledSize = static_cast<std::uint64_t>(mip.blocksPerRow) * (AlignUp(levelHeight, block[1]) / block[1]) * blockBytes;
         }
         mip.linearSize = static_cast<std::uint64_t>(mip.pitchBytes) * mip.height;
         mip.tiledOffset = tiledOffset;
