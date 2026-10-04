@@ -5,19 +5,8 @@
 namespace ShaderRecompiler {
 
 IrU64 TranslationContext::readF64(const RdnaOperand& operand) {
-    std::array<IrU32, 2> pair{IrU32(ir.Constant(0u)), readRawU32(operand)};
-    if (operand.kind == RdnaOperandKind::FloatInlineConstant && operand.value == 0x3e22f983u) {
-        pair = {IrU32(ir.Constant(0x6dc9c882u)), IrU32(ir.Constant(0x3fc45f30u))};
-    } else if (operand.kind != RdnaOperandKind::LiteralConstant) {
-        pair = readU32Pair(plainOperand(operand));
-    }
-    if (operand.absolute) {
-        pair[1] = IrU32(ir.BitwiseAnd(pair[1].Value(), ir.Constant(0x7fffffffu)));
-    }
-    if (operand.negate) {
-        pair[1] = IrU32(ir.BitwiseXor(pair[1].Value(), ir.Constant(0x80000000u)));
-    }
-    return IrU64(ir.ConstructU64(pair[0].Value(), pair[1].Value()));
+    const std::array<IrU32, 2> bits = readF64Bits(operand);
+    return IrU64(ir.ConstructU64(bits[0].Value(), bits[1].Value()));
 }
 
 bool TranslationContext::float64Operation(const RdnaInstruction& inst, IrOpcode opcode) {
