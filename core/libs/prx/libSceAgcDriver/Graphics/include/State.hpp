@@ -48,6 +48,7 @@ struct ColorTarget {
     bool mipTail = false;
     std::array<std::uint32_t, 2> clearWords{};
     std::uint32_t slot = 0;
+    std::uint32_t exportIndex = 0;
 };
 
 struct DepthTarget {

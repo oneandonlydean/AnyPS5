@@ -391,6 +391,36 @@ void DisabledColorTests() {
     expectFailure([&] { AgcDriver::Graphics::DecodeState(queue); }, "missing register");
 }
 
+void CompactedExportTests() {
+    alignas(256) static std::array<std::byte, 1024> slotFourMemory{};
+    const auto slotFour = reinterpret_cast<std::uintptr_t>(slotFourMemory.data());
+    auto queue = makeState();
+    for (const auto offset : {0x31bu, 0x31cu, 0x31du}) queue.context[offset + 4u * 0xfu] = queue.context.at(offset);
+    for (const auto offset : {0x3b0u, 0x3b8u}) queue.context[offset + 4u] = queue.context.at(offset);
+    queue.context[0x318 + 4u * 0xfu] = static_cast<std::uint32_t>(slotFour >> 8u);
+    queue.context[0x390 + 4u] = static_cast<std::uint32_t>(slotFour >> 40u);
+    queue.context[0x1e4] = 0x40010001u;
+    for (std::uint32_t i = 0; i < 4; ++i) queue.context[0x105 + i] = 0;
+    queue.context[0x8e] = 0x3000fu;
+    queue.context[0x8f] = 0xf000fu;
+    queue.context[0x1c5] = 0x44u;
+    auto state = AgcDriver::Graphics::DecodeState(queue);
+    Require(state.colors.size() == 2 && state.blends.size() == 2, "two compacted exports did not give two attachments");
+    Require(state.colors[0].slot == 0 && state.colors[0].exportIndex == 0 && state.colors[0].address == reinterpret_cast<std::uintptr_t>(colorMemory.data()), "export 0 did not reach MRT slot 0");
+    Require(state.colors[1].slot == 4 && state.colors[1].exportIndex == 1 && state.colors[1].address == slotFour, "export 1 did not reach MRT slot 4, the second slot CB_SHADER_MASK enables");
+    Require(!state.blends[0].blendEnable && state.blends[1].blendEnable && state.blends[1].colorWriteMask == (VK_COLOR_COMPONENT_R_BIT | VK_COLOR_COMPONENT_G_BIT), "export 1 did not take MRT slot 4's blend control and target mask");
+    Require(AgcDriver::Graphics::ExportMappings(state)[1] == state.colors[1].componentMapping, "export 1 did not take MRT slot 4's component mapping");
+    queue.context[0x1c5] = 0x90009u;
+    expectFailure([&] { AgcDriver::Graphics::DecodeState(queue); }, "color export format 0");
+    queue.context[0x8e] = 0xf000fu;
+    queue.context[0x8f] = 0xf0f0fu;
+    queue.context[0x1c5] = 0x999u;
+    state = AgcDriver::Graphics::DecodeState(queue);
+    Require(state.colors.size() == 2 && state.blends.size() == 3, "a write-masked export between written ones changed the attachment count");
+    Require(state.colors[0].exportIndex == 0 && state.colors[1].slot == 4 && state.colors[1].exportIndex == 2, "export 2 did not reach MRT slot 4, the third slot CB_SHADER_MASK enables");
+    Require(state.blends[1].colorWriteMask == 0 && !state.blends[1].blendEnable && state.blends[2].blendEnable, "the write-masked export 1 was not left unused");
+}
+
 void DepthStencilTests() {
     auto queue = makeState();
     queue.context[0x000] = 0;
@@ -1665,6 +1695,7 @@ int main() {
         DepthClipTests();
         DepthStencilTests();
         DisabledColorTests();
+        CompactedExportTests();
         metadataPassTests();
         ShaderStageTests();
         PixelInputLayoutTests();

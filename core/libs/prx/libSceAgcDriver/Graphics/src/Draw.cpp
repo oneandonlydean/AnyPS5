@@ -1195,7 +1195,7 @@ void recordDraw(const Context& context, const State& state, const Pm4::DrawParam
     for (const auto view : record.targetViews) mix(reinterpret_cast<std::uint64_t>(view));
     if (state.blends.size() != state.colors.size()) {
         mix(state.blends.size());
-        for (const auto& color : state.colors) mix(color.slot);
+        for (const auto& color : state.colors) mix(color.exportIndex);
     }
     mix(state.renderExtent.width);
     mix(state.renderExtent.height);
@@ -1432,7 +1432,7 @@ void Draw(const Context& context, const State& state, const Pm4::DrawParameters&
             }
         }
         timer.phase(PhaseReadTarget);
-        binding.target = std::make_unique<RenderTarget>(context, color, state.blends.at(color.slot).blendEnable != 0);
+        binding.target = std::make_unique<RenderTarget>(context, color, state.blends.at(color.exportIndex).blendEnable != 0);
         targetViews.push_back(binding.target->View());
     }
     if (state.depth) targetViews.push_back(DepthSurfaceView(context, *state.depth));
