@@ -35,9 +35,9 @@ std::array<std::uint32_t, 3> ThickBlockExtent(TextureTileMode tileMode, std::uin
 // row (TileMipLayout), except the tail mips, which share one block. Throws for linear tiling.
 std::array<std::uint32_t, 3> ThinBlockLayout(TextureTileMode tileMode, std::uint32_t bytesPerElement);
 
-// 3D surface. Each slab holds the whole mip chain, smallest level first. Depth slice z of a level is detiled
-// from slab z / blockDepth (slabBytes apart) with the swizzle's slice input set to z, into linear
-// slices sliceLinearBytes apart.
+// 3D surface. Each slab holds the whole mip chain: the mip tail block, if any, then the other levels from the
+// smallest to level 0. Depth slice z of a level is detiled from slab z / blockDepth (slabBytes apart) with the
+// swizzle's slice input set to z, into linear slices sliceLinearBytes apart.
 struct ThickLayout {
     std::vector<TileMipLayout> mips;
     std::uint32_t depth;

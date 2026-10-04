@@ -265,6 +265,8 @@ ThickLayout ComputeThickLayout(TextureTileMode tileMode, std::uint32_t format, s
     result.mips.resize(mipCount);
     std::array<std::uint32_t, 3> block{CalcLinearBlockWidth(bytesPerElement), 1u, 1u};
     std::uint32_t blockBytes = 0;
+    std::uint32_t maxTailLevels = 0;
+    auto firstTailLevel = mipCount;
     if (tileMode != TextureTileMode::kLinear) {
         block = ThickBlockExtent(tileMode, bytesPerElement);
         blockBytes = tileMode == TextureTileMode::kStandard4KB ? 4096u : 65536u;
@@ -272,33 +274,56 @@ ThickLayout ComputeThickLayout(TextureTileMode tileMode, std::uint32_t format, s
         const auto tailWidth = log2BlockBytes % 3u == 1u ? block[0] >> 1u : block[0];
         const auto tailHeight = log2BlockBytes % 3u == 0u ? block[1] >> 1u : block[1];
         const auto effectiveLog2 = log2BlockBytes - (log2BlockBytes - 8u) / 3u;
-        const auto maxTailLevels = effectiveLog2 <= 11u ? 1u + (1u << (effectiveLog2 - 9u)) : effectiveLog2 - 4u;
-        for (std::uint32_t level = 0; mipCount > 1 && level < mipCount; ++level)
-            Require(std::max(width >> level, 1u) > tailWidth || std::max(height >> level, 1u) > tailHeight || mipCount - level > maxTailLevels, "3D texture mip tails are not implemented");
+        maxTailLevels = effectiveLog2 <= 11u ? 1u + (1u << (effectiveLog2 - 9u)) : effectiveLog2 - 4u;
+        for (std::uint32_t level = 0; mipCount > 1 && level < mipCount; ++level) {
+            if (ShiftCeil(width, level) <= tailWidth && ShiftCeil(height, level) <= tailHeight && mipCount - level <= maxTailLevels) {
+                firstTailLevel = level;
+                break;
+            }
+        }
     }
     result.blockDepth = block[2];
-    std::uint64_t tiledOffset = 0;
+    std::uint64_t tiledOffset = firstTailLevel < mipCount ? blockBytes : 0u;
     std::uint64_t linearOffset = 0;
     for (auto level = mipCount; level-- > 0;) {
         auto& mip = result.mips[level];
         mip.width = std::max(width >> level, 1u);
         mip.height = std::max(height >> level, 1u);
-        mip.tail = false;
+        mip.tail = level >= firstTailLevel;
         mip.tailX = 0;
         mip.tailY = 0;
-        const auto paddedWidth = AlignUp(mip.width, block[0]);
-        mip.pitchBytes = paddedWidth * bytesPerElement;
-        if (tileMode == TextureTileMode::kLinear) {
+        if (mip.tail) {
+            constexpr std::uint32_t microBlock[5][2] = {{8, 4}, {4, 4}, {4, 4}, {4, 2}, {2, 2}};
+            const auto element = static_cast<std::size_t>(std::countr_zero(bytesPerElement));
+            const auto slot = maxTailLevels - 1u - (level - firstTailLevel);
+            const auto slotOffset = slot > 6u ? 16u << slot : slot << 8u;
+            for (std::uint32_t bit = 0; bit < 6u; ++bit) {
+                mip.tailX |= ((slotOffset >> (9u + 2u * bit)) & 1u) << bit;
+                mip.tailY |= ((slotOffset >> (8u + 2u * bit)) & 1u) << bit;
+            }
+            mip.tailX *= microBlock[element][0];
+            mip.tailY *= microBlock[element][1];
+            mip.blocksPerRow = 1u;
+            mip.pitchBytes = block[0] * bytesPerElement;
+            mip.tiledOffset = 0;
+            mip.tiledSize = blockBytes;
+        } else if (tileMode == TextureTileMode::kLinear) {
+            const auto paddedWidth = AlignUp(mip.width, block[0]);
+            mip.pitchBytes = paddedWidth * bytesPerElement;
             mip.blocksPerRow = paddedWidth;
             mip.tiledSize = static_cast<std::uint64_t>(mip.pitchBytes) * mip.height;
         } else {
+            const auto paddedWidth = AlignUp(ShiftCeil(width, level), block[0]);
+            mip.pitchBytes = paddedWidth * bytesPerElement;
             mip.blocksPerRow = paddedWidth / block[0];
-            mip.tiledSize = static_cast<std::uint64_t>(mip.blocksPerRow) * (AlignUp(mip.height, block[1]) / block[1]) * blockBytes;
+            mip.tiledSize = static_cast<std::uint64_t>(mip.blocksPerRow) * (AlignUp(ShiftCeil(height, level), block[1]) / block[1]) * blockBytes;
+        }
+        if (!mip.tail) {
+            mip.tiledOffset = tiledOffset;
+            tiledOffset += mip.tiledSize;
         }
         mip.linearSize = static_cast<std::uint64_t>(mip.pitchBytes) * mip.height;
-        mip.tiledOffset = tiledOffset;
         mip.linearOffset = linearOffset;
-        tiledOffset += mip.tiledSize;
         linearOffset += mip.linearSize;
     }
     result.slabBytes = tiledOffset;
