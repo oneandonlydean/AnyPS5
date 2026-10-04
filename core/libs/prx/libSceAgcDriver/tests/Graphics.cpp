@@ -444,7 +444,8 @@ void depthTests() {
     Require(state.depth.attached && state.depth.clearDepth && state.depth.clearStencil && state.depth.depthTest && state.depth.depthWrite && state.depth.depthCompare == VK_COMPARE_OP_ALWAYS, "a depth clear did not write every covered pixel");
     Require(state.viewport.minDepth == 0.25f && state.viewport.maxDepth == 0.25f, "a depth clear did not pin the depth range to the clear value");
     Require(state.depth.stencilTest && state.depth.front.passOp == VK_STENCIL_OP_REPLACE && state.depth.front.compareOp == VK_COMPARE_OP_ALWAYS && state.depth.front.reference == 0x5a && state.depth.front.writeMask == 0xff && state.depth.back.reference == 0x5a, "a stencil clear did not replace with the clear value");
-    // Depth bias: radeonsi's scale * 16 and units (* 4 for Z_16) back to Vulkan's factors.
+    // Depth bias: the inverse of radv, slope * 16 and the constant factor unscaled, in the depth format's
+    // units (PA_SU_POLY_OFFSET_DB_FMT_CNTL).
     queue = makeDepthState();
     queue.context[0x205] = 0x240u | 0x1800u;
     queue.context[0x2de] = 0x1e9;
@@ -454,12 +455,17 @@ void depthTests() {
     state = DecodeState(queue);
     Require(DrawRejection(queue, false).empty() && state.depth.depthBias && state.depth.depthBiasSlope == 2.0f && state.depth.depthBiasConstant == 3.0f, "depth bias was not decoded");
     queue.context[0x10] = 0x80000181u;
-    Require(DecodeState(queue).depth.depthBiasConstant == 0.75f, "Z_16 depth bias units were not scaled");
+    expectDepthRejection(queue, "depth bias in units other than the depth format");
+    queue.context[0x2de] = 0xf0;
+    Require(DecodeState(queue).depth.depthBiasConstant == 3.0f, "Z_16 depth bias units were scaled");
+    queue.context.erase(0x2de);
+    Require(DecodeState(queue).depth.depthBias, "depth bias without PA_SU_POLY_OFFSET_DB_FMT_CNTL was refused");
     queue.context[0x10] = 0xa0000183u;
+    queue.context[0x2de] = 0x1e9;
     queue.context[0x2e3] = std::bit_cast<std::uint32_t>(4.0f);
-    expectDepthRejection(queue, "different front and back depth bias");
+    expectDepthRejection(queue, "depth bias differing between front and back faces");
     queue.context[0x205] = 0x240u | 0x800u;
-    expectDepthRejection(queue, "one face only");
+    expectDepthRejection(queue, "depth bias differing between front and back faces");
     queue.context[0x205] = 0x240u | 0x800u | 2u;
     Require(DecodeState(queue).depth.depthBias, "depth bias of the only rasterized face was lost");
     queue = makeDepthState();
@@ -1015,6 +1021,7 @@ struct MockVulkan {
     std::uint32_t blendAttachments = 0;
     std::vector<VkDynamicState> dynamicStates;
     std::optional<std::pair<float, float>> depthBounds;
+    std::optional<std::array<float, 3>> depthBias;
     std::optional<VkPipelineDepthStencilStateCreateInfo> depthStencil;
     VkPipelineRasterizationStateCreateInfo raster{};
     std::vector<std::vector<std::uint32_t>> shaderModules;
@@ -1228,6 +1235,10 @@ VKAPI_ATTR void VKAPI_CALL mockCmdSetDepthBounds(VkCommandBuffer, float minimum,
     mock.depthBounds = std::make_pair(minimum, maximum);
 }
 
+VKAPI_ATTR void VKAPI_CALL mockCmdSetDepthBias(VkCommandBuffer, float constant, float clamp, float slope) {
+    mock.depthBias = std::array<float, 3>{constant, clamp, slope};
+}
+
 VKAPI_ATTR void VKAPI_CALL mockCmdPushConstants(VkCommandBuffer, VkPipelineLayout, VkShaderStageFlags, std::uint32_t, std::uint32_t size, const void* values) {
     const auto* bytes = static_cast<const std::byte*>(values);
     mock.lastPushConstants.assign(bytes, bytes + size);
@@ -1275,6 +1286,7 @@ PFN_vkVoidFunction VKAPI_CALL mockProc(VkDevice, const char* name) {
         {"vkCmdSetViewport", reinterpret_cast<PFN_vkVoidFunction>(mockCmdSetViewport)},
         {"vkCmdSetScissor", reinterpret_cast<PFN_vkVoidFunction>(mockCmdSetScissor)},
         {"vkCmdSetDepthBounds", reinterpret_cast<PFN_vkVoidFunction>(mockCmdSetDepthBounds)},
+        {"vkCmdSetDepthBias", reinterpret_cast<PFN_vkVoidFunction>(mockCmdSetDepthBias)},
         {"vkCmdPushConstants", reinterpret_cast<PFN_vkVoidFunction>(mockCmdPushConstants)},
         {"vkCmdDispatch", reinterpret_cast<PFN_vkVoidFunction>(mockCmdDispatch)},
         {"vkCmdUpdateBuffer", reinterpret_cast<PFN_vkVoidFunction>(mockCmdUpdateBuffer)}
@@ -1921,11 +1933,13 @@ void depthPipelineTests() {
         const auto& depth = mock.renderPassAttachments[1];
         Require(depth.format == VK_FORMAT_D32_SFLOAT_S8_UINT && depth.loadOp == VK_ATTACHMENT_LOAD_OP_LOAD && depth.storeOp == VK_ATTACHMENT_STORE_OP_STORE && depth.stencilLoadOp == VK_ATTACHMENT_LOAD_OP_LOAD && depth.stencilStoreOp == VK_ATTACHMENT_STORE_OP_STORE && depth.initialLayout == VK_IMAGE_LAYOUT_GENERAL && depth.finalLayout == VK_IMAGE_LAYOUT_GENERAL, "the depth attachment does not keep its contents in GENERAL");
         Require(mock.depthStencil && mock.depthStencil->depthTestEnable && mock.depthStencil->depthWriteEnable && mock.depthStencil->depthCompareOp == VK_COMPARE_OP_LESS_OR_EQUAL && !mock.depthStencil->stencilTestEnable && !mock.depthStencil->depthBoundsTestEnable, "the pipeline's depth-stencil state was not built");
-        Require(mock.raster.depthBiasEnable && mock.raster.depthBiasSlopeFactor == 2.0f && mock.raster.depthBiasConstantFactor == 3.0f, "the pipeline lacks the depth bias");
+        Require(mock.raster.depthBiasEnable && std::find(mock.dynamicStates.begin(), mock.dynamicStates.end(), VK_DYNAMIC_STATE_DEPTH_BIAS) != mock.dynamicStates.end(), "the pipeline lacks the dynamic depth bias");
         Require(std::find(mock.dynamicStates.begin(), mock.dynamicStates.end(), VK_DYNAMIC_STATE_DEPTH_BOUNDS) == mock.dynamicStates.end(), "a pipeline without depth bounds made them dynamic");
         mock.depthBounds.reset();
+        mock.depthBias.reset();
         pipeline.Continue(VK_NULL_HANDLE, state);
         Require(!mock.depthBounds, "a pipeline without depth bounds set them");
+        Require(mock.depthBias && (*mock.depthBias)[0] == 3.0f && (*mock.depthBias)[1] == 0.0f && (*mock.depthBias)[2] == 2.0f, "the draw's depth bias was not set");
     }
     {
         auto bounded = queue;

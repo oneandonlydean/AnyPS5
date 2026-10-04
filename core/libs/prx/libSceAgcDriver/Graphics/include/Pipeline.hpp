@@ -75,6 +75,7 @@ private:
     std::size_t attachments = 0;
     bool depthAttachment = false;
     bool depthBounds = false;
+    bool depthBias = false;
     std::vector<CachedFramebuffer> framebuffers;
 };
 

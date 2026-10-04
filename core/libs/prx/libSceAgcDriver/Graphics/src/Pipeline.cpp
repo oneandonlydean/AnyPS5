@@ -49,7 +49,7 @@ void ValidateDepthBounds(const Context& context, const DepthState& depth) {
     Require(context.depthRangeUnrestricted || (depth.depthBoundsMin >= 0 && depth.depthBoundsMin <= 1 && depth.depthBoundsMax >= 0 && depth.depthBoundsMax <= 1), "depth bounds outside [0, 1] require VK_EXT_depth_range_unrestricted");
 }
 
-Pipeline::Pipeline(const Context& context, const State& state, const VertexInputLayout& vertexInput, const ShaderResources& resources, std::span<const CompiledShader> shaders, VkImageLayout attachmentLayout) : context(context), _modules(shaders.size()), attachments(state.colors.size()), depthAttachment(state.depth.attached), depthBounds(state.depth.attached && state.depth.depthBounds) {
+Pipeline::Pipeline(const Context& context, const State& state, const VertexInputLayout& vertexInput, const ShaderResources& resources, std::span<const CompiledShader> shaders, VkImageLayout attachmentLayout) : context(context), _modules(shaders.size()), attachments(state.colors.size()), depthAttachment(state.depth.attached), depthBounds(state.depth.attached && state.depth.depthBounds), depthBias(state.depth.attached && state.depth.depthBias) {
     // A cached pipeline may outlive its device's teardown (see ClearCachedPipelines); it must not keep
     // the buffer pool, which is reset with the device, alive past it.
     this->context.bufferPool.reset();
@@ -57,6 +57,7 @@ Pipeline::Pipeline(const Context& context, const State& state, const VertexInput
     Require(state.blends.size() <= context.limits.maxColorAttachments, "color targets exceed device attachment limits");
     Require(state.hasColorTarget || state.depth.attached || (context.limits.framebufferNoAttachmentsSampleCounts & VK_SAMPLE_COUNT_1_BIT) != 0, "device does not support single-sample rendering without attachments");
     Require(!depthBounds || context.depthBounds, "depth bounds require the depthBounds feature");
+    Require(!depthBias || state.depth.depthBiasClamp == 0.0f || context.depthBiasClamp, "device does not support depth bias clamping");
     Require(!state.negativeOneToOne || context.depthClipControl, "negative-one-to-one depth clipping requires VK_EXT_depth_clip_control with depthClipControl enabled");
     if (state.rectList) Require(context.tessellationShader && context.limits.maxTessellationPatchSize >= 4, "rect-list requires tessellation with four output control points");
     if (state.stages.tessellation) {
@@ -168,9 +169,11 @@ Pipeline::Pipeline(const Context& context, const State& state, const VertexInput
         if (state.negativeOneToOne) viewports.pNext = &depthClip;
         viewports.viewportCount = 1;
         viewports.scissorCount = 1;
-        const std::array<VkDynamicState, 3> dynamicStates{VK_DYNAMIC_STATE_VIEWPORT, VK_DYNAMIC_STATE_SCISSOR, VK_DYNAMIC_STATE_DEPTH_BOUNDS};
+        std::vector<VkDynamicState> dynamicStates{VK_DYNAMIC_STATE_VIEWPORT, VK_DYNAMIC_STATE_SCISSOR};
+        if (depthBounds) dynamicStates.push_back(VK_DYNAMIC_STATE_DEPTH_BOUNDS);
+        if (depthBias) dynamicStates.push_back(VK_DYNAMIC_STATE_DEPTH_BIAS);
         VkPipelineDynamicStateCreateInfo dynamic{VK_STRUCTURE_TYPE_PIPELINE_DYNAMIC_STATE_CREATE_INFO};
-        dynamic.dynamicStateCount = depthBounds ? 3u : 2u;
+        dynamic.dynamicStateCount = static_cast<std::uint32_t>(dynamicStates.size());
         dynamic.pDynamicStates = dynamicStates.data();
         VkPipelineRasterizationStateCreateInfo raster{VK_STRUCTURE_TYPE_PIPELINE_RASTERIZATION_STATE_CREATE_INFO};
         raster.polygonMode = VK_POLYGON_MODE_FILL;
@@ -178,13 +181,8 @@ Pipeline::Pipeline(const Context& context, const State& state, const VertexInput
         raster.cullMode = state.cullMode;
         raster.frontFace = state.frontFace;
         raster.lineWidth = 1;
-        if (state.depth.attached && state.depth.depthBias) {
-            raster.depthBiasEnable = VK_TRUE;
-            raster.depthBiasConstantFactor = state.depth.depthBiasConstant;
-            raster.depthBiasSlopeFactor = state.depth.depthBiasSlope;
-            // A clamp needs the depthBiasClamp feature; without it the bias is left unclamped.
-            raster.depthBiasClamp = context.depthBiasClamp ? state.depth.depthBiasClamp : 0.0f;
-        }
+        // The bias values are dynamic state (Continue), like the depth bounds.
+        raster.depthBiasEnable = depthBias ? VK_TRUE : VK_FALSE;
         VkPipelineDepthStencilStateCreateInfo depthStencil{VK_STRUCTURE_TYPE_PIPELINE_DEPTH_STENCIL_STATE_CREATE_INFO};
         depthStencil.depthTestEnable = state.depth.depthTest ? VK_TRUE : VK_FALSE;
         depthStencil.depthWriteEnable = state.depth.depthWrite ? VK_TRUE : VK_FALSE;
@@ -319,6 +317,7 @@ void Pipeline::Continue(VkCommandBuffer commands, const State& state) const {
     context.Resolved(&DeviceFunctions::cmdSetViewport, "vkCmdSetViewport")(commands, 0, 1, &state.viewport);
     context.Resolved(&DeviceFunctions::cmdSetScissor, "vkCmdSetScissor")(commands, 0, 1, &state.scissor);
     if (depthBounds) context.Resolved(&DeviceFunctions::cmdSetDepthBounds, "vkCmdSetDepthBounds")(commands, state.depth.depthBoundsMin, state.depth.depthBoundsMax);
+    if (depthBias) context.Resolved(&DeviceFunctions::cmdSetDepthBias, "vkCmdSetDepthBias")(commands, state.depth.depthBiasConstant, state.depth.depthBiasClamp, state.depth.depthBiasSlope);
 }
 
 void Pipeline::PushConstants(VkCommandBuffer commands, VkShaderStageFlags stages, std::span<const std::byte, PipelinePushConstantBytes> bytes) const {
@@ -397,11 +396,6 @@ std::vector<std::byte> pipelineKey(const Context& context, const State& state, c
         append(key, depth.front);
         append(key, depth.back);
         append(key, depth.depthBias);
-        if (depth.depthBias) {
-            append(key, depth.depthBiasConstant);
-            append(key, depth.depthBiasSlope);
-            append(key, context.depthBiasClamp ? depth.depthBiasClamp : 0.0f);
-        }
         append(key, depth.depthBounds);
     }
     append(key, state.stages.mesh.has_value());

@@ -141,7 +141,7 @@ struct DepthDecode {
 // The depth/stencil rules DecodeState and DrawRejection share, so the precheck rejects exactly what
 // the decode would: `required(offset)` reads a register a rule needs (DrawRejection's gives nullopt
 // for an absent one, which ends the rules without a verdict; DecodeState's throws), `optional(offset)`
-// one that may be absent (the gfx10 *_BASE_HI words; absent reads as 0). Returns the rejection, or
+// one that may be absent (nullopt: the gfx10 *_BASE_HI words read it as 0). Returns the rejection, or
 // empty with `out` filled (out.state.attached false: the draw renders without a depth attachment).
 //
 // A draw needs the attachment when a depth test can fail or writes depth, when a stencil test can fail
@@ -163,11 +163,11 @@ std::string decodeDepth(TRequired required, TOptional optional, DepthDecode& out
     }
     // DB_Z_INFO / DB_STENCIL_INFO are absent until the title binds a surface: FORMAT INVALID, the
     // context default.
-    const std::optional<std::uint32_t> zInfo = optional(0x10);
-    const std::optional<std::uint32_t> stencilInfo = optional(0x11);
-    const auto zFormat = *zInfo & 3u;
+    const auto zInfo = optional(0x10).value_or(0u);
+    const auto stencilInfo = optional(0x11).value_or(0u);
+    const auto zFormat = zInfo & 3u;
     const bool hasZ = zFormat != 0;
-    const bool hasStencil = (*stencilInfo & 1u) != 0;
+    const bool hasStencil = (stencilInfo & 1u) != 0;
     if (!hasZ && !hasStencil) return {};
     const auto renderControl = required(0x0);
     if (!renderControl) return {};
@@ -275,17 +275,17 @@ std::string decodeDepth(TRequired required, TOptional optional, DepthDecode& out
     // The surface. NUM_SAMPLES (bits 2-3) is the MSAA sample count; format 2 (Z_24) does not exist on
     // gfx10. Everything else in DB_Z_INFO / DB_STENCIL_INFO concerns the memory layout, HTILE use or
     // residency of a surface that is never read.
-    if ((*zInfo & 0xcu) != 0) return depthMessage("multisampled depth targets are unsupported", 0x10, *zInfo);
-    if (zFormat == 2) return depthMessage("the Z_24 depth format is unsupported", 0x10, *zInfo);
+    if ((zInfo & 0xcu) != 0) return depthMessage("multisampled depth targets are unsupported", 0x10, zInfo);
+    if (zFormat == 2) return depthMessage("the Z_24 depth format is unsupported", 0x10, zInfo);
     auto& target = out.target;
     target.zFormat = zFormat;
     target.stencil = hasStencil;
     target.slice = sliceStart;
-    target.tileMode = ((hasZ ? *zInfo : *stencilInfo) >> 4u) & 0x1fu;
+    target.tileMode = ((hasZ ? zInfo : stencilInfo) >> 4u) & 0x1fu;
     const auto base = [&](std::uint32_t low, std::uint32_t high) -> std::optional<std::uint64_t> {
         const auto word = required(low);
         if (!word) return std::nullopt;
-        return (static_cast<std::uint64_t>(*word) << 8u) | (static_cast<std::uint64_t>(optional(high) & 0xffu) << 40u);
+        return (static_cast<std::uint64_t>(*word) << 8u) | (static_cast<std::uint64_t>(optional(high).value_or(0u) & 0xffu) << 40u);
     };
     if (hasZ) {
         const auto read = base(0x12, 0x1a);
@@ -304,7 +304,7 @@ std::string decodeDepth(TRequired required, TOptional optional, DepthDecode& out
         target.stencilAddress = *read;
         if (!hasZ) target.address = *read;
     }
-    if (hasZ && (*zInfo & (1u << 29u)) != 0) {
+    if (hasZ && (zInfo & (1u << 29u)) != 0) {
         const auto htile = base(0x5, 0x1e);
         if (!htile) return {};
         target.htileAddress = *htile;
@@ -325,8 +325,10 @@ std::string decodeDepth(TRequired required, TOptional optional, DepthDecode& out
     // which Vulkan does not bias). Vulkan has one bias for both faces: a face culled away needs none.
     const auto raster = required(0x205);
     if (!raster) return {};
-    const bool frontBias = (*raster & 0x800u) != 0 && (*raster & 1u) == 0;
-    const bool backBias = (*raster & 0x1000u) != 0 && (*raster & 2u) == 0;
+    const bool frontFaces = (*raster & 1u) == 0;
+    const bool backFaces = (*raster & 2u) == 0;
+    const bool frontBias = frontFaces && (*raster & 0x800u) != 0;
+    const bool backBias = backFaces && (*raster & 0x1000u) != 0;
     if (hasZ && (frontBias || backBias)) {
         const auto clamp = required(0x2df);
         const auto frontScale = required(0x2e0);
@@ -334,18 +336,20 @@ std::string decodeDepth(TRequired required, TOptional optional, DepthDecode& out
         const auto backScale = required(0x2e2);
         const auto backOffset = required(0x2e3);
         if (!clamp || !frontScale || !frontOffset || !backScale || !backOffset) return {};
-        const bool frontFaces = (*raster & 1u) == 0;
-        const bool backFaces = (*raster & 2u) == 0;
-        if ((frontFaces && !frontBias) || (backFaces && !backBias)) return depthMessage("depth bias on one face only is unsupported", 0x205, *raster);
-        if (frontBias && backBias && (*frontScale != *backScale || *frontOffset != *backOffset)) return "AGC graphics: different front and back depth bias is unsupported";
+        if (frontFaces && backFaces && (frontBias != backBias || *frontScale != *backScale || *frontOffset != *backOffset)) return depthMessage("depth bias differing between front and back faces is unsupported", 0x205, *raster);
+        // PA_SU_POLY_OFFSET_DB_FMT_CNTL as radv_emit_depth_bias_state programs it for the bound format:
+        // POLY_OFFSET_NEG_NUM_DB_BITS -16 for Z_16, -23 with POLY_OFFSET_DB_IS_FLOAT_FMT for Z_32_FLOAT.
+        const auto expectedUnits = zFormat == 1 ? 0xf0u : 0x1e9u;
+        const auto units = optional(0x2de).value_or(expectedUnits);
+        if (units != expectedUnits) return depthMessage("depth bias in units other than the depth format is unsupported", 0x2de, units);
         const auto scale = std::bit_cast<float>(frontBias ? *frontScale : *backScale);
         const auto offset = std::bit_cast<float>(frontBias ? *frontOffset : *backOffset);
         const auto limit = std::bit_cast<float>(*clamp);
         if (!std::isfinite(scale) || !std::isfinite(offset) || !std::isfinite(limit)) return "AGC graphics: non-finite depth bias";
-        // radeonsi programs scale * 16 and units * 4 (Z_16) or * 1 (Z_32_FLOAT).
+        // The inverse of radv: the slope is programmed * 16 and the constant factor unscaled.
         state.depthBias = true;
         state.depthBiasSlope = scale / 16.0f;
-        state.depthBiasConstant = zFormat == 1 ? offset / 4.0f : offset;
+        state.depthBiasConstant = offset;
         state.depthBiasClamp = limit;
     }
     state.attached = true;
@@ -588,7 +592,7 @@ State DecodeState(const QueueState& queue) {
         DepthDecode depth;
         const auto reason = decodeDepth([&](std::uint32_t offset) { return std::optional<std::uint32_t>(read(cx, offset)); }, [&](std::uint32_t offset) {
             const auto it = find(cx, offset);
-            return it == cx.end() ? 0u : it->second;
+            return it == cx.end() ? std::nullopt : std::optional<std::uint32_t>(it->second);
         }, depth);
         if (!reason.empty()) throw std::runtime_error(reason);
         result.depthTarget = depth.target;
@@ -923,7 +927,7 @@ std::string DrawRejection(const QueueState& queue, bool indexed) {
             return value(cx, offset, out) ? std::optional<std::uint32_t>(out) : std::nullopt;
         }, [&](std::uint32_t offset) {
             const auto it = find(cx, offset);
-            return it == cx.end() ? 0u : it->second;
+            return it == cx.end() ? std::nullopt : std::optional<std::uint32_t>(it->second);
         }, depth);
         if (!reason.empty()) return reason;
     }

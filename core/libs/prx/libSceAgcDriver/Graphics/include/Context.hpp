@@ -63,6 +63,7 @@ struct DeviceFunctions {
     PFN_vkCmdSetViewport cmdSetViewport = nullptr;
     PFN_vkCmdSetScissor cmdSetScissor = nullptr;
     PFN_vkCmdSetDepthBounds cmdSetDepthBounds = nullptr;
+    PFN_vkCmdSetDepthBias cmdSetDepthBias = nullptr;
     PFN_vkCmdBindVertexBuffers cmdBindVertexBuffers = nullptr;
     PFN_vkCmdBindIndexBuffer cmdBindIndexBuffer = nullptr;
     PFN_vkCmdDraw cmdDraw = nullptr;
