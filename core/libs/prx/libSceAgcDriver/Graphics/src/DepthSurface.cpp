@@ -209,6 +209,11 @@ public:
         return target.stencilAddress != 0 && address < target.stencilAddress + stencilBytes() && target.stencilAddress < end;
     }
 
+    bool Overlaps(const DepthSurface& other) const {
+        if (Overlaps(other.target.address, other.depthBytes())) return true;
+        return other.target.stencilAddress != 0 && Overlaps(other.target.stencilAddress, other.stencilBytes());
+    }
+
     void NoteWritten() {
         depthWritten = GuestMemory::CollectWrites(target.address, static_cast<std::size_t>(depthBytes()));
         stencilWritten = target.stencilAddress != 0 ? GuestMemory::CollectWrites(target.stencilAddress, static_cast<std::size_t>(stencilBytes())) : 0;
@@ -436,22 +441,30 @@ VkImageView DepthSurfaceView(const Context& context, const DepthTarget& target) 
     std::lock_guard gpu(GuestMemory::GpuMutex());
     std::lock_guard lock(surfacesMutex());
     const bool cleared = target.htileAddress != 0 && clearedHtiles().erase(target.htileAddress) != 0;
+    DepthSurface* bound = nullptr;
     for (const auto& surface : surfaces()) {
-        if (surface->context.device != context.device || !sameSurface(surface->target, target)) continue;
-        surface->retired = false;
-        surface->clearDepth = target.clearDepth;
-        surface->clearStencil = target.clearStencil;
-        if (cleared) surface->pendingClear |= VK_IMAGE_ASPECT_DEPTH_BIT;
-        surface->ApplyFastClear();
-        surface->TakeWrites();
-        surface->NoteWritten();
-        return surface->view;
+        if (surface->context.device == context.device && sameSurface(surface->target, target)) {
+            bound = surface.get();
+            bound->retired = false;
+            bound->clearDepth = target.clearDepth;
+            bound->clearStencil = target.clearStencil;
+            if (cleared) bound->pendingClear |= VK_IMAGE_ASPECT_DEPTH_BIT;
+            bound->ApplyFastClear();
+            bound->TakeWrites();
+            break;
+        }
     }
-    surfaces().push_back(std::make_unique<DepthSurface>(context, target));
-    surfaces().back()->clearDepth = target.clearDepth;
-    surfaces().back()->clearStencil = target.clearStencil;
-    surfaces().back()->NoteWritten();
-    return surfaces().back()->view;
+    if (bound == nullptr) {
+        surfaces().push_back(std::make_unique<DepthSurface>(context, target));
+        bound = surfaces().back().get();
+        bound->clearDepth = target.clearDepth;
+        bound->clearStencil = target.clearStencil;
+    }
+    for (const auto& surface : surfaces()) {
+        if (surface.get() != bound && surface->context.device == context.device && surface->Overlaps(*bound)) surface->retired = true;
+    }
+    bound->NoteWritten();
+    return bound->view;
 }
 
 std::uint64_t HtileDepthClearAddress(std::span<const std::uint32_t> code, std::span<const std::uint32_t> userData, const std::array<std::uint32_t, 3>& numThreads) {
