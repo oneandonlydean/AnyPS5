@@ -9,8 +9,8 @@ bool LoopGuardTripped();
 
 class BdaResources {
 public:
-    explicit BdaResources(const Context& context);
-    BdaResources(const Context& context, const GuestBufferMemory& memory);
+    BdaResources(const Context& context, bool writes);
+    BdaResources(const Context& context, const GuestBufferMemory& memory, bool writes);
     VkDescriptorBufferInfo Table() const;
     VkDescriptorBufferInfo Fault() const;
     void CheckFault() const;
@@ -44,6 +44,7 @@ private:
     std::shared_ptr<Buffer> table;
     std::unique_ptr<Buffer> fault;
     std::size_t tableBytes = 0;
+    bool scansWrittenPages = true;
 };
 
 }

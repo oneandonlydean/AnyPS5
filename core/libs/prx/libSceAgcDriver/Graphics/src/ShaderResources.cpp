@@ -896,6 +896,7 @@ void ShaderResources::buildPrepare(std::span<const CompiledShader> shaders, cons
         std::set<std::uint32_t> occupied;
         for (const auto& shader : shaders) {
             Require(shader.program != nullptr, "missing compiled shader");
+            bdaWrites = bdaWrites || shader.program->bdaWrites;
             const VkShaderStageFlags flags = VulkanStage(shader.stage);
             std::uint64_t stageStorageBuffers = 0;
             std::uint64_t stageResources = 0;
@@ -1044,8 +1045,8 @@ void ShaderResources::buildComplete() {
         timing.bindingsMs += phase(BuildPhase::Images);
         guestMemory.UploadFinish(usesBda);
         timing.uploadMs += phase(BuildPhase::Upload);
-        if (usesBda) bda = std::make_unique<BdaResources>(context, guestMemory);
-        else if (usesFaultBuffer) bda = std::make_unique<BdaResources>(context);
+        if (usesBda) bda = std::make_unique<BdaResources>(context, guestMemory, bdaWrites);
+        else if (usesFaultBuffer) bda = std::make_unique<BdaResources>(context, bdaWrites);
         phase(BuildPhase::Bda);
         if (_set != VK_NULL_HANDLE) {
             // One update call for the whole set: the info arrays are sized up front so every write's

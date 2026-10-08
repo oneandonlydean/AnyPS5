@@ -355,6 +355,7 @@ CompiledVariant compileVariant(const RecompileRequest& request, IrProgram progra
     result.instanceOffsetShared = program.Info().instanceOffsetShared;
     result.vertexOffsetConflict = program.Info().vertexOffsetConflict;
     result.instanceOffsetConflict = program.Info().instanceOffsetConflict;
+    result.bdaWrites = program.Info().bdaWrites;
     for (const auto& output : program.Info().outputs) {
         if (output.kind == StageOutputKind::Parameter) result.parameterExports.push_back(output.location);
     }
