@@ -23,6 +23,7 @@ private:
 
     void Collect(IrValue* raw, std::uint32_t usePc);
     void PatchReads();
+    void MarkConditionalReads();
 
     IrProgram& _program;
     std::vector<IrValue*> _visiting;
