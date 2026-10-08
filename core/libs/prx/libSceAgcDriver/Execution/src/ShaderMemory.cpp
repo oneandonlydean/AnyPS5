@@ -201,6 +201,22 @@ bool ShaderMemory::read(void* context, std::uint64_t address, std::uint32_t* val
     return true;
 }
 
+bool ShaderMemory::readable(void* context, std::uint64_t address) {
+    auto& self = *static_cast<ShaderMemory*>(context);
+    if (address % sizeof(std::uint32_t) != 0 || address > std::numeric_limits<std::uint64_t>::max() - sizeof(std::uint32_t)) return false;
+    if (!self.initial.empty()) {
+        const auto next = self.initial.upper_bound(address);
+        if (next != self.initial.begin()) {
+            const auto previous = std::prev(next);
+            if (address - previous->first < previous->second.size()) return true;
+        }
+    }
+    auto& page = self.page(address & ~static_cast<std::uint64_t>(PageBytes - 1));
+    const auto index = static_cast<std::size_t>((address % PageBytes) / sizeof(std::uint32_t));
+    if (page.wordwise || page.valid.test(index)) return true;
+    return GuestMemory::Accessible(reinterpret_cast<const void*>(address), sizeof(std::uint32_t));
+}
+
 ShaderMemory::KnownValueCounts ShaderMemory::KnownValues() {
     auto& totals = CaptureTotals();
     return {totals.wordsKnown.load(std::memory_order_relaxed), totals.wordsKnownVerified.load(std::memory_order_relaxed), totals.wordsKnownMismatches.load(std::memory_order_relaxed)};
@@ -233,6 +249,7 @@ std::shared_ptr<const ShaderRecompiler::ResourceCapture> ShaderMemory::capture(c
     runtime.userContext = this;
     runtime.readMemory = &read;
     runtime.readSpecializationMemory = &read;
+    runtime.isReadable = &readable;
     auto capture = invocation != nullptr ? invocation->Capture(runtime) : handle != nullptr ? ShaderRecompiler::CaptureResources(request, runtime, *handle) : ShaderRecompiler::CaptureResources(request, runtime);
     if (profile) {
         totals.captureNanoseconds += NanosecondsSince(started);

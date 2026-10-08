@@ -118,6 +118,8 @@ bool EvaluateRuntimeSourcesImpl(const IrResourcePlan& program, std::span<const s
     }
     std::vector<std::uint32_t> flattened;
     if (evaluateFlat) {
+        evaluator.ReadUnmappedAsZero();
+        cleanEvaluator.ReadUnmappedAsZero();
         flattened.resize(program.srtReads.size());
         for (const auto& read : program.srtReads) {
             const bool clean = read.flatOffset < cleanFlatSlots.size() && cleanFlatSlots[read.flatOffset] != 0u;
