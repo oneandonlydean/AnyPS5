@@ -393,6 +393,7 @@ private:
     std::unique_ptr<BdaResources> bda;
     bool usesBda = false;
     bool usesFaultBuffer = false;
+    bool bdaWrites = false;
     VkDescriptorSetLayout _layout = VK_NULL_HANDLE;
     // Whether the layout is this object's own (no cache) and destroyed with it.
     bool ownsLayout = false;

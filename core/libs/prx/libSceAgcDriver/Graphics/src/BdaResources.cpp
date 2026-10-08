@@ -120,14 +120,15 @@ std::uint64_t hashRanges(const std::vector<ShaderRecompiler::BdaAbi::Range>& ran
 
 }
 
-BdaResources::BdaResources(const Context& context) {
+BdaResources::BdaResources(const Context& context, bool writes) : scansWrittenPages(writes) {
     static_assert(std::endian::native == std::endian::little);
     Require(ShaderRecompiler::BdaAbi::FaultBufferBytes <= context.limits.maxStorageBufferRange, "BDA fault buffer exceeds storage buffer range limit");
     fault = std::make_unique<Buffer>(context, ShaderRecompiler::BdaAbi::FaultBufferBytes, VK_BUFFER_USAGE_STORAGE_BUFFER_BIT);
-    std::memset(fault->Bytes().data(), 0, fault->Bytes().size());
+    const auto cleared = scansWrittenPages ? fault->Bytes().size() : ShaderRecompiler::BdaAbi::WrittenSlotsWord * sizeof(std::uint32_t);
+    std::memset(fault->Bytes().data(), 0, cleared);
 }
 
-BdaResources::BdaResources(const Context& context, const GuestBufferMemory& memory) : BdaResources(context) {
+BdaResources::BdaResources(const Context& context, const GuestBufferMemory& memory, bool writes) : BdaResources(context, writes) {
     const auto cached = memory.CachedAddressTable();
     std::vector<ShaderRecompiler::BdaAbi::Range> built;
     if (!cached.has_value()) built = memory.AddressRanges();
@@ -236,7 +237,7 @@ bool LoopGuardTripped() {
 }
 
 void BdaResources::CheckFault() const {
-    markWrittenPages();
+    if (scansWrittenPages) markWrittenPages();
     ShaderRecompiler::BdaAbi::Fault report{};
     std::memcpy(&report, fault->Bytes().data(), sizeof(report));
     if (report.state == ShaderRecompiler::BdaAbi::FaultState::Empty) {

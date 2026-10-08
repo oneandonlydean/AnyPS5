@@ -57,7 +57,7 @@ void requireSameResult(const RecompileResult& left, const RecompileResult& right
         require(a.location == b.location && a.components == b.components && a.resource.fields == b.resource.fields && a.fetchIndex == b.fetchIndex, prefix + "vertex attribute differs");
     }
     require(left.vertexOffsetSgpr == right.vertexOffsetSgpr && left.instanceOffsetSgpr == right.instanceOffsetSgpr, prefix + "offset SGPRs differ");
-    require(left.vertexOffsetShared == right.vertexOffsetShared && left.instanceOffsetShared == right.instanceOffsetShared && left.vertexOffsetConflict == right.vertexOffsetConflict && left.instanceOffsetConflict == right.instanceOffsetConflict, prefix + "offset flags differ");
+    require(left.vertexOffsetShared == right.vertexOffsetShared && left.instanceOffsetShared == right.instanceOffsetShared && left.vertexOffsetConflict == right.vertexOffsetConflict && left.instanceOffsetConflict == right.instanceOffsetConflict && left.bdaWrites == right.bdaWrites, prefix + "offset or BDA store flags differ");
     require(left.parameterExports == right.parameterExports, prefix + "parameter exports differ");
     require(left.fragmentParameters.size() == right.fragmentParameters.size(), prefix + "fragment parameter count differs");
     for (std::size_t i = 0; i < left.fragmentParameters.size(); ++i) {
@@ -122,6 +122,7 @@ RecompileResult sampleResult() {
     result.instanceOffsetShared = false;
     result.vertexOffsetConflict = false;
     result.instanceOffsetConflict = true;
+    result.bdaWrites = true;
     result.parameterExports = {0, 3, 7};
     result.fragmentParameters = {{0, 1, true, false}, {2, 3, false, true}};
     result.variantId = 99;

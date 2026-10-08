@@ -63,7 +63,7 @@ std::filesystem::path ShaderCacheDirectory() {
 namespace ShaderRecompiler::ShaderDiskCache {
 
 #if defined(__linux__) && defined(__x86_64__) && defined(__GLIBCXX__)
-static_assert(sizeof(RecompileResult) == 176, "RecompileResult changed: update EncodeResult and DecodeResult");
+static_assert(sizeof(RecompileResult) == 184, "RecompileResult changed: update EncodeResult and DecodeResult");
 static_assert(sizeof(DescriptorBinding) == 448, "DescriptorBinding changed: update the binding encoder");
 static_assert(sizeof(VertexAttribute) == 28, "VertexAttribute changed: update the attribute encoder");
 static_assert(sizeof(FragmentParameter) == 12, "FragmentParameter changed: update the parameter encoder");
@@ -299,6 +299,7 @@ void encodeResult(Writer& writer, const RecompileResult& result) {
     writer.Value(result.instanceOffsetShared);
     writer.Value(result.vertexOffsetConflict);
     writer.Value(result.instanceOffsetConflict);
+    writer.Value(result.bdaWrites);
     writer.Value(result.hostSubgroupSize);
     writer.Values(std::span<const std::uint32_t>(result.parameterExports));
     writer.List(result.fragmentParameters, [](Writer& out, const FragmentParameter& parameter) {
@@ -333,6 +334,7 @@ void decodeResult(Reader& reader, RecompileResult& result) {
     reader.Value(result.instanceOffsetShared);
     reader.Value(result.vertexOffsetConflict);
     reader.Value(result.instanceOffsetConflict);
+    reader.Value(result.bdaWrites);
     reader.Value(result.hostSubgroupSize);
     reader.Values(result.parameterExports);
     reader.List(result.fragmentParameters, 10, [](Reader& in, FragmentParameter& parameter) {
