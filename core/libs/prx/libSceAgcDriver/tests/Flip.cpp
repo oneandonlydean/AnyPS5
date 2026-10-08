@@ -198,10 +198,71 @@ void testReset(bool compute) {
 
 }
 
+void testThrottle() {
+    auto output = std::make_shared<Output>();
+    AgcDriverRegisterVideoOutput_nid_postfix(7, output);
+    {
+        std::lock_guard lock(output->state->mutex);
+        output->state->block = true;
+        output->state->entered = false;
+    }
+    FlipRelease release(output->state);
+    submitFlip();
+    {
+        std::unique_lock lock(output->state->mutex);
+        check(output->state->changed.wait_for(lock, std::chrono::seconds(5), [&] { return output->state->entered; }), "throttle: the worker did not reach the first flip");
+    }
+    submitFlip();
+    auto third = std::async(std::launch::async, [] { submitFlip(); });
+    check(third.wait_for(std::chrono::milliseconds(200)) == std::future_status::timeout, "throttle: a submission ran ahead of a flip the worker has not started");
+    release.Release();
+    check(third.wait_for(std::chrono::seconds(5)) == std::future_status::ready, "throttle: a submission stayed blocked after the queued flip started");
+    third.get();
+    AgcDriverWaitIdle_nid_postfix();
+    check(output->state->ready == 3, "throttle: flips were lost");
+    alignas(4) static std::uint32_t label = 0;
+    const auto address = reinterpret_cast<std::uintptr_t>(&label);
+    std::array<std::uint32_t, 7> wait{0xc0053c00, 0x13, static_cast<std::uint32_t>(address), static_cast<std::uint32_t>(address >> 32u), 1, 0xffffffffu, 0x19};
+    Packet waitPacket{wait.data(), static_cast<std::uint32_t>(wait.size()), 0, {}};
+    check(sceAgcDriverSubmitDcb(&waitPacket) == 0, "throttle: the wait submission failed");
+    submitFlip();
+    auto behind = std::async(std::launch::async, [] { submitFlip(); });
+    check(behind.wait_for(std::chrono::milliseconds(500)) == std::future_status::ready, "throttle: a submission waited for a worker that waits for a later store");
+    behind.get();
+    std::atomic_ref<std::uint32_t>(label).store(1, std::memory_order_release);
+    AgcDriverWaitIdle_nid_postfix();
+    check(output->state->ready == 5, "throttle: flips behind the wait were lost");
+    AgcDriverUnregisterVideoOutput_nid_postfix(7, output);
+}
+
+void testThrottleAcrossQueues() {
+    auto output = std::make_shared<Output>();
+    AgcDriverRegisterVideoOutput_nid_postfix(7, output);
+    alignas(4) static std::uint32_t gate = 0;
+    alignas(4) static std::uint32_t relay = 0;
+    const auto gateAddress = reinterpret_cast<std::uintptr_t>(&gate);
+    const auto relayAddress = reinterpret_cast<std::uintptr_t>(&relay);
+    std::array<std::uint32_t, 12> producer{0xc0053c00, 0x13, static_cast<std::uint32_t>(gateAddress), static_cast<std::uint32_t>(gateAddress >> 32u), 1, 0xffffffffu, 0x19, 0xc0033700, 0x00100200, static_cast<std::uint32_t>(relayAddress), static_cast<std::uint32_t>(relayAddress >> 32u), 1};
+    Packet producerPacket{producer.data(), static_cast<std::uint32_t>(producer.size()), 0, {}};
+    check(sceAgcDriverSubmitAcb(0x20, &producerPacket) == 0, "throttle across queues: the compute submission failed");
+    std::array<std::uint32_t, 7> consumer{0xc0053c00, 0x13, static_cast<std::uint32_t>(relayAddress), static_cast<std::uint32_t>(relayAddress >> 32u), 1, 0xffffffffu, 0x19};
+    Packet consumerPacket{consumer.data(), static_cast<std::uint32_t>(consumer.size()), 0, {}};
+    check(sceAgcDriverSubmitDcb(&consumerPacket) == 0, "throttle across queues: the wait submission failed");
+    submitFlip();
+    auto behind = std::async(std::launch::async, [] { submitFlip(); });
+    const auto status = behind.wait_for(std::chrono::milliseconds(500));
+    std::atomic_ref<std::uint32_t>(gate).store(1, std::memory_order_release);
+    check(status == std::future_status::ready, "throttle across queues: a submission waited for a worker whose wait only a later store releases");
+    behind.get();
+    AgcDriverWaitIdle_nid_postfix();
+    check(std::atomic_ref<std::uint32_t>(relay).load(std::memory_order_acquire) == 1 && output->state->ready == 2, "throttle across queues: work behind the waits was lost");
+    AgcDriverUnregisterVideoOutput_nid_postfix(7, output);
+}
+
 int main(int argc, char** argv) {
     try {
         if (argc == 2) testReset(std::string(argv[1]) == "compute");
-        else { testFlipAndBoundary(); testFailure(); }
+        else { testFlipAndBoundary(); testThrottle(); testThrottleAcrossQueues(); testFailure(); }
         const auto shutdown = expectFailure([] { LibcRunShutdown_nid_postfix(); });
         check(shutdown.find(argc == 2 ? (std::string(argv[1]) == "compute" ? "registered" : "required shader register") : "intentional flip failure") != std::string::npos, "shutdown lost worker failure");
         std::puts("AGC flip and suspend tests passed");
