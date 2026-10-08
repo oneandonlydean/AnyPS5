@@ -6,6 +6,7 @@
 
 #include <cstdint>
 #include <span>
+#include <unordered_set>
 #include <vector>
 
 namespace ShaderRecompiler::Detail {
@@ -72,6 +73,7 @@ public:
 
     bool Evaluate(IrValue* value, std::uint32_t& result);
     bool EvaluateWide(IrValue* raw, std::uint64_t& result);
+    void ReadUnmappedAsZero() { _unmappedAsZero = true; }
 
 private:
     static float Float32(std::uint64_t bits);
@@ -82,6 +84,7 @@ private:
     bool EvaluateExtract(IrValue& inst, std::uint64_t& result);
     bool EvaluateRawRead(IrValue& inst, std::uint64_t& result);
     bool EvaluateInst(IrValue& inst, std::uint64_t& result);
+    bool IsConditionalSlotRead(const IrValue& inst);
 
     const IrResourcePlan& _program;
     const SrtRuntime& _runtime;
@@ -90,6 +93,9 @@ private:
     IrValue* _activeMask = nullptr;
     EvaluatedValues _cache;
     std::vector<IrValue*> _visiting;
+    bool _unmappedAsZero = false;
+    bool _conditionalReadsBuilt = false;
+    std::unordered_set<const IrValue*> _conditionalReads;
 };
 
 }

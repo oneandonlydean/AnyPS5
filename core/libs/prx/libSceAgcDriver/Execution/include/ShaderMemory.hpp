@@ -82,6 +82,7 @@ private:
     };
 
     static bool read(void* context, std::uint64_t address, std::uint32_t* value);
+    static bool readable(void* context, std::uint64_t address);
     Page& page(std::uint64_t base);
 
     // Regions given at construction (the registered shader's code and header), referenced as given:
