@@ -33,6 +33,7 @@ void Driver::stop() {
             worker.pending.clear();
             worker.unfinishedWrites.clear();
             worker.queued.store(0, std::memory_order_release);
+            worker.queuedFlips = 0;
         }
     }
     changed.notify_all();
@@ -90,6 +91,7 @@ void Driver::ReportFailure(std::exception_ptr error) {
             worker.pending.clear();
             worker.unfinishedWrites.clear();
             worker.queued.store(0, std::memory_order_release);
+            worker.queuedFlips = 0;
         }
     }
     changed.notify_all();
