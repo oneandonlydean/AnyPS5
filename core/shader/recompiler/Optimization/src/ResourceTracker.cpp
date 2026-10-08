@@ -14,6 +14,7 @@
 #include <map>
 #include <span>
 #include <string>
+#include <unordered_map>
 #include <utility>
 #include <vector>
 
@@ -742,25 +743,16 @@ private:
         inst.Parent()->RemoveInstruction(&inst);
     }
 
-    static bool CarriesControlValue(IrValue* value, std::uint32_t depth) {
+    static bool HoldsProgramCounter(IrValue* value, std::uint32_t depth) {
         value = value->Resolve();
-        if (value->HasImmediate() || value->IsPhi()) {
-            return false;
+        if (value->Opcode() == IrOpcode::GetShaderBase) {
+            return true;
         }
-        switch (value->Opcode()) {
-            case IrOpcode::GetShaderBase:
-            case IrOpcode::GetExec:
-            case IrOpcode::GetExecLo:
-            case IrOpcode::GetExecHi:
-            case IrOpcode::Ballot:
-            case IrOpcode::UndefU32: return true;
-            default: break;
-        }
-        if (depth == 0u || (!Detail::IsRuntimeUniformOp(value->Opcode()) && value->Opcode() != IrOpcode::CompositeExtractU32x4)) {
+        if (value->HasImmediate() || depth == 0u || !Detail::IsRuntimeUniformOp(value->Opcode())) {
             return false;
         }
         for (std::size_t index = 0; index < value->ArgumentCount(); index++) {
-            if (CarriesControlValue(value->Argument(index), depth - 1u)) {
+            if (HoldsProgramCounter(value->Argument(index), depth - 1u)) {
                 return true;
             }
         }
@@ -768,34 +760,34 @@ private:
     }
 
     struct DescriptorWeb {
-        static constexpr std::size_t maxStates = 4096u;
+        static constexpr std::size_t maxStates = 512u;
         static constexpr std::size_t maxArms = 64u;
         std::vector<std::vector<IrValue*>> arms;
         std::map<std::vector<IrValue*>, IrValue*> selectors;
         std::vector<std::pair<IrBlock*, IrValue*>> phis;
+        std::unordered_map<IrValue*, IrValue*> resolved;
     };
 
     IrValue* WebSelector(std::vector<IrValue*> tuple, DescriptorWeb& web, IrValue& position) {
         for (IrValue*& value : tuple) {
             value = value->Resolve();
-            while (value->IsPhi()) {
-                IrValue* invariant = ResolveInvariantPhi(m_program.Resources(), value);
-                if (invariant == nullptr || invariant == value) {
-                    break;
-                }
-                value = invariant->Resolve();
+            if (!value->IsPhi()) {
+                continue;
             }
+            const auto [entry, inserted] = web.resolved.try_emplace(value, value);
+            if (inserted) {
+                IrValue* invariant = ResolveInvariantPhi(m_program.Resources(), value);
+                entry->second = invariant == nullptr ? value : invariant->Resolve();
+            }
+            value = entry->second;
         }
         if (const auto known = web.selectors.find(tuple); known != web.selectors.end()) {
             return known->second;
         }
         const auto phi = std::ranges::find_if(tuple, [](const IrValue* value) { return value->IsPhi(); });
         if (phi == tuple.end()) {
-            if (std::ranges::any_of(tuple, [](IrValue* value) { return CarriesControlValue(value, phiSearchDepth); })) {
-                return &m_builder.Constant(0u);
-            }
             for (IrValue* value : tuple) {
-                if (Rematerialize(value, position, false, phiSearchDepth) == nullptr) {
+                if (HoldsProgramCounter(value, phiSearchDepth) || Rematerialize(value, position, false, phiSearchDepth) == nullptr) {
                     return nullptr;
                 }
             }
