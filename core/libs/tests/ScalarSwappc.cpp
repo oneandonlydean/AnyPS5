@@ -125,6 +125,38 @@ static void CheckFetchCallAtEntry() {
     Require(cfg.fetchCallProgramCounter == 0x04u);
 }
 
+static void CheckDataDependentCall() {
+    const auto pointer = Program({
+        Sop1(0x00u, 14u, 0x03u, 4u),
+        Sop1(0x04u, 15u, 0x03u, 5u),
+        Sop1(0x08u, 16u, 0x21u, 14u),
+        Sopp(0x0cu, 0x01u),
+    });
+    Require(GraphBuilder{}.HasDataDependentCall(pointer));
+    ExpectThrow("computed/data-dependent s_swappc_b64", [&] { Build(pointer); });
+    const auto local = Program({
+        Sop1(0x00u, 4u, 0x1fu, 0u),
+        Sop2Literal(0x04u, 4u, 0x00u, 4u, 0x18u),
+        Sop2Literal(0x0cu, 5u, 0x04u, 5u, 0u),
+        Sop1(0x14u, 8u, 0x21u, 4u),
+        Sopp(0x18u, 0x01u),
+        Sopp(0x1cu, 0x00u),
+        Sop1(0x20u, 0u, 0x20u, 8u),
+    });
+    Require(!GraphBuilder{}.HasDataDependentCall(local));
+    SwappcInfo info;
+    info.fetchCallAllowed = true;
+    info.userDataBaseRegister = 16u;
+    info.userDataCount = 8u;
+    const auto fetch = Program({
+        Sopp(0x00u, 0x00u),
+        Sop1(0x04u, 2u, 0x21u, 16u),
+        Sopp(0x08u, 0x01u),
+    });
+    Require(!GraphBuilder{}.HasDataDependentCall(fetch, &info));
+    Require(GraphBuilder{}.HasDataDependentCall(fetch));
+}
+
 static void CheckThrows() {
     ExpectThrow("computed/data-dependent s_swappc_b64", [] {
         Build(Program({
@@ -219,6 +251,7 @@ int main() {
         CheckLinkModelsNextInstructionAddress();
         CheckStaticCallRegion();
         CheckFetchCallAtEntry();
+        CheckDataDependentCall();
         CheckThrows();
     } catch (const std::exception& error) {
         std::fprintf(stderr, "scalar swappc regression: %s\n", error.what());
