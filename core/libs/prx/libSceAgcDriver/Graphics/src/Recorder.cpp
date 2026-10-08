@@ -2219,12 +2219,17 @@ void Recorder::eraseDrawSnapshot(std::map<DrawSnapshotKey, DrawSnapshot>::iterat
     drawSnapshots.erase(entry);
 }
 
-std::shared_ptr<Buffer> Recorder::ReusableDrawSnapshot(std::uint64_t address, std::size_t bytes, SnapshotUse use, std::uint32_t* derived) {
+std::shared_ptr<Buffer> Recorder::ReusableDrawSnapshot(std::uint64_t address, std::size_t bytes, SnapshotUse use, std::uint32_t* derived, std::uint64_t generation) {
     auto found = use == SnapshotUse::Vertex ? drawSnapshots.lower_bound({address, use, bytes}) : drawSnapshots.find({address, use, bytes});
     if (found == drawSnapshots.end() || std::get<0>(found->first) != address || std::get<1>(found->first) != use) return {};
-    if (found->second.registryGeneration != GuestAllocations::GuestAllocationsGeneration_nid_postfix() || !GuestMemory::UnchangedSince(address, bytes, found->second.generation)) {
-        eraseDrawSnapshot(found);
-        return {};
+    const bool sameRegistry = found->second.registryGeneration == GuestAllocations::GuestAllocationsGeneration_nid_postfix();
+    if (!sameRegistry || !GuestMemory::UnchangedSince(address, bytes, found->second.generation)) {
+        const auto held = found->second.buffer->Bytes();
+        if (!sameRegistry || generation == 0 || use != SnapshotUse::Storage || held.size() != bytes || std::memcmp(held.data(), reinterpret_cast<const void*>(address), bytes) != 0) {
+            eraseDrawSnapshot(found);
+            return {};
+        }
+        found->second.generation = generation;
     }
     auto& recency = drawSnapshotPools[SnapshotPool(use)].recency;
     recency.splice(recency.end(), recency, found->second.recent);

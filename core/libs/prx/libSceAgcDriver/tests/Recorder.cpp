@@ -1214,6 +1214,14 @@ void drawSnapshotReuseTests(const Device& device, Recorder& recorder) {
         AgcDriver::GuestMemory::MarkWritten(element, 4);
         const auto afterStore = snapshot(std::byte{0x33});
         Require(afterStore != afterCpu, "a draw snapshot outlived a driver store to its range");
+        std::memset(reinterpret_cast<void*>(element), 0x33, elementBytes);
+        Require(snapshot(std::byte{0x33}) == afterStore, "a CPU store of the same bytes made the draw input copy again");
+        AgcDriver::GuestMemory::MarkWritten(element, 4);
+        Require(snapshot(std::byte{0x33}) == afterStore, "a driver store of the same bytes made the draw input copy again");
+        reinterpret_cast<std::uint8_t*>(element)[elementBytes - 1] = 0x34;
+        const auto tail = resources.PrepareDrawBindings(snapshotRecorder);
+        Require(tail != nullptr && tail->snapshots.size() == 1 && tail->snapshots[0].buffer != afterStore && tail->snapshots[0].buffer->Bytes()[elementBytes - 1] == std::byte{0x34}, "a draw snapshot outlived a store that changed its last byte");
+        std::memset(reinterpret_cast<void*>(element), 0x33, elementBytes);
         {
             GuestAllocations::Mutation mutation;
         }
