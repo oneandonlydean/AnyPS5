@@ -70,6 +70,7 @@ struct ShaderSnapshot {
 std::shared_ptr<const ShaderSnapshot> ReadRawComputeShader(std::uint64_t address);
 
 std::uint64_t NullPixelProgramAddress();
+RegisteredShaderState NullPixelRegisteredState();
 void PublishRegisteredShader(std::shared_ptr<ShaderRegistry>& registry, const std::shared_ptr<const ShaderSnapshot>& snapshot);
 
 void ResolvePreparedGraphics(const ShaderSnapshot& front, const std::shared_ptr<const ShaderSnapshot>& fragment, std::uint32_t primitiveType, const ShaderRecompiler::SpirvTarget& target);
