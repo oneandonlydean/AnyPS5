@@ -275,6 +275,50 @@ void writeSettledTests(const Device& device, Recorder& recorder) {
     Require(recorder.Idle() && !recorder.PendingWriteOverlaps(0x50000, 0x100), "writes outlived their batches");
 }
 
+void writeSnapshotTests(const Device& device, Recorder& recorder) {
+    using Ranges = std::vector<std::pair<std::uint64_t, std::uint64_t>>;
+    recorder.Sync();
+    Ranges noted;
+    const auto expect = [&](const char* message) {
+        auto sorted = noted;
+        std::sort(sorted.begin(), sorted.end());
+        Ranges merged;
+        for (const auto& range : sorted) {
+            if (!merged.empty() && range.first <= merged.back().second) merged.back().second = std::max(merged.back().second, range.second);
+            else merged.push_back(range);
+        }
+        const auto snapshot = Recorder::PendingWriteSnapshot();
+        Require(snapshot != nullptr && *snapshot == merged, message);
+    };
+    const auto note = [&](std::uint64_t address, std::size_t bytes) {
+        recorder.NotePendingWrite(address, bytes);
+        noted.emplace_back(address, address + bytes);
+    };
+    note(0x90000, 0x100);
+    expect("one noted range is not the snapshot");
+    note(0x80000, 0x10);
+    note(0xa0000, 0x10);
+    expect("disjoint ranges are not merged in order");
+    note(0x90040, 0x10);
+    expect("a nested range changed the snapshot");
+    note(0x90100, 0x20);
+    expect("an adjacent range is not joined");
+    note(0x8fff0, 0x20);
+    note(0x9ffff, 0x2);
+    expect("overlapping ranges are not joined");
+    recorder.Submit();
+    note(0x70000, 0x8);
+    expect("a range noted after a submit lost the in-flight batch's ranges");
+    const Ranges several{{0xb0010, 0xb0020}, {0xb0000, 0xb0011}, {0x60000, 0x60004}};
+    recorder.NotePendingWrites(several);
+    noted.insert(noted.end(), several.begin(), several.end());
+    expect("several ranges noted in one call are not all merged");
+    recorder.Sync();
+    device.WaitQueue();
+    const auto empty = Recorder::PendingWriteSnapshot();
+    Require(empty == nullptr || empty->empty(), "finished batches left ranges in the snapshot");
+}
+
 // Completion counting: a write-back completion (OnComplete) is pending until its batch finished;
 // a completion label the GPU also stored (AfterCompletions storedOnGpu) is pending only once a CPU
 // write-back overlapped it (NoteWrittenBack, once per label), one the GPU has no view of from its
@@ -2888,6 +2932,7 @@ int main(int argc, char** argv) {
         }
         readTrackingTests(device, recorder);
         writeSettledTests(device, recorder);
+        writeSnapshotTests(device, recorder);
         completionCountTests(device, recorder);
         afterRecordedWorkTests(device, recorder);
         batchStampTests(recorder);
