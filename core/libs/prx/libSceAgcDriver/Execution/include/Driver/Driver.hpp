@@ -82,6 +82,7 @@ private:
     bool queue0Before(std::uint64_t received) const;
     bool orderReleased(std::uint32_t queue, std::uint64_t received) const;
     void noteWaitBlocked(std::uint32_t queue, std::uint64_t awaited, bool blocked);
+    bool awaitsTitle(const QueueWorker& worker) const;
     void reportPresents(double waitedMs, std::size_t inFlight);
     static bool stampValidate();
     static bool dataHits();
@@ -300,6 +301,7 @@ private:
     std::uint64_t queue0Executing = 0;
     std::atomic<std::uint32_t> orderHolders{0};
     std::atomic<std::uint32_t> runningWorkers{0};
+    std::uint32_t throttledSubmits = 0;
     std::atomic<std::uint64_t> queue0Awaited{0};
 
     std::atomic<std::uint64_t> evidenceReads{0};

@@ -133,6 +133,10 @@ void Driver::run(std::uint32_t id) noexcept {
                 if (APS5_ENABLE_TIMING_LOG) submission.orderedAt = std::chrono::steady_clock::now();
                 timing.Mark("dequeue_order");
                 worker.queued.fetch_sub(1, std::memory_order_acq_rel);
+                if (!submission.flips.empty()) {
+                    --worker.queuedFlips;
+                    if (throttledSubmits != 0) changed.notify_all();
+                }
                 if (profile && submission.enqueuedAt != std::chrono::steady_clock::time_point{}) costs.dequeueNs += static_cast<std::uint64_t>(std::chrono::duration_cast<std::chrono::nanoseconds>(std::chrono::steady_clock::now() - submission.enqueuedAt).count());
             }
             {
@@ -155,7 +159,7 @@ void Driver::run(std::uint32_t id) noexcept {
                 forgetUnfinishedWrites(workers.at(id), submission);
                 if (id == 0) queue0Executing = 0;
 
-                notify = idleWaiters != 0 || orderHolders.load(std::memory_order_acquire) != 0;
+                notify = idleWaiters != 0 || throttledSubmits != 0 || orderHolders.load(std::memory_order_acquire) != 0;
             }
             if (notify) changed.notify_all();
             else ++costs.notifiesSkipped;
