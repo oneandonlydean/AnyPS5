@@ -1313,6 +1313,14 @@ std::uint64_t TrackerGeneration() {
     return tracker.generation;
 }
 
+std::uint64_t WatchedGeneration(std::uint64_t address, std::size_t bytes) {
+    auto& tracker = Tracker();
+    const auto lock = lockTracker(tracker);
+    tracker.initialize();
+    if (!tracker.watched || bytes == 0 || bytes > std::numeric_limits<std::uint64_t>::max() - address || !tracker.covers(address, bytes)) return 0;
+    return tracker.generation;
+}
+
 bool UnchangedSinceCollected(std::uint64_t address, std::size_t bytes, std::uint64_t generation) {
     if (CollectWritesUncached(address, bytes) == 0) return false;
     auto& tracker = Tracker();
