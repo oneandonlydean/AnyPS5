@@ -408,6 +408,7 @@ std::shared_ptr<Texture> DepthSurfaceTexture(const Context& context, std::span<c
         return surface->context.device == context.device && (surface->target.address == resource.baseAddress || (surface->target.stencilAddress != 0 && surface->target.stencilAddress == resource.baseAddress));
     });
     if (found == list.rend()) return nullptr;
+    if (resource.width != (*found)->target.extent.width || resource.height != (*found)->target.extent.height) return nullptr;
     if (const auto writer = (*found)->writer.lock(); writer != nullptr && (*found)->target.address == resource.baseAddress && writer->StorageFormat() == ResolveTextureFormat(resource.format) && ResolveTextureFormat(resource.format) != VK_FORMAT_R32_SFLOAT && ResolveTextureFormat(resource.format) != VK_FORMAT_R16_UNORM) return nullptr;
     (*found)->ApplyFastClear();
     (*found)->TakeWrites();
@@ -452,6 +453,7 @@ void SeedStorageFromDepth(const Context& context, const std::shared_ptr<StorageT
     const auto found = std::find_if(list.rbegin(), list.rend(), [&](const auto& surface) { return surface->context.device == context.device && surface->target.address == descriptor.baseAddress; });
     if (found == list.rend()) return;
     const auto base = (*found)->target;
+    if (descriptor.width != base.extent.width || descriptor.height != base.extent.height) return;
     const bool d16 = base.format == VK_FORMAT_D16_UNORM || base.format == VK_FORMAT_D16_UNORM_S8_UINT;
     const auto layers = descriptor.dimension == TextureDimension::k2DArray ? descriptor.depthOrLastArray + 1u : 1u;
     for (std::uint32_t layer = 0; layer < layers; ++layer) {
