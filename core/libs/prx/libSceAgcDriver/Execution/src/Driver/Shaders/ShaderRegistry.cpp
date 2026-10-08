@@ -572,6 +572,19 @@ std::uint64_t NullPixelProgramAddress() {
     return reinterpret_cast<std::uintptr_t>(NullPixelCode);
 }
 
+RegisteredShaderState NullPixelRegisteredState() {
+    ShaderSnapshot null{NullPixelProgramAddress(), reinterpret_cast<std::uintptr_t>(&NullPixelShader), NullPixelShader.type, {}, {}};
+    null.header.resize(sizeof(Shader));
+    std::memcpy(null.header.data(), &NullPixelShader, sizeof(Shader));
+    auto state = DecodeRegisteredState(null);
+    state.shader.insert_or_assign(0x008u, static_cast<std::uint32_t>(null.codeAddress >> 8u));
+    state.shader.insert_or_assign(0x009u, static_cast<std::uint32_t>(null.codeAddress >> 40u));
+    state.shader.insert_or_assign(0x00bu, 0u);
+    state.context.insert_or_assign(0x1b3u, 0x2u);
+    state.context.insert_or_assign(0x1b4u, 0x2u);
+    return state;
+}
+
 void Driver::ResolveGraphicsAbi(const Shader* vertex, const Shader* pixel, std::uint32_t primitiveType) {
     PerformanceContext timingContext(FrameTiming::Preparation());
     PerformanceTimer timing("Shader.ResolveGraphicsAbi");
@@ -734,13 +747,7 @@ void Driver::RegisterShader(const Shader* shader) {
         null.code.assign(std::begin(NullPixelCode), std::end(NullPixelCode));
         null.header.resize(sizeof(Shader));
         std::memcpy(null.header.data(), &NullPixelShader, sizeof(Shader));
-        auto nullRegisteredState = DecodeRegisteredState(null);
-        nullRegisteredState.shader.emplace(0x008u, static_cast<std::uint32_t>(null.codeAddress >> 8u));
-        nullRegisteredState.shader.emplace(0x009u, static_cast<std::uint32_t>(null.codeAddress >> 40u));
-        nullRegisteredState.shader.emplace(0x00bu, 0u);
-        nullRegisteredState.context.emplace(0x1b3u, 0x2u);
-        nullRegisteredState.context.emplace(0x1b4u, 0x2u);
-        null.registeredState = std::make_shared<const RegisteredShaderState>(std::move(nullRegisteredState));
+        null.registeredState = std::make_shared<const RegisteredShaderState>(NullPixelRegisteredState());
         QueueState nullState{};
         nullState.shader = null.registeredState->shader;
         nullState.context = null.registeredState->context;
