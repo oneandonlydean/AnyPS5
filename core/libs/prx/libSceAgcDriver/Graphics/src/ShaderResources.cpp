@@ -22,6 +22,8 @@
 #include "RdnaDecoder/include/RdnaDecoder/RdnaDescriptorFormat.hpp"
 #include <cstring>
 #include <limits>
+#include <type_traits>
+#include <utility>
 #include <list>
 #include <map>
 #include <optional>
@@ -85,10 +87,38 @@ TextureKey MakeTextureKey(VkDevice device, std::span<const std::uint32_t> words,
     return key;
 }
 
+template<typename T>
+struct DefaultInitAllocator : std::allocator<T> {
+    using value_type = T;
+    template<typename U>
+    struct rebind {
+        using other = DefaultInitAllocator<U>;
+    };
+    DefaultInitAllocator() noexcept = default;
+    template<typename U>
+    DefaultInitAllocator(const DefaultInitAllocator<U>&) noexcept {}
+    template<typename U>
+    void construct(U* pointer) noexcept(std::is_nothrow_default_constructible_v<U>) {
+        ::new (static_cast<void*>(pointer)) U;
+    }
+    template<typename U, typename... TArgs>
+    void construct(U* pointer, TArgs&&... args) {
+        ::new (static_cast<void*>(pointer)) U(std::forward<TArgs>(args)...);
+    }
+};
+
+using SnapshotBytes = std::vector<std::byte, DefaultInitAllocator<std::byte>>;
+
+SnapshotBytes MakeSnapshotBytes(std::size_t size, DccKeys keys) {
+    SnapshotBytes bytes(size);
+    if (keys != DccKeys::Uncompressed && size != 0) std::memset(bytes.data(), 0, size);
+    return bytes;
+}
+
 struct CachedTexture {
     TextureKey key;
     std::uint64_t address;
-    std::vector<std::byte> bytes;
+    SnapshotBytes bytes;
     std::shared_ptr<Texture> texture;
     // A fast-cleared surface is cached as its clear texels; it stays valid while the keys are unchanged.
     DccKeys keys = DccKeys::Uncompressed;
@@ -420,7 +450,7 @@ std::shared_ptr<Texture> cachedTexture(const Context& context, std::span<const s
         }
         eraseTexture(cache, it);
     }
-    CachedTexture entry{key, address, std::vector<std::byte>(source != nullptr ? 0u : bytes), nullptr, *keys, generation};
+    CachedTexture entry{key, address, MakeSnapshotBytes(source != nullptr ? 0u : bytes, *keys), nullptr, *keys, generation};
     entry.accounted = guestBytes;
     if (source != nullptr) {
         entry.source = source;
