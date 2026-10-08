@@ -654,8 +654,7 @@ std::uint32_t EmitFPMedTri32(SpirvEmitterState& state, std::uint32_t arg0, std::
 }
 
 std::uint32_t EmitFPRecip32(SpirvEmitterState& state, std::uint32_t arg0) {
-    const auto source = EmitFlushF32DenormToSignedZero(state, arg0);
-    return Binary(state, spv::OpFDiv, TypeF32(state), ConstantF32(state, 0x3f800000u), source);
+    return Binary(state, spv::OpFDiv, TypeF32(state), ConstantF32(state, 0x3f800000u), arg0);
 }
 
 std::uint32_t EmitFPRecipIFlag32(SpirvEmitterState& state, std::uint32_t arg0) {
@@ -663,29 +662,29 @@ std::uint32_t EmitFPRecipIFlag32(SpirvEmitterState& state, std::uint32_t arg0) {
 }
 
 std::uint32_t EmitFPRecipSqrt32(SpirvEmitterState& state, std::uint32_t arg0) {
-    return EmitExt(state, TypeF32(state), GLSLstd450InverseSqrt, {EmitFlushF32DenormToSignedZero(state, arg0)});
+    return EmitExt(state, TypeF32(state), GLSLstd450InverseSqrt, {arg0});
 }
 
 std::uint32_t EmitFPSqrt(SpirvEmitterState& state, std::uint32_t arg0) {
-    return EmitExt(state, TypeF32(state), GLSLstd450Sqrt, {EmitFlushF32DenormToSignedZero(state, arg0)});
+    return EmitExt(state, TypeF32(state), GLSLstd450Sqrt, {arg0});
 }
 
 std::uint32_t EmitFPExp2(SpirvEmitterState& state, std::uint32_t arg0) {
-    return EmitExt(state, TypeF32(state), GLSLstd450Exp2, {EmitFlushF32DenormToSignedZero(state, arg0)});
+    return EmitExt(state, TypeF32(state), GLSLstd450Exp2, {arg0});
 }
 
 std::uint32_t EmitFPLog2(SpirvEmitterState& state, std::uint32_t arg0) {
-    return EmitExt(state, TypeF32(state), GLSLstd450Log2, {EmitFlushF32DenormToSignedZero(state, arg0)});
+    return EmitExt(state, TypeF32(state), GLSLstd450Log2, {arg0});
 }
 
 std::uint32_t EmitFPSin(SpirvEmitterState& state, std::uint32_t arg0) {
-    const auto cycle = EmitTrigCycleF32(state, arg0, true);
+    const auto cycle = EmitExt(state, TypeF32(state), GLSLstd450Fract, {arg0});
     const auto source = Binary(state, spv::OpFMul, TypeF32(state), cycle, ConstantF32(state, 0x40c90fdbu));
     return EmitExt(state, TypeF32(state), GLSLstd450Sin, {source});
 }
 
 std::uint32_t EmitFPCos(SpirvEmitterState& state, std::uint32_t arg0) {
-    const auto cycle = EmitTrigCycleF32(state, arg0, false);
+    const auto cycle = EmitExt(state, TypeF32(state), GLSLstd450Fract, {arg0});
     const auto source = Binary(state, spv::OpFMul, TypeF32(state), cycle, ConstantF32(state, 0x40c90fdbu));
     return EmitExt(state, TypeF32(state), GLSLstd450Cos, {source});
 }

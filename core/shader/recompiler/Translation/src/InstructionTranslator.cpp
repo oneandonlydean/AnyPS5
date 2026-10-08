@@ -327,7 +327,9 @@ void emitEntryPrologue(IrProgram& program, IrBlock& entryBlock, const TranslateO
             entryIr.SetVectorReg(static_cast<VectorReg>(vgpr(PixelInput::PositionZ)), builtin(StageInputKind::FragCoord, 2u));
         }
         if (loaded(PixelInput::PositionW)) {
-            IrValue& reciprocalW = entryIr.BitCastF32(builtin(StageInputKind::FragCoord, 3u));
+            IrValue& reciprocalBits = builtin(StageInputKind::FragCoord, 3u);
+            IrValue& denormal = entryIr.ULessThan(entryIr.BitwiseAnd(reciprocalBits, entryIr.Constant(0x7fffffffu)), entryIr.Constant(0x00800000u));
+            IrValue& reciprocalW = entryIr.BitCastF32(entryIr.Select(denormal, entryIr.BitwiseAnd(reciprocalBits, entryIr.Constant(0x80000000u)), reciprocalBits));
             IrValue& w = entryIr.Emit(IrOpcode::FPRecip32, IrOpcodeType(IrOpcode::FPRecip32), {&reciprocalW});
             entryIr.SetVectorReg(static_cast<VectorReg>(vgpr(PixelInput::PositionW)), entryIr.BitCastU32(w));
         }
