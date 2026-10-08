@@ -73,6 +73,7 @@ std::shared_ptr<const ShaderSnapshot> ReadRawComputeShader(std::uint64_t address
 std::uint64_t NullPixelProgramAddress();
 std::optional<ShaderRecompiler::ShaderFloatMode> RegisteredFloatMode(const ShaderSnapshot& snapshot);
 RegisteredShaderState NullPixelRegisteredState();
+std::shared_ptr<const ShaderSnapshot> RegisteredNullPixel(const ShaderRegistry& registry);
 void PublishRegisteredShader(std::shared_ptr<ShaderRegistry>& registry, const std::shared_ptr<const ShaderSnapshot>& snapshot);
 
 void ResolvePreparedGraphics(const ShaderSnapshot& front, const std::shared_ptr<const ShaderSnapshot>& fragment, std::uint32_t primitiveType, const ShaderRecompiler::SpirvTarget& target);
