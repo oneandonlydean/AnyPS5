@@ -31,6 +31,16 @@ void Driver::timed(double WorkerProfile::*bucket, TWork&& work) {
 
 void Driver::execute(const Submission& submission) {
     auto* submissionTiming = includeTimingSubmission(submission, true);
+    struct FlipHold {
+        Driver& driver;
+        bool held;
+        void Release() {
+            if (!held) return;
+            held = false;
+            driver.releaseFlipHold();
+        }
+        ~FlipHold() { Release(); }
+    } flipHold{*this, submission.holdsFlip};
     if (submission.suspend) {
         PerformanceContext timingContext(submissionTiming);
         PerformanceTimer timing("Driver.Suspend");
@@ -211,6 +221,7 @@ void Driver::execute(const Submission& submission) {
             if (APS5_ENABLE_TIMING_LOG) frame->CollectBackground();
             frame->NoteFlipBatches(batchesAtFlip, unsignaledAtFlip);
             CaptureTrace::Log("flip frame=%llu submission=%llu offset=%zu batch=%llu unsignaled=%llu", static_cast<unsigned long long>(frameSerial), static_cast<unsigned long long>(submission.serial), cursor, static_cast<unsigned long long>(batchesAtFlip), static_cast<unsigned long long>(unsignaledAtFlip));
+            flipHold.Release();
             submission.flips.at(cursor)->GpuReady(frame);
         } else if (opcode == 0x15) {
             timed(&WorkerProfile::dispatchMs, [&] { dispatch(queue, packet, submission); });

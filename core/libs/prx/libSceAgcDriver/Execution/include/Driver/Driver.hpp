@@ -73,6 +73,9 @@ private:
     static bool copySegment(Submission& submission, const std::uint32_t* guest, std::size_t words, std::size_t& budget);
     static void readRegisterLists(Submission& submission);
     void waitForFlipRoom(const Submission& submission);
+    void holdFlipBehindWorker(const Submission& submission);
+    bool flipHoldOver() const;
+    void releaseFlipHold();
     void reserveOutputs(Submission& submission);
     void executeRewindTail(const Submission& stalled);
     void enqueue(Submission submission);
@@ -301,6 +304,8 @@ private:
     std::atomic<std::uint32_t> orderHolders{0};
     std::atomic<std::uint32_t> runningWorkers{0};
     std::atomic<std::uint64_t> queue0Awaited{0};
+    std::atomic<std::uint32_t> flipsAhead{0};
+    std::atomic<std::uint32_t> flipHolders{0};
 
     std::atomic<std::uint64_t> evidenceReads{0};
     std::atomic<std::uint64_t> evidenceValidations{0};

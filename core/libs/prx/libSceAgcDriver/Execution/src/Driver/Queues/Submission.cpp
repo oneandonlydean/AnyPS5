@@ -131,6 +131,31 @@ void Driver::waitForFlipRoom(const Submission& submission) {
     }
 }
 
+bool Driver::flipHoldOver() const {
+    if (flipsAhead.load(std::memory_order_acquire) == 0) return true;
+    const auto awaited = queue0Awaited.load(std::memory_order_acquire);
+    return awaited != 0 && runningWorkers.load(std::memory_order_acquire) == 0 && orderHolders.load(std::memory_order_acquire) == 0 && !completionsPending() && !Graphics::Recorder::SnapshotWriteOverlaps(awaited, 4);
+}
+
+void Driver::holdFlipBehindWorker(const Submission& submission) {
+    static const bool disabled = std::getenv("APS5_NO_FLIP_HOLD") != nullptr;
+    if (disabled || submission.queue != 0 || onWorkerThread()) return;
+    bool flips = false;
+    for (std::size_t cursor = 0; cursor < submission.commands.size() && !flips; cursor += Pm4::PacketWords(submission.commands[cursor])) flips = submission.commands[cursor] == FlipPacketHeader;
+    if (!flips) return;
+    std::unique_lock lock(mutex);
+    flipHolders.fetch_add(1, std::memory_order_acq_rel);
+    while (failure == nullptr && !stopping.load(std::memory_order_acquire) && !shutdownToken.stop_requested() && !flipHoldOver()) changed.wait_for(lock, std::chrono::milliseconds(1));
+    flipHolders.fetch_sub(1, std::memory_order_acq_rel);
+}
+
+void Driver::releaseFlipHold() {
+    flipsAhead.fetch_sub(1, std::memory_order_acq_rel);
+    if (flipHolders.load(std::memory_order_acquire) == 0) return;
+    std::lock_guard lock(mutex);
+    changed.notify_all();
+}
+
 void Driver::reserveOutputs(Submission& submission) {
     for (std::size_t cursor = 0; cursor < submission.commands.size();) {
         const auto* words = submission.commands.data() + cursor;
@@ -218,6 +243,7 @@ void Driver::Submit(const Packet* packet, std::uint32_t queue) {
     readRegisterLists(submission);
     if (APS5_ENABLE_TIMING_LOG) submission.validatedAt = std::chrono::steady_clock::now();
     waitForFlipRoom(submission);
+    holdFlipBehindWorker(submission);
     if (APS5_ENABLE_TIMING_LOG) submission.roomReadyAt = std::chrono::steady_clock::now();
     static const bool trace = std::getenv("APS5_TRACE_GPU") != nullptr;
     if (trace) std::fprintf(stderr, "[gpu] %.1f submit queue=0x%x dwords=%zu at %p\n", TraceMs(), queue, submission.commands.size(), static_cast<const void*>(descriptor.addr));
@@ -240,6 +266,10 @@ void Driver::Submit(const Packet* packet, std::uint32_t queue) {
             costs.copyNs += static_cast<std::uint64_t>(std::chrono::duration_cast<std::chrono::nanoseconds>((copied - start) + (now - validated)).count());
         }
         if (APS5_ENABLE_TIMING_LOG) submission.enqueuedAt = std::chrono::steady_clock::now();
+        if (queue == 0 && !submission.flips.empty()) {
+            submission.holdsFlip = true;
+            flipsAhead.fetch_add(1, std::memory_order_acq_rel);
+        }
         enqueue(std::move(submission));
         ++accepted;
     }
