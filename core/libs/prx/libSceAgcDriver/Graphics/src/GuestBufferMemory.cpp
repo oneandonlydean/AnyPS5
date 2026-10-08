@@ -344,9 +344,19 @@ const HostImport* importAllocation(const Context& context, HostImports& state, s
     // Pinned imports count against the driver's system memory budget; past it ordinary host
     // allocations fail, so imports stop at APS5_HOST_IMPORT_MIB (default 6 GiB, which covers the
     // registered memory of address-based shaders; past it they copy gigabytes per dispatch).
-    static const std::uint64_t budget = [] {
+    static const std::uint64_t budget = []() -> std::uint64_t {
         const char* value = std::getenv("APS5_HOST_IMPORT_MIB");
-        return (value ? std::strtoull(value, nullptr, 10) : 6144ull) << 20u;
+        if (value != nullptr) return std::strtoull(value, nullptr, 10) << 20u;
+#ifdef _WIN32
+        MEMORYSTATUSEX status{};
+        status.dwLength = sizeof(status);
+        const std::uint64_t physical = GlobalMemoryStatusEx(&status) ? status.ullTotalPhys : 0;
+#else
+        const auto pages = sysconf(_SC_PHYS_PAGES);
+        const auto pageSize = sysconf(_SC_PAGESIZE);
+        const std::uint64_t physical = pages > 0 && pageSize > 0 ? static_cast<std::uint64_t>(pages) * static_cast<std::uint64_t>(pageSize) : 0;
+#endif
+        return std::max<std::uint64_t>(6144ull << 20u, physical / 2);
     }();
     std::uint64_t live = 0;
     for (const auto& [address, existing] : state.imports) live += existing.bytes;
