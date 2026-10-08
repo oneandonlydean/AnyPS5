@@ -110,6 +110,16 @@ bool Evaluator::EvaluateExtract(IrValue& inst, std::uint64_t& result) {
     return false;
 }
 
+bool Evaluator::IsConditionalSlotRead(const IrValue& inst) {
+    if (!_conditionalReadsBuilt) {
+        _conditionalReadsBuilt = true;
+        for (const auto& read : _program.srtReads) {
+            if (read.conditional && read.value != nullptr) _conditionalReads.insert(read.value->Resolve());
+        }
+    }
+    return _conditionalReads.contains(&inst);
+}
+
 bool Evaluator::EvaluateRawRead(IrValue& inst, std::uint64_t& result) {
     const auto flags = inst.Flags<MemoryFlags>();
     if (flags.index >= _program.memoryInfo.size()) {
@@ -157,6 +167,10 @@ bool Evaluator::EvaluateRawRead(IrValue& inst, std::uint64_t& result) {
         else trace->otherReads.push_back(address);
     }
     std::uint32_t word = 0;
+    if (_unmappedAsZero && _runtime.isReadable != nullptr && IsConditionalSlotRead(inst) && !_runtime.isReadable(_runtime.userContext, address)) {
+        result = 0;
+        return true;
+    }
     if (_runtime.readMemory != nullptr) {
         if (!_runtime.readMemory(_runtime.userContext, address, &word)) {
             return false;
