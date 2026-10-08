@@ -1824,7 +1824,22 @@ void recordDraw(const Context& context, const State& state, const Pm4::DrawParam
     APS5_LOG_CHARS_OUT_DEBUG("Resources bound");
     pushDrawConstants(*record.pipeline, commands, state, draw, shaders, resources, record.pushBytes, record.pushStages, meshArguments != nullptr ? meshArguments->DeviceAddress() : 0);
     APS5_LOG_CHARS_OUT_DEBUG("Push constants recorded");
+    // APS5_PROFILE_GPU_DRAWS=1 (with APS5_PROFILE_GPU=1): a [gputime] range around each recorded
+    // draw command, keyed by the fragment program's variant id with bit 63 set (the first stage's
+    // when there is no fragment stage); [drawvariant] lines name each variant's code address. The
+    // stamps wait for the work before them, so draws inside a pass serialize and the totals run high;
+    // the ranking is what they are for.
+    static const bool timeEachDraw = std::getenv("APS5_PROFILE_GPU_DRAWS") != nullptr;
+    auto eachDrawTiming = Recorder::NoTiming;
+    if (timeEachDraw) {
+        std::uint64_t key = 0;
+        for (const auto& shader : shaders) {
+            if (shader.program != nullptr && (key == 0 || shader.stage == ShaderRecompiler::ShaderStage::Fragment)) key = shader.program->variantId;
+        }
+        eachDrawTiming = recorder->BeginInPassGpuTiming(key | (1ull << 63));
+    }
     recordDrawCommands(context, commands, state, draw, inputs, record.indirect, argumentBuffer, argumentOffset);
+    recorder->EndGpuTiming(eachDrawTiming);
     if (meshArguments != nullptr) recorder->Keep(meshArguments);
     if (writesDepth) record.depth->NoteWritten();
     if (record.depth != nullptr) CountDepthDraw(state.depth);

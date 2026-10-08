@@ -54,10 +54,13 @@ ShaderRecompiler::RecompileResult Driver::compileDrawStage(std::size_t i, std::u
         phaseMs[DrawRowCapture] -= waited;
         phaseMs[DrawRowCaptureHookWaits] += waited;
     }
+    // APS5_DUMP_DRAW_SHADERS=<hex address>: a draw whose color target, slot 0 surface or program code
+    // is at that address has its programs dumped (a code address names one program, as the
+    // [drawvariant] and [gputime] lines print them).
     if (dumpTarget != 0) {
 
         const auto slot0 = (static_cast<std::uint64_t>(readRegister(queue.context, 0x390)) << 40u) | (static_cast<std::uint64_t>(readRegister(queue.context, 0x318)) << 8u);
-        if ((graphics.hasColorTarget && graphics.color.address == dumpTarget) || slot0 == dumpTarget) static_cast<void>(dumpRequest(program.binary.codeAddress, request));
+        if ((graphics.hasColorTarget && graphics.color.address == dumpTarget) || slot0 == dumpTarget || program.binary.codeAddress == dumpTarget) static_cast<void>(dumpRequest(program.binary.codeAddress, request));
     }
     if (dumpSlot1 != 0) {
         const auto value = [&](std::uint32_t offset) -> std::uint64_t { const auto it = queue.context.find(offset); return it == queue.context.end() ? 0u : it->second; };

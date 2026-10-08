@@ -5,7 +5,10 @@
 #include "prx/libSceAgcDriver/Execution/include/PerformanceTimer.hpp"
 #include "prx/libSceAgcDriver/Execution/include/Pm4.hpp"
 #include "Optimization/ResourceProgram.hpp"
+#include <cstdio>
 #include <cstdlib>
+#include <mutex>
+#include <set>
 
 namespace AgcDriver::DriverDetail {
 
@@ -431,6 +434,17 @@ DrawVerdict Driver::draw(QueueState& queue, std::span<const std::uint32_t> packe
     }
     lockForDraw();
     noteDrawWriters(stages, submission.queue);
+    // APS5_PROFILE_GPU_DRAWS: the code address behind each variant id the per-draw [gputime] ranges
+    // are keyed by, printed once per variant.
+    if (static const bool nameVariants = std::getenv("APS5_PROFILE_GPU_DRAWS") != nullptr; nameVariants && stages.size() == programs.size()) {
+        static std::mutex namedMutex;
+        static std::set<std::uint64_t> named;
+        std::lock_guard namedLock(namedMutex);
+        for (std::size_t i = 0; i < stages.size(); ++i) {
+            if (stages[i].program == nullptr || !named.insert(stages[i].program->variantId).second) continue;
+            std::fprintf(stderr, "[drawvariant] 0x%llx stage %d code 0x%llx\n", static_cast<unsigned long long>(stages[i].program->variantId), static_cast<int>(stages[i].stage), static_cast<unsigned long long>(programs[i].binary.codeAddress));
+        }
+    }
     phaseTiming.Phase(DrawRowVectors);
     if (recipe != nullptr) {
         if (localDevice->DrawFromRecipe(graphics, drawParameters, stages, snapshots, recipe) == RecipeOutcome::Recorded) {
