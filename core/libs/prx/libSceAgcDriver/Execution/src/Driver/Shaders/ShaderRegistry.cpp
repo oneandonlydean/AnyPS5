@@ -321,6 +321,8 @@ std::vector<PreparedShaders::Entry> PrepareRegistered(const ShaderSnapshot& snap
     case 7: stage = Stage::TessellationControl; programRegister = 0x108; resourceRegister = 0x10b; break;
     default: throw std::runtime_error("AGC driver: unsupported registered shader type");
     }
+    const bool frontHalf = snapshot.type == 4 || snapshot.type == 5;
+    if (registration && frontHalf && !state.shader.contains(programRegister) && !state.shader.contains(programRegister + 1)) return {};
     const auto high = RegisterValue(state.shader, programRegister + 1);
     if ((high & ~0xffu) != 0) throw std::runtime_error("AGC driver: invalid registered program address");
     const auto address = (static_cast<std::uint64_t>(RegisterValue(state.shader, programRegister)) << 8u) | (static_cast<std::uint64_t>(high) << 40u);
