@@ -175,6 +175,23 @@ void CheckPrivateMappingReuse() {
     GuestArena::GuestArenaRelease_nid_postfix(replacement, 3 * Block);
 }
 #endif
+
+void CheckCollectMemo() {
+    void* memory = AllocateWatched(4 * Block);
+    const auto base = reinterpret_cast<std::uint64_t>(memory);
+    std::memset(memory, 0x11, 4 * Block);
+    BumpCollectEpoch();
+    const auto first = CollectWrites(base, 4096);
+    Require(first != 0, "the memo block is not collected");
+    for (std::uint64_t block = 1; block < 4; ++block) CollectWrites(base + block * Block, 4096);
+    static_cast<volatile std::uint8_t*>(memory)[8] = 0x5a;
+    CollectWrites(base, 4096);
+    Require(UnchangedSince(base, 4096, first), "a range collected earlier in the epoch, behind newer collects, was walked again");
+    BumpCollectEpoch();
+    CollectWrites(base + Block, 4096);
+    CollectWrites(base, 4096);
+    Require(!UnchangedSince(base, 4096, first), "a collect of an earlier epoch answered after the ordering point");
+}
 }
 
 int main() {
@@ -189,6 +206,7 @@ int main() {
 #ifdef _WIN32
         CheckPrivateMappingReuse();
 #endif
+        CheckCollectMemo();
     } catch (const std::exception& error) {
         std::cerr << "write tracking test failed: " << error.what() << "\n";
         return 1;
