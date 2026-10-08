@@ -498,7 +498,7 @@ void Driver::ResolveGraphicsStagesAbi(std::span<const Shader* const> stages, std
         for (const auto& stage : abi.stages) {
             const auto snapshot = stage.lock();
             require(snapshot != nullptr, "prepared graphics ABI lost a registered stage");
-            if (snapshot->type != 1) ResolvePreparedGraphics(*snapshot, {}, primitiveType == state.userConfig.end() ? 0u : primitiveType->second, localDevice->Target());
+            if (snapshot->type != 1) ResolvePreparedGraphics(*snapshot, RegisteredNullPixel(*registry), primitiveType == state.userConfig.end() ? 0u : primitiveType->second, localDevice->Target());
         }
         transaction.Commit();
         return;
@@ -514,7 +514,7 @@ void Driver::ResolveGraphicsStagesAbi(std::span<const Shader* const> stages, std
     }
     for (const auto& stage : prepared) {
         if (stage.snapshot->type == 1) continue;
-        ResolvePreparedGraphics(*stage.snapshot, {}, primitiveType == state.userConfig.end() ? 0u : primitiveType->second, localDevice->Target());
+        ResolvePreparedGraphics(*stage.snapshot, RegisteredNullPixel(*registry), primitiveType == state.userConfig.end() ? 0u : primitiveType->second, localDevice->Target());
     }
     PreparedShaderState::GraphicsAbi abi{key, registry, {}};
     for (const auto& stage : prepared) abi.stages.push_back(stage.snapshot);
@@ -587,6 +587,12 @@ std::uint64_t NullPixelProgramAddress() {
     return reinterpret_cast<std::uintptr_t>(NullPixelCode);
 }
 
+std::shared_ptr<const ShaderSnapshot> RegisteredNullPixel(const ShaderRegistry& registry) {
+    const auto found = registry.find(NullPixelProgramAddress());
+    require(found != registry.end(), "the null pixel program is not registered");
+    return found->second;
+}
+
 RegisteredShaderState NullPixelRegisteredState() {
     ShaderSnapshot null{NullPixelProgramAddress(), reinterpret_cast<std::uintptr_t>(&NullPixelShader), NullPixelShader.type, {}, {}};
     null.header.resize(sizeof(Shader));
@@ -609,6 +615,7 @@ void Driver::ResolveGraphicsAbi(const Shader* vertex, const Shader* pixel, std::
     require(vertex != nullptr && pixel != nullptr, "rectangle ABI requires vertex and fragment shaders");
     std::shared_ptr<const ShaderSnapshot> front;
     std::shared_ptr<const ShaderSnapshot> fragment;
+    std::shared_ptr<const ShaderSnapshot> nullPixel;
     {
         std::lock_guard lock(mutex);
         GuestMemory::CheckRange(vertex, sizeof(Shader), alignof(Shader));
@@ -622,11 +629,13 @@ void Driver::ResolveGraphicsAbi(const Shader* vertex, const Shader* pixel, std::
         };
         front = lookup(vertex);
         fragment = lookup(pixel);
+        nullPixel = RegisteredNullPixel(*shaders);
     }
     require(front != fragment, "rectangle stages refer to the same shader");
     const auto localDevice = device.Load();
     require(localDevice != nullptr, "shader registration device is missing");
     ResolvePreparedGraphics(*front, fragment, primitiveType, localDevice->Target());
+    if (nullPixel != fragment) ResolvePreparedGraphics(*front, nullPixel, primitiveType, localDevice->Target());
     transaction.Commit();
 }
 
