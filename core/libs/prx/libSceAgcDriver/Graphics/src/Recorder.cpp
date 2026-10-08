@@ -2464,6 +2464,20 @@ void Recorder::eraseDrawSnapshot(std::map<DrawSnapshotKey, DrawSnapshot>::iterat
 std::shared_ptr<Buffer> Recorder::ReusableDrawSnapshot(std::uint64_t address, std::size_t bytes, SnapshotUse use, std::uint32_t* derived, std::uint64_t generation) {
     auto found = use == SnapshotUse::Vertex ? drawSnapshots.lower_bound({address, use, bytes}) : drawSnapshots.find({address, use, bytes});
     if (found == drawSnapshots.end() || std::get<0>(found->first) != address || std::get<1>(found->first) != use) return {};
+    return reuseDrawSnapshot(found, address, bytes, use, derived, generation);
+}
+
+std::shared_ptr<Buffer> Recorder::CollectedDrawSnapshot(std::uint64_t address, std::size_t bytes, std::uint64_t& generation) {
+    const auto found = drawSnapshots.find({address, SnapshotUse::Storage, bytes});
+    if (found == drawSnapshots.end()) {
+        generation = GuestMemory::WatchedGeneration(address, bytes);
+        return {};
+    }
+    generation = GuestMemory::CollectWrites(address, bytes);
+    return reuseDrawSnapshot(found, address, bytes, SnapshotUse::Storage, nullptr, generation);
+}
+
+std::shared_ptr<Buffer> Recorder::reuseDrawSnapshot(std::map<DrawSnapshotKey, DrawSnapshot>::iterator found, std::uint64_t address, std::size_t bytes, SnapshotUse use, std::uint32_t* derived, std::uint64_t generation) {
     const bool sameRegistry = found->second.registryGeneration == GuestAllocations::GuestAllocationsGeneration_nid_postfix();
     if (!sameRegistry || !GuestMemory::UnchangedSince(address, bytes, found->second.generation)) {
         const auto held = found->second.buffer->Bytes();

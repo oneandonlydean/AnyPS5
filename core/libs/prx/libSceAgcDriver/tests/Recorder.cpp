@@ -1405,6 +1405,87 @@ void drawSnapshotReuseTests(const Device& device, Recorder& recorder) {
     recorder.Activate();
 }
 
+void drawSnapshotUncollectedTests(const Device& device, Recorder& recorder) {
+    const auto& context = device.GetContext();
+    constexpr std::size_t bytes = 65536;
+    void* block = context.hostImportAlignment != 0 ? AllocateWatched(bytes, 65536) : nullptr;
+    if (block == nullptr) {
+        std::cout << "host imports or write watching unavailable: uncollected snapshots not tested\n";
+        return;
+    }
+    struct Release {
+        void* block;
+        ~Release() { ReleaseWatched(block, bytes); }
+    } release{block};
+    std::memset(block, 0x11, bytes);
+    const auto address = reinterpret_cast<std::uint64_t>(block);
+    {
+        GuestAllocations::Mutation mutation;
+        mutation.Add(block, bytes, true, true, true);
+    }
+    struct Unregister {
+        const Context& context;
+        void* block;
+        ~Unregister() {
+            {
+                GuestAllocations::Mutation mutation;
+                mutation.Remove(block);
+            }
+            HostImportFor(context, reinterpret_cast<std::uint64_t>(block), bytes);
+        }
+    } unregister{context, block};
+    if (HostImportFor(context, address, bytes) == nullptr) {
+        std::cout << "host import of the watched block refused: uncollected snapshots not tested\n";
+        return;
+    }
+    if (!AgcDriver::GuestMemory::Watched(address, bytes)) {
+        std::cout << "host imports are compared, not watched: uncollected snapshots not tested\n";
+        return;
+    }
+    const auto element = address + 8192;
+    constexpr std::size_t elementBytes = 2048;
+    ShaderRecompiler::RecompileResult program;
+    ShaderRecompiler::DescriptorBinding binding;
+    binding.kind = ShaderRecompiler::DescriptorKind::StorageBuffer;
+    binding.role = ShaderRecompiler::DescriptorRole::GuestBuffers;
+    binding.descriptorSet = 0;
+    binding.binding = 0;
+    binding.count = 1;
+    binding.guestDescriptor = {static_cast<std::uint32_t>(element), static_cast<std::uint32_t>(element >> 32u) & 0xffffu, elementBytes, 0x31000000u};
+    binding.bufferWritten = {false};
+    program.bindings.push_back(binding);
+    const CompiledShader compute{ShaderRecompiler::ShaderStage::Compute, &program, 0};
+    {
+        auto snapshotContext = context;
+        DescriptorCache cache(snapshotContext);
+        snapshotContext.descriptorCache = &cache;
+        Recorder snapshotRecorder(snapshotContext);
+        snapshotRecorder.Activate();
+        ShaderResources resources(snapshotContext, compute);
+        const auto snapshot = [&](std::byte expected) {
+            const auto bindings = resources.PrepareDrawBindings(snapshotRecorder);
+            Require(bindings != nullptr && bindings->snapshots.size() == 1, "read-only draw input was not snapshotted");
+            const auto buffer = bindings->snapshots[0].buffer;
+            const auto contents = buffer->Bytes();
+            Require(contents.size() == elementBytes && std::all_of(contents.begin(), contents.end(), [&](std::byte value) { return value == expected; }), "a draw snapshot does not hold the guest bytes of its draw");
+            return buffer;
+        };
+        AgcDriver::GuestMemory::CollectWritesUncached(element, elementBytes);
+        std::memset(reinterpret_cast<void*>(element), 0x22, elementBytes);
+        const auto first = snapshot(std::byte{0x22});
+        const auto copied = AgcDriver::GuestMemory::TrackerGeneration();
+        AgcDriver::GuestMemory::CollectWritesUncached(element, elementBytes);
+        Require(!AgcDriver::GuestMemory::UnchangedSince(element, elementBytes, copied), "a draw input with no cached snapshot was collected before its copy");
+        Require(snapshot(std::byte{0x22}) == first, "a snapshot kept without a collect was not reused once its bytes proved unchanged");
+        Require(snapshot(std::byte{0x22}) == first, "an unchanged draw input was copied again");
+        std::memset(reinterpret_cast<void*>(element + elementBytes - 4), 0x33, 4);
+        const auto changed = resources.PrepareDrawBindings(snapshotRecorder);
+        Require(changed != nullptr && changed->snapshots.size() == 1 && changed->snapshots[0].buffer->Bytes()[elementBytes - 1] == std::byte{0x33} && changed->snapshots[0].buffer->Bytes()[0] == std::byte{0x22}, "a snapshot kept without a collect outlived a CPU store to its range");
+        snapshotRecorder.Sync();
+    }
+    recorder.Activate();
+}
+
 void drawSnapshotEvictionTests(const Device& device) {
     using namespace AgcDriver::GuestMemory;
     constexpr std::size_t bytes = 65536;
@@ -3898,6 +3979,7 @@ int main(int argc, char** argv) {
         misalignedSnapshotTests(device, recorder);
         misalignedRegionTests(device, recorder);
         drawSnapshotReuseTests(device, recorder);
+        drawSnapshotUncollectedTests(device, recorder);
         drawSnapshotEvictionTests(device);
         drawInputReuseTests(device, recorder);
         drawInputInPlaceTests(device, recorder);
