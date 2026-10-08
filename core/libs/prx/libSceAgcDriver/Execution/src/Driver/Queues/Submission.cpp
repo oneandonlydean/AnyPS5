@@ -195,7 +195,13 @@ void Driver::Submit(const Packet* packet, std::uint32_t queue) {
     if (trace) std::fprintf(stderr, "[gpu] %.1f submit queue=0x%x dwords=%zu at %p\n", TraceMs(), queue, submission.commands.size(), static_cast<const void*>(descriptor.addr));
     const auto validated = profile ? std::chrono::steady_clock::now() : start;
     {
-        std::lock_guard lock(mutex);
+        std::unique_lock lock(mutex);
+        if (const auto found = workers.find(queue); found != workers.end()) {
+            const auto& worker = found->second;
+            ++throttledSubmits;
+            changed.wait(lock, [&] { return failure != nullptr || stopping || worker.queuedFlips == 0 || awaitsTitle(worker); });
+            --throttledSubmits;
+        }
         rethrowFailure();
         checkStopping();
         require(accepted != std::numeric_limits<std::uint64_t>::max(), "submission serial overflow");
@@ -268,10 +274,15 @@ void Driver::noteWaitBlocked(std::uint32_t queue, std::uint64_t awaited, bool bl
     if (blocked) runningWorkers.fetch_sub(1, std::memory_order_acq_rel);
     else runningWorkers.fetch_add(1, std::memory_order_acq_rel);
     if (queue == 0) queue0Awaited.store(blocked ? awaited : 0, std::memory_order_release);
-    if (blocked && orderHolders.load(std::memory_order_acquire) != 0) {
-        std::lock_guard lock(mutex);
-        changed.notify_all();
-    }
+    std::lock_guard lock(mutex);
+    if (const auto found = workers.find(queue); found != workers.end()) found->second.blockedOn = blocked ? awaited : 0;
+    if (blocked && (orderHolders.load(std::memory_order_acquire) != 0 || throttledSubmits != 0)) changed.notify_all();
+}
+
+bool Driver::awaitsTitle(const QueueWorker& worker) const {
+    if (worker.blockedOn == 0) return false;
+    const auto dword = worker.blockedOn & ~std::uint64_t{3};
+    return std::none_of(workers.begin(), workers.end(), [&](const auto& entry) { return entry.second.unfinishedWrites.contains(dword); });
 }
 
 void Driver::enqueue(Submission submission) {
@@ -279,6 +290,7 @@ void Driver::enqueue(Submission submission) {
     submission.waitFree = waitFree(submission);
     auto& worker = workers[queue];
     for (const auto dword : submission.labelWrites) ++worker.unfinishedWrites[dword];
+    if (!submission.flips.empty()) ++worker.queuedFlips;
     worker.pending.push_back(std::move(submission));
     worker.queued.fetch_add(1, std::memory_order_acq_rel);
     if (!worker.thread.joinable()) worker.thread = std::thread([this, queue] { run(queue); });
