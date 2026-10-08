@@ -358,6 +358,7 @@ CompiledVariant compileVariant(const RecompileRequest& request, IrProgram progra
     result.instanceOffsetShared = program.Info().instanceOffsetShared;
     result.vertexOffsetConflict = program.Info().vertexOffsetConflict;
     result.instanceOffsetConflict = program.Info().instanceOffsetConflict;
+    result.bdaWrites = program.Info().bdaWrites;
     for (const auto& output : program.Info().outputs) {
         if (output.kind == StageOutputKind::Parameter) result.parameterExports.push_back(output.location);
     }
@@ -601,6 +602,7 @@ RecompileResult materializeResult(const CompiledVariant& variant, const Recompil
         .instanceOffsetShared = artifact.instanceOffsetShared,
         .vertexOffsetConflict = artifact.vertexOffsetConflict,
         .instanceOffsetConflict = artifact.instanceOffsetConflict,
+        .bdaWrites = artifact.bdaWrites,
         .hostSubgroupSize = artifact.hostSubgroupSize,
         .parameterExports = artifact.parameterExports,
         .fragmentParameters = artifact.fragmentParameters,

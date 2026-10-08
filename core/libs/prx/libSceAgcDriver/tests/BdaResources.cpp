@@ -15,6 +15,7 @@
 #include <functional>
 #include <iostream>
 #include <limits>
+#include <span>
 #include <string>
 
 namespace {
@@ -284,7 +285,7 @@ void RunBdaResourceTests(const Context& context, const BdaTestAccess& access) {
         const std::array<GuestMemorySnapshot, 1> unusedSnapshots{{{0, source}}};
         ShaderResources resources(disabled, stages, ColorTarget{}, 0, 0, unusedSnapshots);
         const auto fault = access.bytes(access.descriptor(5).buffer);
-        for (const auto byte : fault) Require(byte == std::byte{}, "rect-list fault buffer was not initialized");
+        for (std::size_t byte = 0; byte < ShaderRecompiler::BdaAbi::WrittenSlotsWord * sizeof(std::uint32_t); ++byte) Require(fault[byte] == std::byte{}, "rect-list fault buffer was not initialized");
         const ShaderRecompiler::BdaAbi::Fault report{ShaderRecompiler::BdaAbi::FaultState::Ready, ShaderRecompiler::BdaAbi::FaultReason::InvalidRectangle, 0, 0, 0, 0, 0};
         std::memcpy(fault.data(), &report, sizeof(report));
         reject([&] { resources.WriteBack(); }, "rect-list requires");
@@ -304,12 +305,48 @@ void RunBdaResourceTests(const Context& context, const BdaTestAccess& access) {
         std::memcpy(&range, table.data() + sizeof(header), sizeof(range));
         Require(range.begin == snapshots[0].address && range.end == range.begin + source.size(), "64-bit guest address was truncated");
         const auto fault = access.bytes(access.descriptor(5).buffer);
-        for (const auto byte : fault) Require(byte == std::byte{}, "fault buffer was not initialized");
+        for (std::size_t byte = 0; byte < ShaderRecompiler::BdaAbi::WrittenSlotsWord * sizeof(std::uint32_t); ++byte) Require(fault[byte] == std::byte{}, "fault buffer was not initialized");
         const ShaderRecompiler::BdaAbi::Fault denied{ShaderRecompiler::BdaAbi::FaultState::Ready, ShaderRecompiler::BdaAbi::FaultReason::Permission, snapshots[0].address + 4, 4, 0, 0x88, 0};
         std::memcpy(fault.data(), &denied, sizeof(denied));
         reject([&] { resources.WriteBack(); }, "read-only in the BDA table");
         std::memset(fault.data(), 0, fault.size());
         resources.WriteBack();
+    }
+    {
+        namespace Abi = ShaderRecompiler::BdaAbi;
+        const auto faultWords = [&] {
+            const auto fault = access.bytes(access.descriptor(5).buffer);
+            return std::span<std::uint32_t>(reinterpret_cast<std::uint32_t*>(fault.data()), fault.size() / sizeof(std::uint32_t));
+        };
+        {
+            ShaderResources resources(context, compiled, snapshots);
+            const auto words = faultWords();
+            for (std::uint32_t slot = 0; slot < Abi::WrittenPageSlots; ++slot) words[Abi::WrittenSlotsWord + slot] = slot + 1u;
+            resources.WriteBack();
+            for (std::uint32_t slot = 0; slot < Abi::WrittenPageSlots; ++slot) Require(words[Abi::WrittenSlotsWord + slot] == slot + 1u, "the written-page slots of a program that never stores through BDA were consumed");
+        }
+        {
+            ShaderResources resources(context, compiled, snapshots);
+            faultWords()[Abi::WrittenOverflowWord] = 1;
+            resources.WriteBack();
+        }
+        shader.bdaWrites = true;
+        {
+            ShaderResources resources(context, compiled, snapshots);
+            const auto words = faultWords();
+            for (const auto word : words) Require(word == 0, "the fault buffer of a program storing through BDA was not cleared whole");
+            words[Abi::WrittenSlotsWord + 7] = 0x11u;
+            resources.WriteBack();
+            Require(words[Abi::WrittenSlotsWord + 7] == 0, "a written-page slot of a program storing through BDA was not consumed");
+        }
+        {
+            ShaderResources resources(context, compiled, snapshots);
+            faultWords()[Abi::WrittenOverflowWord] = 1;
+            reject([&] { resources.WriteBack(); }, "pages stored to through the BDA table");
+            faultWords()[Abi::WrittenOverflowWord] = 0;
+            resources.WriteBack();
+        }
+        shader.bdaWrites = false;
     }
     {
         auto writable = binding(Role::GuestBuffers, 6);
