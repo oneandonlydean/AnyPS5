@@ -1746,6 +1746,49 @@ void verifyFunctionLdsBound() {
     require(unsized == FunctionLdsDwordLimit, "function LDS: an access without a known width must keep the full array");
 }
 
+void verifyConditionalUnmappedSlot() {
+    using namespace ShaderRecompiler;
+    std::array<std::uint32_t, 12> code{0xf4040004u, 0xfa000000u, 0x7e000280u, 0xbf06800au, 0xbf850004u, 0xf4000080u, 0xfa000000u, 0xbf8cc07fu, 0x7e000202u, 0xf80008cfu, 0u, 0xbf810000u};
+    std::uint32_t payload = 0x3f800000u;
+    std::uint64_t table = reinterpret_cast<std::uintptr_t>(&payload);
+    const auto address = reinterpret_cast<std::uintptr_t>(&table);
+    const std::array<std::uint32_t, 3> userData{static_cast<std::uint32_t>(address), static_cast<std::uint32_t>(address >> 32u), 1u};
+    RecompileRequest request{};
+    request.shader = {ShaderStage::Vertex, 0x20000u, code, 0, {}};
+    request.context.waveSize = 64;
+    request.context.userDataBaseRegister = 8;
+    request.context.userData = userData;
+    request.context.vertex = ShaderVertexStageInfo{};
+    request.target.vulkanVersion = 0x00401000u;
+    request.target.spirvVersion = 0x00010300u;
+    request.target.subgroupSize = 64;
+    request.target.fragmentShaderBarycentricEnabled = false;
+    request.layout.pushConstantSizeBytes = 128;
+    AgcDriver::ShaderMemory mapped({});
+    const auto capture = mapped.Capture(request);
+    const auto& reads = capture->plan->srtReads;
+    require(std::count_if(reads.begin(), reads.end(), [](const SrtRead& read) { return read.conditional; }) == 1, "conditional slot: the branch's load is not the one conditional slot");
+    std::uint32_t payloadSlot = 0;
+    for (const auto& read : reads) {
+        if (read.conditional) payloadSlot = read.flatOffset;
+    }
+    require(capture->snapshot.flattenedSrt.at(payloadSlot) == payload, "conditional slot: a mapped slot did not read its value");
+    table = 0;
+    AgcDriver::ShaderMemory null({});
+    const auto nullCapture = null.Capture(request);
+    require(nullCapture->snapshot.flattenedSrt.at(payloadSlot) == 0u, "conditional slot: an unmapped slot did not read zero");
+    code[4] = 0xbf800000u;
+    request.shader = {ShaderStage::Vertex, 0x21000u, code, 0, {}};
+    AgcDriver::ShaderMemory unconditional({});
+    bool threw = false;
+    try {
+        static_cast<void>(unconditional.Capture(request));
+    } catch (const std::exception&) {
+        threw = true;
+    }
+    require(threw, "conditional slot: an unconditional load through a null pointer was captured");
+}
+
 int main(int argc, char** argv) {
     try {
         using namespace ShaderRecompiler;
@@ -1765,6 +1808,7 @@ int main(int argc, char** argv) {
         verifyHalfWaveReduction();
         verifyMeshConfiguration();
         verifyPixelInputs();
+        verifyConditionalUnmappedSlot();
         verifyPixelRequestSerialization();
         verifyLegacyPixelRequests();
         verifyPixelExportReplay();

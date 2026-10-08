@@ -46,6 +46,7 @@ struct DescriptorSource {
 struct SrtRead {
     IrValue* value = nullptr;
     std::uint32_t flatOffset = 0;
+    bool conditional = false;
 
     bool operator==(const SrtRead& other) const = default;
 };
