@@ -23,7 +23,9 @@
 #endif
 #include <windows.h>
 #else
+#include <fcntl.h>
 #include <sys/mman.h>
+#include <unistd.h>
 #endif
 #include <algorithm>
 #include <array>
@@ -729,6 +731,86 @@ void storeRunTests(const Device& device, Recorder& recorder) {
         mutation.Remove(block);
     }
     HostImportFor(context, address, bytes);
+}
+
+void unimportableRangeTests(const Device& device) {
+    const auto& context = device.GetContext();
+#ifdef _WIN32
+    static_cast<void>(context);
+    std::cout << "unimportable ranges: Linux mappings only\n";
+#else
+    if (context.hostImportAlignment == 0) {
+        std::cout << "host imports unavailable: unimportable ranges not tested\n";
+        return;
+    }
+    constexpr std::size_t page = 4096;
+    constexpr std::size_t block = 65536;
+    char path[] = "/tmp/aps5-unimportable-XXXXXX";
+    const int file = mkstemp(path);
+    Require(file >= 0, "cannot make the file behind the unimportable ranges");
+    unlink(path);
+    std::array<std::uint8_t, 2 * page> pattern{};
+    for (std::size_t i = 0; i < pattern.size(); ++i) pattern[i] = static_cast<std::uint8_t>(i * 7 + 3);
+    Require(write(file, pattern.data(), pattern.size()) == static_cast<ssize_t>(pattern.size()), "cannot fill the file behind the unimportable ranges");
+    void* readOnly = mmap(nullptr, page, PROT_READ, MAP_PRIVATE, file, 0);
+    void* writable = mmap(nullptr, page, PROT_READ | PROT_WRITE, MAP_PRIVATE, file, page);
+    close(file);
+    Require(readOnly != MAP_FAILED && writable != MAP_FAILED, "cannot map the unimportable ranges");
+    void* anonymous = mmap(nullptr, block, PROT_READ | PROT_WRITE, MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
+    Require(anonymous != MAP_FAILED, "cannot map the importable range");
+    std::memset(anonymous, 0x5a, block);
+    const auto readOnlyAddress = reinterpret_cast<std::uint64_t>(readOnly);
+    const auto writableAddress = reinterpret_cast<std::uint64_t>(writable);
+    const auto importable = reinterpret_cast<std::uint64_t>(anonymous);
+    {
+        GuestAllocations::Mutation mutation;
+        mutation.Add(readOnly, page, true, false);
+        mutation.Add(writable, page, true, true);
+        mutation.Add(anonymous, block, true, true);
+    }
+    struct Cleanup {
+        const Context& context;
+        void* readOnly;
+        void* writable;
+        void* anonymous;
+        ~Cleanup() {
+            {
+                GuestAllocations::Mutation mutation;
+                mutation.Remove(readOnly);
+                mutation.Remove(writable);
+                mutation.Remove(anonymous);
+            }
+            HostImportFor(context, reinterpret_cast<std::uint64_t>(anonymous), 65536);
+            munmap(readOnly, 4096);
+            munmap(writable, 4096);
+            munmap(anonymous, 65536);
+        }
+    } cleanup{context, readOnly, writable, anonymous};
+    Require(HostImportFor(context, readOnlyAddress, page) == nullptr, "(i) a read-only private file page was imported");
+    Require(HostImportFor(context, importable, block) != nullptr, "(i) anonymous writable memory was not imported after a read-only page was refused: the device refuses imports");
+    const auto deviceLocal = [&](const char* after) {
+        try {
+            DeviceBuffer probe(context, (3u << 20u) + page, VK_BUFFER_USAGE_STORAGE_BUFFER_BIT);
+        } catch (const std::exception& error) {
+            throw std::runtime_error(std::string("(i) device-local memory cannot be allocated after ") + after + ": " + error.what());
+        }
+    };
+    deviceLocal("a read-only page was refused");
+    Require(HostImportFor(context, writableAddress, page) == nullptr, "(i) a small private file page was offered to the driver");
+    {
+        GuestBufferMemory leased(context);
+        leased.AcquireRegistered();
+        leased.Upload(true);
+        const auto ranges = leased.AddressRanges();
+        for (const auto address : {readOnlyAddress, writableAddress}) {
+            const auto found = std::find_if(ranges.begin(), ranges.end(), [&](const auto& range) { return range.begin <= address && address + page <= range.end; });
+            Require(found != ranges.end() && found->deviceAddress != 0, "(i) an unimportable range is missing from the BDA table");
+            Require(!HostImportCovers(context, address, page), "(i) an unimportable range reads as imported");
+        }
+        leased.WriteBack();
+    }
+    deviceLocal("an address-based build over unimportable ranges");
+#endif
 }
 
 void remappedImportTests(const Device& device) {
@@ -2838,6 +2920,7 @@ int main() {
         RunResidentPresentTests(device.GetContext());
         storeRunTests(device, recorder);
         remappedImportTests(device);
+        unimportableRangeTests(device);
         movedMetadataTests(device, recorder);
         viewPastLastMipTests(device, recorder);
         keysFillTests(device, recorder);

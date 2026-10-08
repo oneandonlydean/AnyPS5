@@ -6,7 +6,9 @@
 #include "prx/libc/include/GuestAllocations.hpp"
 #include <memory>
 #include <optional>
+#include <span>
 #include <string>
+#include <string_view>
 #include <utility>
 #include <vector>
 
@@ -54,6 +56,19 @@ void SetImportWatch(const Context& context, ImportWatch watch);
 // (alignment and budget permitting), or null. Bytes at `address` are at `address - import->base` in
 // the import's buffer.
 const HostImport* HostImportFor(const Context& context, std::uint64_t address, std::size_t bytes);
+
+struct HostMapping {
+    std::uint64_t begin = 0;
+    std::uint64_t end = 0;
+    bool readable = false;
+    bool writable = false;
+    bool shared = false;
+    bool fileBacked = false;
+};
+std::optional<HostMapping> ParseHostMapping(std::string_view line);
+constexpr std::uint64_t PoisoningImportBytes = 65536;
+const char* HostImportRefusal(std::span<const HostMapping> mappings, std::uint64_t begin, std::uint64_t end);
+std::vector<HostMapping> HostMappings(std::uint64_t begin, std::uint64_t end);
 // Whether an existing import covers [address, address + bytes), without reconciling the imports
 // with the registry or making one (HostImportFor may take a registry lease): a hint for choices
 // made outside the device lock (a sampled texture's path, a dispatch's pre-sync); the path taken

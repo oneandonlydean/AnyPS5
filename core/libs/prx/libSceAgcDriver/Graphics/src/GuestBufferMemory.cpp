@@ -334,6 +334,84 @@ bool sameRange(const HostImport& entry, const GuestAllocations::Lease& lease) {
     return current != nullptr && !entry.range.owner_before(current) && !current.owner_before(entry.range);
 }
 
+}
+
+std::optional<HostMapping> ParseHostMapping(std::string_view line) {
+    const auto field = [&line]() {
+        const auto start = line.find_first_not_of(" \t\r\n");
+        if (start == std::string_view::npos) {
+            line = {};
+            return std::string_view{};
+        }
+        line.remove_prefix(start);
+        const auto stop = std::min(line.find_first_of(" \t\r\n"), line.size());
+        const auto word = line.substr(0, stop);
+        line.remove_prefix(stop);
+        return word;
+    };
+    const auto hex = [](std::string_view text, std::uint64_t& value) {
+        if (text.empty() || text.size() > 16) return false;
+        value = 0;
+        for (const char c : text) {
+            const int digit = c >= '0' && c <= '9' ? c - '0' : c >= 'a' && c <= 'f' ? c - 'a' + 10 : -1;
+            if (digit < 0) return false;
+            value = value << 4u | static_cast<std::uint64_t>(digit);
+        }
+        return true;
+    };
+    const auto range = field();
+    const auto dash = range.find('-');
+    HostMapping mapping;
+    if (dash == std::string_view::npos || !hex(range.substr(0, dash), mapping.begin) || !hex(range.substr(dash + 1), mapping.end) || mapping.end <= mapping.begin) return std::nullopt;
+    const auto permissions = field();
+    if (permissions.size() != 4) return std::nullopt;
+    mapping.readable = permissions[0] == 'r';
+    mapping.writable = permissions[1] == 'w';
+    mapping.shared = permissions[3] == 's';
+    field();
+    field();
+    const auto inode = field();
+    if (inode.empty()) return std::nullopt;
+    mapping.fileBacked = inode.find_first_not_of('0') != std::string_view::npos;
+    return mapping;
+}
+
+const char* HostImportRefusal(std::span<const HostMapping> mappings, std::uint64_t begin, std::uint64_t end) {
+    if (end <= begin) return "an empty range";
+    auto cursor = begin;
+    for (const auto& mapping : mappings) {
+        if (mapping.end <= cursor) continue;
+        if (mapping.begin > cursor) break;
+        if (!mapping.readable || !mapping.writable) return "read-only or inaccessible pages";
+        if (end - begin <= PoisoningImportBytes && mapping.fileBacked && !mapping.shared) return "private file-backed pages";
+        cursor = mapping.end;
+        if (cursor >= end) return nullptr;
+    }
+    return "unmapped pages";
+}
+
+std::vector<HostMapping> HostMappings(std::uint64_t begin, std::uint64_t end) {
+    std::vector<HostMapping> mappings;
+#ifndef _WIN32
+    std::FILE* maps = std::fopen("/proc/self/maps", "r");
+    if (maps == nullptr) return mappings;
+    char line[4096];
+    while (std::fgets(line, sizeof(line), maps) != nullptr) {
+        const auto mapping = ParseHostMapping(line);
+        if (!mapping.has_value() || mapping->end <= begin) continue;
+        if (mapping->begin >= end) break;
+        mappings.push_back(*mapping);
+    }
+    std::fclose(maps);
+#else
+    static_cast<void>(begin);
+    static_cast<void>(end);
+#endif
+    return mappings;
+}
+
+namespace {
+
 const HostImport* importAllocation(const Context& context, HostImports& state, std::uint64_t base, std::uint64_t bytes, const GuestAllocations::Lease& lease) {
     if (const auto found = state.imports.find(base); found != state.imports.end()) {
         if (found->second.bytes == bytes && sameRange(found->second, lease)) return &found->second;
@@ -404,6 +482,12 @@ const HostImport* importAllocation(const Context& context, HostImports& state, s
             throw std::runtime_error(text);
         }
         entry.alias = GuestArena::GuestArenaMapAlias_nid_postfix(static_cast<std::uintptr_t>(base), static_cast<std::size_t>(bytes));
+    }
+#else
+    if (const char* refusal = HostImportRefusal(HostMappings(base, base + bytes), base, base + bytes)) {
+        state.failed.insert(base);
+        std::fprintf(stderr, "[gpu] host import of 0x%llx+0x%llx not attempted: %s; the range is copied\n", static_cast<unsigned long long>(base), static_cast<unsigned long long>(bytes), refusal);
+        return nullptr;
     }
 #endif
     decideImportWatch(context, state);
