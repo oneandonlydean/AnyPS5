@@ -269,6 +269,54 @@ void srgb8TargetTests() {
     setProxyVariable("");
 }
 
+void hostImportRefusalTests() {
+    using AgcDriver::Graphics::HostImportRefusal;
+    using AgcDriver::Graphics::HostMapping;
+    using AgcDriver::Graphics::ParseHostMapping;
+    const auto parse = [](std::string_view line) {
+        const auto mapping = ParseHostMapping(line);
+        Require(mapping.has_value(), "a /proc/self/maps line did not parse: " + std::string(line));
+        return *mapping;
+    };
+    const auto image = parse("55c30f4c8000-55c3169b6000 r--p 00004000 103:02 9437219                   /opt/title/eboot.linux");
+    Require(image.begin == 0x55c30f4c8000ull && image.end == 0x55c3169b6000ull && image.readable && !image.writable && !image.shared && image.fileBacked, "an executable image line parsed wrong");
+    const auto data = parse("55c31849c000-55c31d79b000 rw-p 08fd8000 103:02 9437219                   /opt/title/eboot.linux");
+    Require(data.readable && data.writable && !data.shared && data.fileBacked, "a private writable file line parsed wrong");
+    const auto direct = parse("500000000-587400000 rw-s 00000000 00:01 2049                       /memfd:direct memory (deleted)");
+    Require(direct.begin == 0x500000000ull && direct.end == 0x587400000ull && direct.writable && direct.shared && direct.fileBacked, "a shared memfd line parsed wrong");
+    const auto heap = parse("55c349800000-55c34b000000 rw-p 00000000 00:00 0                          [heap]");
+    Require(heap.writable && !heap.shared && !heap.fileBacked, "the brk heap parsed as file-backed");
+    const auto anonymous = parse("7fab9c1cc000-7fab9c34c000 rw-p 00000000 00:00 0 ");
+    Require(anonymous.writable && !anonymous.fileBacked, "an anonymous mapping parsed wrong");
+    Require(!parse("7fab9c1cc000-7fab9c34c000 rw-p 00000000 00:00 0\n").fileBacked, "an anonymous mapping read with its newline parsed as file-backed");
+    const auto none = parse("7fab9c34c000-7fab9c35c000 ---p 00000000 00:00 0");
+    Require(!none.readable && !none.writable, "an inaccessible mapping parsed as accessible");
+    Require(!ParseHostMapping("").has_value() && !ParseHostMapping("not a mapping").has_value() && !ParseHostMapping("2000-1000 rw-p 00000000 00:00 0").has_value(), "a malformed maps line parsed");
+
+    const std::vector<HostMapping> mappings{
+        {0x10000, 0x20000, true, true, false, false},
+        {0x20000, 0x30000, true, true, true, true},
+        {0x30000, 0x31000, true, false, false, false},
+        {0x40000, 0x50000, true, true, false, true},
+        {0x50000, 0x51000, false, false, false, false},
+    };
+    Require(HostImportRefusal(mappings, 0x10000, 0x20000) == nullptr, "anonymous writable memory was refused");
+    Require(HostImportRefusal(mappings, 0x18000, 0x28000) == nullptr, "anonymous memory followed by shared memory was refused");
+    Require(HostImportRefusal(mappings, 0x20000, 0x30000) == nullptr, "shared memfd memory was refused");
+    Require(HostImportRefusal(mappings, 0x2f000, 0x31000) != nullptr, "a range ending in a read-only page was offered");
+    Require(HostImportRefusal(mappings, 0x30000, 0x31000) != nullptr, "a read-only page was offered");
+    Require(HostImportRefusal(mappings, 0x31000, 0x32000) != nullptr, "an unmapped page was offered");
+    Require(HostImportRefusal(mappings, 0x2f000, 0x32000) != nullptr, "a range running past its mappings was offered");
+    Require(HostImportRefusal(mappings, 0x40000, 0x41000) != nullptr, "a small private file-backed range was offered");
+    Require(HostImportRefusal(mappings, 0x40000, 0x50000) != nullptr, "a 64 KiB private file-backed range was offered");
+    const std::vector<HostMapping> large{{0x100000, 0x200000, true, true, false, true}};
+    Require(HostImportRefusal(large, 0x100000, 0x111000) == nullptr, "a private file-backed range past 64 KiB, which the driver imports, was refused");
+    Require(HostImportRefusal(mappings, 0x50000, 0x51000) != nullptr, "an inaccessible page was offered");
+    Require(HostImportRefusal(mappings, 0x8000, 0x11000) != nullptr, "a range starting before its mappings was offered");
+    Require(HostImportRefusal({}, 0x10000, 0x11000) != nullptr, "a range without mappings was offered");
+    Require(HostImportRefusal(mappings, 0x10000, 0x10000) != nullptr, "an empty range was offered");
+}
+
 void hardwareScreenOffsetTests() {
     auto queue = makeState();
     queue.context[0x90] = 0x80010003;
@@ -2186,6 +2234,7 @@ int main() {
             AgcDriver::Graphics::ValidateDepthBounds(unrestricted, bounded);
         }
         stateTests();
+        hostImportRefusalTests();
         hardwareScreenOffsetTests();
         srgb8TargetTests();
         DepthClipTests();
