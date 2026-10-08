@@ -83,6 +83,7 @@ struct ImageResource {
     bool packed = false;
     bool fmaskCompatible = true;
     bool depthBitsCompatible = true;
+    bool gathered = false;
     std::uint32_t byElements = 0;
     std::uint32_t byComponents = 0;
     IrBufferFormat packedFormat = IrBufferFormat::Invalid;

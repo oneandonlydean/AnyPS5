@@ -24,6 +24,7 @@ constexpr std::uint32_t Words = 32;
 constexpr std::uint32_t Size = 16;
 constexpr std::uint32_t Levels = 5;
 constexpr std::uint32_t Format8888UNorm = 56;
+constexpr std::uint32_t Type1D = 8;
 constexpr std::uint32_t Type2D = 9;
 constexpr std::uint32_t Type3D = 10;
 constexpr std::uint32_t Depth = 2;
@@ -34,6 +35,7 @@ constexpr std::uint32_t PlainResult = 24;
 alignas(256) std::array<std::uint32_t, Threads * Words> Buffer{};
 alignas(256) std::array<std::uint8_t, 16384> Texels{};
 alignas(256) std::array<std::uint8_t, 16384> Volume{};
+alignas(256) std::array<std::uint8_t, 4096> Line{};
 
 alignas(256) constexpr std::array<std::uint32_t, 71> Code{
     0x34020087, 0xe0301000, 0x80000201, 0xe0301004, 0x80000301, 0xe0301008, 0x80000401, 0xe030100c,
@@ -51,6 +53,12 @@ alignas(256) constexpr std::array<std::uint32_t, 17> VolumeCode{
     0x34020087, 0xe030104c, 0x80001301, 0xe0301050, 0x80001401, 0xbf8c3f70, 0xf0001f08, 0x00010c13,
     0xe0701070, 0x80000c01, 0xe0701074, 0x80000d01, 0xe0701078, 0x80000e01, 0xe070107c, 0x80000f01,
     0xbf810000,
+};
+
+alignas(256) constexpr std::array<std::uint32_t, 19> DeepCode{
+    0x34020087, 0xe030104c, 0x80001301, 0xe0301050, 0x80001401, 0xe0301054, 0x80001501, 0xbf8c3f70,
+    0xf0001f10, 0x00010c13, 0xe0701070, 0x80000c01, 0xe0701074, 0x80000d01, 0xe0701078, 0x80000e01,
+    0xe070107c, 0x80000f01, 0xbf810000,
 };
 
 alignas(256) constexpr std::array<std::uint32_t, 11> NarrowCode{
@@ -138,6 +146,58 @@ std::array<std::uint32_t, 8> VolumeDescriptor() {
         0u,
         0u,
     };
+}
+
+std::array<std::uint32_t, 8> LineDescriptor() {
+    const auto address = static_cast<std::uint64_t>(reinterpret_cast<std::uintptr_t>(Line.data()));
+    return {
+        static_cast<std::uint32_t>(address >> 8u),
+        static_cast<std::uint32_t>((address >> 40u) & 0xffu) | (Format8888UNorm << 20u) | (((Size - 1u) & 3u) << 30u),
+        (Size - 1u) >> 2u,
+        0xfacu | ((Levels - 1u) << 16u) | (Type1D << 28u),
+        0u,
+        (Levels - 1u) << 4u,
+        0u,
+        0u,
+    };
+}
+
+void FillLine() {
+    const auto geometry = AgcDriver::Graphics::DescribeSurface(AgcDriver::Graphics::DecodeTextureResource(LineDescriptor()));
+    Require(geometry.guestBytes <= Line.size(), "image address dimension: the line does not fit the texel storage");
+    Line.fill(0xeeu);
+    for (std::uint32_t level = 0; level < Levels; ++level) {
+        const auto& mip = geometry.mips.at(level);
+        for (std::uint32_t x = 0; x < mip.width; ++x) {
+            auto* texel = &Line[mip.tiledOffset + x * 4u];
+            texel[0] = static_cast<std::uint8_t>(level);
+            texel[1] = static_cast<std::uint8_t>(x);
+            texel[2] = 0u;
+            texel[3] = 255u;
+        }
+    }
+}
+
+void CheckLine() {
+    for (std::uint32_t tid = 0; tid < Threads; ++tid) {
+        const auto sample = SampleOf(tid);
+        const std::array<std::uint32_t, 4> expected{0u, sample.x >> sample.level, 0u, 255u};
+        for (std::uint32_t component = 0; component < 4u; ++component) {
+            const float value = std::bit_cast<float>(Buffer[tid * Words + PlainResult + 4u + component]) * 255.0f;
+            Require(std::lround(value) == static_cast<long>(expected[component]), "image_load 2d on a 1D texture: thread " + std::to_string(tid) + " component " + std::to_string(component) + " is " + std::to_string(value) + ", expected " + std::to_string(expected[component]));
+        }
+    }
+}
+
+void CheckPlane() {
+    for (std::uint32_t tid = 0; tid < Threads; ++tid) {
+        const auto sample = SampleOf(tid);
+        const std::array<std::uint32_t, 4> expected{0u, sample.x >> sample.level, sample.y >> sample.level, 255u};
+        for (std::uint32_t component = 0; component < 4u; ++component) {
+            const float value = std::bit_cast<float>(Buffer[tid * Words + PlainResult + 4u + component]) * 255.0f;
+            Require(std::lround(value) == static_cast<long>(expected[component]), "image_load 3d on a 2D texture: thread " + std::to_string(tid) + " component " + std::to_string(component) + " is " + std::to_string(value) + ", expected " + std::to_string(expected[component]));
+        }
+    }
 }
 
 std::uint8_t VolumeSliceMarker(std::uint32_t z) {
@@ -233,9 +293,14 @@ int main() {
         FillTexture();
         Run(*device, Code, TextureDescriptor(Texels.data()));
         Check();
+        Run(*device, DeepCode, TextureDescriptor(Texels.data()));
+        CheckPlane();
         FillVolume();
         Run(*device, VolumeCode, VolumeDescriptor());
         CheckVolume();
+        FillLine();
+        Run(*device, VolumeCode, LineDescriptor());
+        CheckLine();
         RequireRefused(*device);
         std::puts("image address dimension tests passed");
         return 0;
