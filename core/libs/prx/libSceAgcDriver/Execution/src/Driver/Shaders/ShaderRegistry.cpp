@@ -387,6 +387,21 @@ std::vector<PreparedShaders::Entry> PrepareRegistered(const ShaderSnapshot& snap
     return entries;
 }
 
+bool RefersToRegisteredHeader(const ShaderSnapshot& snapshot, const Shader* shader) {
+    if (snapshot.headerAddress == reinterpret_cast<std::uintptr_t>(shader)) return true;
+    const auto registered = ReadHeader(snapshot);
+    Shader passed;
+    std::memcpy(&passed, static_cast<const void*>(shader), sizeof(passed));
+    return passed.user_data == nullptr && passed.file_header == registered.file_header && passed.version == registered.version &&
+        passed.code == registered.code && passed.cx_registers == registered.cx_registers && passed.sh_registers == registered.sh_registers &&
+        passed.specials == registered.specials && passed.input_semantics == registered.input_semantics && passed.output_semantics == registered.output_semantics &&
+        passed.header_size == registered.header_size && passed.shader_size == registered.shader_size &&
+        passed.embedded_constant_buffer_size_dqw == registered.embedded_constant_buffer_size_dqw && passed.target == registered.target &&
+        passed.num_input_semantics == registered.num_input_semantics && passed.scratch_size_dw_per_thread == registered.scratch_size_dw_per_thread &&
+        passed.num_output_semantics == registered.num_output_semantics && passed.special_sizes_bytes == registered.special_sizes_bytes &&
+        passed.type == registered.type && passed.num_cx_registers == registered.num_cx_registers && passed.num_sh_registers == registered.num_sh_registers;
+}
+
 }
 
 std::vector<PreparedGraphicsStage> PrepareGraphicsStages(const DrawDecode& decoded, const ShaderRecompiler::SpirvTarget& target) {
@@ -462,7 +477,7 @@ void Driver::ResolveGraphicsStagesAbi(std::span<const Shader* const> stages, std
             require(registry != nullptr && registry->contains(address), "graphics ABI refers to an unregistered shader");
             if (owner == nullptr) owner = registry->at(address);
             const auto& snapshot = *registry->at(address);
-            require(snapshot.headerAddress == reinterpret_cast<std::uintptr_t>(shader), "graphics ABI refers to a replaced shader header");
+            require(RefersToRegisteredHeader(snapshot, shader), "graphics ABI refers to a replaced shader header");
             require(snapshot.registeredState != nullptr, "registered shader state is missing");
             const auto& registered = *snapshot.registeredState;
             for (const auto& [offset, value] : registered.shader) state.shader.insert_or_assign(offset, value);
@@ -527,7 +542,7 @@ void Driver::ResolveShaderAbi(const Shader* shader, std::span<const ShaderRegist
         const auto address = reinterpret_cast<std::uintptr_t>(const_cast<const void*>(shader->code));
         require(shaders != nullptr && shaders->contains(address), "static ABI refers to an unregistered shader");
         snapshot = shaders->at(address);
-        require(snapshot->headerAddress == reinterpret_cast<std::uintptr_t>(shader), "static ABI refers to a replaced shader header");
+        require(RefersToRegisteredHeader(*snapshot, shader), "static ABI refers to a replaced shader header");
     }
     require(snapshot->registeredState != nullptr, "registered shader state is missing");
     QueueState state{};
@@ -589,7 +604,7 @@ void Driver::ResolveGraphicsAbi(const Shader* vertex, const Shader* pixel, std::
             const auto address = reinterpret_cast<std::uintptr_t>(const_cast<const void*>(shader->code));
             require(shaders != nullptr && shaders->contains(address), "rectangle ABI refers to an unregistered shader");
             const auto snapshot = shaders->at(address);
-            require(snapshot->headerAddress == reinterpret_cast<std::uintptr_t>(shader), "rectangle ABI refers to a replaced shader header");
+            require(RefersToRegisteredHeader(*snapshot, shader), "rectangle ABI refers to a replaced shader header");
             return snapshot;
         };
         front = lookup(vertex);
