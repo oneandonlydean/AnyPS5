@@ -827,6 +827,23 @@ void verifyHalfWaveReduction() {
     auto fmaxOfZero = fmax;
     fmaxOfZero[6] = 0u;
     expectFailure([&] { static_cast<void>(pixel(fmaxOfZero, 32u, true)); }, "v_readlane_b32 of lane 63 is outside the 32-lane host subgroup", "half-wave reduction: a v_max_f32 scan of 0 outside the live lanes read lane 63");
+    const auto vertex = [](std::vector<std::uint32_t> code, std::uint32_t subgroupSize) {
+        *std::find(code.begin(), code.end(), 0xf800180fu) = 0xf80008cfu;
+        RecompileRequest request{};
+        request.shader = {ShaderStage::Vertex, 0x10000u, code, 0, {}};
+        request.context.waveSize = 64;
+        request.context.vertex = ShaderVertexStageInfo{};
+        request.target.vulkanVersion = 0x00401000u;
+        request.target.spirvVersion = 0x00010300u;
+        request.target.subgroupSize = subgroupSize;
+        request.target.supportedCapabilities = capabilities;
+        request.target.fragmentShaderBarycentricEnabled = false;
+        request.layout.pushConstantSizeBytes = 128;
+        request.useCache = false;
+        return Recompile(request).spirv;
+    };
+    require(reductions(vertex(scan(0xffffffffu, 0x26000000u, 0x83800000u), 32u), spv::OpGroupNonUniformUMin) == 1u, "half-wave reduction: the wave64 vertex UMin scan, whose entry EXEC is every invocation, did not read lane 31 as a subgroup UMin on 32 lanes");
+    require(halves(vertex(scan(0x80000000u, 0x24000000u, 0x84000000u), 64u), spv::OpGroupNonUniformSMax, 0x80000000u), "half-wave reduction: the wave64 vertex SMax scan did not read lanes 31 and 63 as reductions of host invocations 0-31 and 32-63 on 64 lanes");
     const auto umin = scan(0xffffffffu, 0x26000000u, 0x83800000u);
     const auto patched = [&umin](std::initializer_list<std::pair<std::size_t, std::uint32_t>> words) {
         auto code = umin;
