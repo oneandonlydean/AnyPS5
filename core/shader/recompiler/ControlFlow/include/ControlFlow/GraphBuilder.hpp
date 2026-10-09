@@ -27,6 +27,7 @@ struct SwappcCall {
 class GraphBuilder {
 public:
     [[nodiscard]] ControlFlowGraph Build(const RdnaProgram& program, const SwappcInfo* swappc = nullptr) const;
+    [[nodiscard]] bool HasDataDependentCall(const RdnaProgram& program, const SwappcInfo* swappc = nullptr) const;
 
 private:
     [[nodiscard]] std::vector<BasicBlock> splitIntoBlocks(const RdnaProgram& program, const std::vector<SwappcCall>& calls) const;

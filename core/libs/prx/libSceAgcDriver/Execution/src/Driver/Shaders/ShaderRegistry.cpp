@@ -167,6 +167,18 @@ void PublishRegisteredShader(std::shared_ptr<ShaderRegistry>& registry, const st
     transaction.Commit();
 }
 
+namespace {
+
+void RequireStaticCallTargets(const ShaderSnapshot& snapshot, std::size_t codeOffset, const ShaderRecompiler::RecompileRequest& request) {
+    if (std::ranges::any_of(snapshot.prepared->entries, [&](const auto& entry) { return entry.codeOffset == codeOffset; })) return;
+    const ShaderRecompiler::SwappcInfo swappc{request.context.vertex.has_value(), request.context.userDataBaseRegister, static_cast<std::uint32_t>(request.context.userData.size())};
+    if (ShaderRecompiler::GraphBuilder{}.HasDataDependentCall(ShaderRecompiler::RdnaInstructionDecoder{}.Decode(request.shader.code), &swappc)) {
+        throw std::runtime_error("AGC driver: shader at address=" + std::to_string(request.shader.codeAddress) + " calls an s_swappc_b64 target taken from dispatch data; resolving it at dispatch is not implemented");
+    }
+}
+
+}
+
 std::shared_ptr<const ShaderRecompiler::SourceHandle> SourceHandleFor(const ShaderSnapshot& snapshot, std::size_t codeOffset, const ShaderRecompiler::RecompileRequest& request) {
     struct PreparedKeyStorage {};
     auto& key = HostThreadLocal<std::vector<std::uint64_t>, PreparedKeyStorage>();
@@ -182,6 +194,7 @@ std::shared_ptr<const ShaderRecompiler::SourceHandle> SourceHandleFor(const Shad
         snapshot.prepared->entries.push_back({codeOffset, handle});
         return handle;
     }
+    RequireStaticCallTargets(snapshot, codeOffset, request);
     std::string layouts;
     for (const auto& entry : snapshot.prepared->entries) {
         if (entry.codeOffset != codeOffset || entry.handle == nullptr || entry.handle->artifact == nullptr) continue;
@@ -227,6 +240,7 @@ ShaderRecompiler::PreparedShaderInvocation InvocationFor(const ShaderSnapshot& s
         snapshot.prepared->entries.push_back({codeOffset, std::move(handle)});
         return std::move(*invocation);
     }
+    RequireStaticCallTargets(snapshot, codeOffset, request);
     std::string layouts;
     for (const auto& entry : snapshot.prepared->entries) {
         if (entry.codeOffset != codeOffset || entry.handle == nullptr || entry.handle->artifact == nullptr) continue;
@@ -366,6 +380,7 @@ std::vector<PreparedShaders::Entry> PrepareRegistered(const ShaderSnapshot& snap
     std::vector<std::uint32_t> userData(userCount);
     if (stage != Stage::Compute && stage != Stage::Fragment && snapshot.type != 6) vertex = Graphics::DecodeVertexStageInfo(snapshot.header, snapshot.headerAddress, userData, nullptr, true);
     const ShaderRecompiler::SwappcInfo swappc{vertex.has_value(), firstUser, userCount};
+    if (ShaderRecompiler::GraphBuilder{}.HasDataDependentCall(decoded, &swappc)) return {};
     auto graph = ShaderRecompiler::GraphBuilder{}.Build(decoded, &swappc);
     ShaderRecompiler::Structurizer{}.Structurize(graph);
     const std::array<ShaderRecompiler::MemoryRegion, 2> memory{{{snapshot.codeAddress, std::as_bytes(std::span(snapshot.code))}, {snapshot.headerAddress, snapshot.header}}};

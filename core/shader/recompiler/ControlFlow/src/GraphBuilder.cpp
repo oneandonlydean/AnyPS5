@@ -463,6 +463,31 @@ const SwappcCall* findReturnAt(const std::vector<SwappcCall>& calls, std::uint32
     return nullptr;
 }
 
+struct CallTarget {
+    bool staticTarget = false;
+    bool fetch = false;
+    std::uint32_t programCounter = 0;
+    std::uint32_t targetIndex = InvalidControlFlowId;
+};
+
+CallTarget classifyCallTarget(const RdnaProgram& program, std::uint32_t index, const SwappcInfo* swappc) {
+    const auto& instruction = program.instructions[index];
+    CallTarget result;
+    result.programCounter = instruction.branchTarget;
+    result.staticTarget = instruction.op == RdnaOpcode::SCallB64 || resolveSetpcTarget(program, index, result.programCounter);
+    result.targetIndex = result.staticTarget ? instructionIndexOfProgramCounter(program, result.programCounter) : InvalidControlFlowId;
+    const bool positional = std::all_of(program.instructions.begin(), program.instructions.begin() + index, isFetchCallPrefixOpcode);
+    const std::uint32_t targetRegister = scalarIndex(instruction.source0);
+    const bool userDataPair = swappc != nullptr && targetRegister != NoScalarRegister &&
+        targetRegister >= swappc->userDataBaseRegister && targetRegister + 1u < swappc->userDataBaseRegister + swappc->userDataCount &&
+        std::none_of(program.instructions.begin(), program.instructions.end(), [&](const RdnaInstruction& other) {
+            return writesScalar(other, targetRegister) || writesScalar(other, targetRegister + 1u);
+        });
+    const bool outsideProgram = result.staticTarget && result.targetIndex == InvalidControlFlowId;
+    result.fetch = instruction.op == RdnaOpcode::SSwappcB64 && swappc != nullptr && swappc->fetchCallAllowed && positional && (userDataPair || outsideProgram);
+    return result;
+}
+
 std::vector<SwappcCall> analyzeSwappcCalls(const RdnaProgram& program, const SwappcInfo* swappc) {
     std::vector<SwappcCall> calls;
     for (std::uint32_t index = 0; index < program.instructions.size(); ++index) {
@@ -483,30 +508,21 @@ std::vector<SwappcCall> analyzeSwappcCalls(const RdnaProgram& program, const Swa
                     ": link register s[" + std::to_string(call.linkRegister) + "] is shared with another call");
             }
         }
-        std::uint32_t target = instruction.branchTarget;
-        const bool staticTarget = instruction.op == RdnaOpcode::SCallB64 || resolveSetpcTarget(program, index, target);
-        call.targetIndex = staticTarget ? instructionIndexOfProgramCounter(program, target) : InvalidControlFlowId;
+        const CallTarget target = classifyCallTarget(program, index, swappc);
+        call.targetIndex = target.targetIndex;
         if (instruction.op == RdnaOpcode::SCallB64 && call.targetIndex == InvalidControlFlowId) {
-            throw std::invalid_argument("s_call_b64 at program counter " + toHexString(instruction.programCounter) + " targets invalid instruction boundary " + toHexString(target));
+            throw std::invalid_argument("s_call_b64 at program counter " + toHexString(instruction.programCounter) + " targets invalid instruction boundary " + toHexString(target.programCounter));
         }
-        const bool positional = std::all_of(program.instructions.begin(), program.instructions.begin() + index, isFetchCallPrefixOpcode);
-        const std::uint32_t targetRegister = scalarIndex(instruction.source0);
-        const bool userDataPair = swappc != nullptr && targetRegister != NoScalarRegister &&
-            targetRegister >= swappc->userDataBaseRegister && targetRegister + 1u < swappc->userDataBaseRegister + swappc->userDataCount &&
-            std::none_of(program.instructions.begin(), program.instructions.end(), [&](const RdnaInstruction& other) {
-                return writesScalar(other, targetRegister) || writesScalar(other, targetRegister + 1u);
-            });
-        const bool outsideProgram = staticTarget && call.targetIndex == InvalidControlFlowId;
-        if (instruction.op == RdnaOpcode::SSwappcB64 && swappc != nullptr && swappc->fetchCallAllowed && positional && (userDataPair || outsideProgram)) {
+        if (target.fetch) {
             call.fetch = true;
             call.returnTargetProgramCounter = instructionEndProgramCounter(instruction);
             calls.push_back(call);
             continue;
         }
-        if (!staticTarget || call.targetIndex == InvalidControlFlowId) {
+        if (!target.staticTarget || call.targetIndex == InvalidControlFlowId) {
             throw std::invalid_argument("computed/data-dependent s_swappc_b64 call target at program counter " + toHexString(instruction.programCounter) + " is not statically resolvable");
         }
-        call.targetProgramCounter = target;
+        call.targetProgramCounter = target.programCounter;
         calls.push_back(call);
     }
 
@@ -888,6 +904,15 @@ void GraphBuilder::linkBlocks(std::vector<BasicBlock>& blocks, const RdnaProgram
     for (auto& block : blocks) {
         sortUnique(block.predecessors);
     }
+}
+
+bool GraphBuilder::HasDataDependentCall(const RdnaProgram& program, const SwappcInfo* swappc) const {
+    for (std::uint32_t index = 0; index < program.instructions.size(); ++index) {
+        if (program.instructions[index].op != RdnaOpcode::SSwappcB64) continue;
+        const CallTarget target = classifyCallTarget(program, index, swappc);
+        if (!target.staticTarget && !target.fetch) return true;
+    }
+    return false;
 }
 
 ControlFlowGraph GraphBuilder::Build(const RdnaProgram& program, const SwappcInfo* swappc) const {
