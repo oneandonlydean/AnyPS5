@@ -428,7 +428,7 @@ namespace {
 
 struct RangeEdit {
     std::vector<std::uint64_t> erased;
-    std::vector<std::pair<std::uint64_t, std::shared_ptr<const Range>>> added;
+    std::map<std::uint64_t, std::shared_ptr<const Range>> added;
 };
 
 RangeEdit replaceRange(const void* pointer, std::size_t bytes, bool remove, bool readable, bool writable, bool gpu) {
@@ -450,7 +450,7 @@ RangeEdit replaceRange(const void* pointer, std::size_t bytes, bool remove, bool
         require(base <= cursor, "guest protection or unmap range has a hole");
         edit.erased.push_back(base);
         const auto insert = [&](std::uint64_t from, std::uint64_t to, bool canRead, bool canWrite, bool gpuMapped) {
-            if (from < to) edit.added.emplace_back(from, std::make_shared<const Range>(Range{from, static_cast<std::size_t>(to - from), canRead, canWrite, range.allocationAddress, range.allocationBytes, range.releasable, gpuMapped}));
+            if (from < to) edit.added.emplace(from, std::make_shared<const Range>(Range{from, static_cast<std::size_t>(to - from), canRead, canWrite, range.allocationAddress, range.allocationBytes, range.releasable, gpuMapped}));
         };
         insert(base, std::max(base, address), range.readable, range.writable, range.gpu);
         if (!remove) insert(std::max(base, address), std::min(finish, end), readable, writable, gpu);
@@ -464,7 +464,10 @@ RangeEdit replaceRange(const void* pointer, std::size_t bytes, bool remove, bool
 void applyEdit(RangeEdit& edit) {
     auto& ranges = registry().ranges;
     for (const auto key : edit.erased) ranges.erase(key);
-    for (auto& [key, value] : edit.added) ranges[key] = std::move(value);
+    while (!edit.added.empty()) {
+        const auto inserted = ranges.insert(edit.added.extract(edit.added.begin()));
+        require(inserted.inserted, "guest allocation registry edit overlaps a kept range");
+    }
 }
 
 bool allocationRemainsAfter(const RangeEdit& edit, const Range& allocation) {
