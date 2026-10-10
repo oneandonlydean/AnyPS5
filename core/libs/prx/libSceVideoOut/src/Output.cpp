@@ -311,7 +311,6 @@ int APS5_VABI sceVideoOutVrrPegToFixedRate() try {
     LibcAwaitExit_nid_postfix();
 }
 
-APS5_EXPORT("kP2L8t3j-aM", sceVideoOutAddVrrStatusFlagsPrivilege);
 int APS5_VABI sceVideoOutAddVrrStatusFlagsPrivilege() {
     return 0;
 }

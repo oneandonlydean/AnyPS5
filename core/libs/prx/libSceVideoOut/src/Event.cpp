@@ -135,7 +135,6 @@ int APS5_VABI sceVideoOutAddOutputModeEvent(KernelEqueue eq, int handle, void* u
     LibcAwaitExit_nid_postfix();
 }
 
-APS5_EXPORT("LibwuIonIBw", sceVideoOutAddVrrActiveStatusEvent);
 int APS5_VABI sceVideoOutAddVrrActiveStatusEvent(KernelEqueue eq, int handle, void* udata) try {
     return registerVideoOutEvent(handle, eq, VIDEO_OUT_EVENT_VRR_STATUS, udata);
 } catch (const ProcessShutdown&) {
