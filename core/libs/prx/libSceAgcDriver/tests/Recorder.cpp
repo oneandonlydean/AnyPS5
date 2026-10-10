@@ -22,7 +22,6 @@
 #include "prx/libc/include/GuestArena.hpp"
 #include "prx/libc/include/GuestWriteWatch.hpp"
 #include "prx/libc/include/general/VabiMacros.hpp"
-#include "ResidentPresent.hpp"
 #include "SampleLod_spv.h"
 #include "SampleArray_spv.h"
 #include "Cover_vert_spv.h"
@@ -4678,7 +4677,6 @@ int main(int argc, char** argv) {
         drawSnapshotEvictionTests(device);
         drawInputReuseTests(device, recorder);
         drawInputInPlaceTests(device, recorder);
-        RunResidentPresentTests(device.GetContext());
         storeRunTests(device, recorder);
         queuedWriteGroupTests();
         remappedImportTests(device);

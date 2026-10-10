@@ -128,18 +128,6 @@ void GpuColorTransfer::dispatch(VkCommandBuffer commands, bool toTiled, bool swa
     barrier(commands, VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT, VK_PIPELINE_STAGE_TRANSFER_BIT, 0, 1, &after, 0, nullptr, 0, nullptr);
 }
 
-void GpuColorTransfer::DetileImage(VkCommandBuffer commands, VkImage image, VkImageLayout layout, std::uint32_t newWidth, std::uint32_t newHeight, ColorTileMode newMode, bool swapRedBlue, bool tenBit) {
-    Require(commands != VK_NULL_HANDLE && image != VK_NULL_HANDLE, "color transfer image source is unavailable");
-    prepare(newWidth, newHeight, newMode);
-    Require(tiledDevice->Size() >= static_cast<VkDeviceSize>(width) * height * 4u, "color transfer buffer is smaller than the image");
-    RecordMemoryBarrier(context, commands, VK_PIPELINE_STAGE_TRANSFER_BIT | VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT, VK_PIPELINE_STAGE_TRANSFER_BIT, VK_ACCESS_TRANSFER_WRITE_BIT | VK_ACCESS_TRANSFER_READ_BIT | VK_ACCESS_SHADER_READ_BIT | VK_ACCESS_SHADER_WRITE_BIT, VK_ACCESS_TRANSFER_WRITE_BIT);
-    VkBufferImageCopy copy{};
-    copy.imageSubresource = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 0, 1};
-    copy.imageExtent = {width, height, 1};
-    context.Function<PFN_vkCmdCopyImageToBuffer>("vkCmdCopyImageToBuffer")(commands, image, layout, tiledDevice->Handle(), 1, &copy);
-    dispatch(commands, false, swapRedBlue, tenBit, false);
-}
-
 void GpuColorTransfer::Detile(VkCommandBuffer commands, bool swapRedBlue, bool tenBit) {
     convert(commands, false, swapRedBlue, tenBit);
 }

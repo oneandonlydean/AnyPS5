@@ -3,8 +3,10 @@
 
 #define VK_NO_PROTOTYPES
 #include <vulkan/vulkan.h>
+#include "prx/libSceAgcDriver/Execution/include/AspectFit.hpp"
 #include "prx/libSceAgcDriver/Graphics/include/Context.hpp"
 #include <cstdint>
+#include <vector>
 
 namespace AgcDriver {
 
@@ -30,6 +32,8 @@ public:
     // The aspect-fitting blit of RecordBlit from any image: presenting a resident render target needs
     // no copy into the source image first.
     static void RecordBlitFrom(const Graphics::Context& context, VkCommandBuffer commands, VkImage image, VkImageLayout layout, std::uint32_t width, std::uint32_t height, VkFilter filter, VkImage destinationImage, std::uint32_t destinationWidth, std::uint32_t destinationHeight);
+    void RecordLetterbox(VkCommandBuffer commands, std::uint32_t width, std::uint32_t height, VkImage destinationImage, std::uint32_t destinationWidth, std::uint32_t destinationHeight);
+    static std::vector<AspectFitRect> LetterboxBands(std::uint32_t width, std::uint32_t height, std::uint32_t destinationWidth, std::uint32_t destinationHeight);
     std::uint32_t SourceWidth() const { return sourceWidth; }
     std::uint32_t SourceHeight() const { return sourceHeight; }
 
@@ -42,6 +46,8 @@ private:
     std::uint32_t sourceHeight = 0;
     VkImage sourceImage = VK_NULL_HANDLE;
     VkDeviceMemory sourceMemory = VK_NULL_HANDLE;
+    VkImage blackImage = VK_NULL_HANDLE;
+    VkDeviceMemory blackMemory = VK_NULL_HANDLE;
 };
 
 }
