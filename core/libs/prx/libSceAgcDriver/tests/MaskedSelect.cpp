@@ -636,6 +636,13 @@ int main() {
             case IrOpcode::LoadBufferU32:
                 b.keep(b.select(exec, b.emit(opcode, IrType::U32, {&b.emit(IrOpcode::GetBufferResource, IrType::BufferResource, {}), &written, &b.constant(0u), &b.constant(0u), &active}), old));
                 break;
+            case IrOpcode::ImageRead: {
+                auto& address = b.emit(IrOpcode::MakeImageAddress, IrType::ImageAddress, {&written, &old});
+                auto& image = b.emit(IrOpcode::GetImageResource, IrType::ImageResource, {});
+                auto& read = b.emit(opcode, IrType::U32x4, {&image, &address, &active});
+                b.keep(b.select(exec, b.emit(IrOpcode::CompositeExtractU32x4, IrType::U32, {&read, &b.constant(0u)}), old));
+                break;
+            }
             default:
                 b.emit(opcode, IrType::Void, {&b.emit(IrOpcode::CompositeConstructU32x4, IrType::U32x4, {&written, &old, &old, &old}), &active});
                 break;
@@ -645,11 +652,11 @@ int main() {
     };
 
     passed &= run("a store, load or export whose exec implies the write's exec drops the select", [&] {
-        return guarded(IrOpcode::WriteSharedU32, true, false) && guarded(IrOpcode::LoadBufferU32, true, false) && guarded(IrOpcode::SetAttribute, true, false);
+        return guarded(IrOpcode::WriteSharedU32, true, false) && guarded(IrOpcode::LoadBufferU32, true, false) && guarded(IrOpcode::ImageRead, true, false) && guarded(IrOpcode::SetAttribute, true, false);
     });
 
     passed &= run("a store, load or export under a wider exec keeps the select", [&] {
-        return !guarded(IrOpcode::WriteSharedU32, false, false) && !guarded(IrOpcode::LoadBufferU32, false, false) && !guarded(IrOpcode::SetAttribute, false, false);
+        return !guarded(IrOpcode::WriteSharedU32, false, false) && !guarded(IrOpcode::LoadBufferU32, false, false) && !guarded(IrOpcode::ImageRead, false, false) && !guarded(IrOpcode::SetAttribute, false, false);
     });
 
     passed &= run("a value used as a store's exec keeps the select", [&] {

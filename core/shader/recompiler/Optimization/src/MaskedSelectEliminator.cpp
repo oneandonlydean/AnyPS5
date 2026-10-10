@@ -204,6 +204,7 @@ bool readsOnlyWhereActive(IrOpcode opcode) {
         case IrOpcode::WriteSharedU32x3:
         case IrOpcode::WriteSharedU32x4:
         case IrOpcode::SetAttribute:
+        case IrOpcode::ImageRead:
             return true;
         default:
             return false;
