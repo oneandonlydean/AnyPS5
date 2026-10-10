@@ -266,36 +266,105 @@ bool alwaysTrue(const IrValue* value, std::uint32_t waveSize, std::uint32_t dept
     return bit && isImmediate(bit->low, 0xffffffffu) && isImmediate(bit->high, 0xffffffffu);
 }
 
-bool implies(const IrValue* condition, const IrValue* mask, std::uint32_t waveSize, std::uint32_t depth = 0);
+struct ImplicationKey {
+    const IrValue* first = nullptr;
+    const IrValue* second = nullptr;
 
-bool wordsImply(const IrValue* low, const IrValue* high, const IrValue* mask, std::uint32_t waveSize, std::uint32_t depth) {
-    if (depth > DepthLimit) return false;
-    if (isImmediate(low, 0u) && (waveSize == 32u || isImmediate(high, 0u))) return true;
-    if (low->Opcode() == IrOpcode::CompositeExtractU32x4 && isImmediate(low->Argument(1)->Resolve(), 0u)) {
-        const IrValue* ballot = low->Argument(0)->Resolve();
-        const bool sameBallot = waveSize == 32u || (high->Opcode() == IrOpcode::CompositeExtractU32x4 && high->Argument(0)->Resolve() == ballot && isImmediate(high->Argument(1)->Resolve(), 1u));
-        if (ballot->Opcode() == IrOpcode::Ballot && sameBallot && implies(ballot->Argument(0), mask, waveSize, depth + 1u)) return true;
+    bool operator==(const ImplicationKey&) const = default;
+};
+
+struct ImplicationKeyHash {
+    std::size_t operator()(const ImplicationKey& key) const {
+        return std::hash<const IrValue*>{}(key.first) * 31u ^ std::hash<const IrValue*>{}(key.second);
     }
-    if (low->Opcode() != IrOpcode::BitwiseAnd32) return false;
-    if (waveSize == 32u) return wordsImply(low->Argument(0)->Resolve(), high, mask, waveSize, depth + 1u) || wordsImply(low->Argument(1)->Resolve(), high, mask, waveSize, depth + 1u);
-    if (high->Opcode() != IrOpcode::BitwiseAnd32) return false;
-    for (std::size_t lowIndex = 0; lowIndex < 2u; ++lowIndex) {
-        for (std::size_t highIndex = 0; highIndex < 2u; ++highIndex) {
-            if (wordsImply(low->Argument(lowIndex)->Resolve(), high->Argument(highIndex)->Resolve(), mask, waveSize, depth + 1u)) return true;
+};
+
+class Implications {
+public:
+    Implications(const std::unordered_set<const IrBlock*>& once, const IrValue* mask, std::uint32_t waveSize) : once(once), mask(mask), waveSize(waveSize), always(alwaysTrue(mask, waveSize)) {}
+
+    bool Implies(const IrValue* condition, std::uint32_t depth = 0) {
+        condition = condition->Resolve();
+        if (condition == mask || always) return true;
+        if (condition->HasImmediate()) return condition->Type() == IrType::Bool && !condition->ImmediateBool();
+        const ImplicationKey key{condition, nullptr};
+        if (const auto known = results.find(key); known != results.end()) return known->second;
+        if (depth > ImplicationDepthLimit) return false;
+        results.emplace(key, false);
+        bool result = false;
+        if (condition->Opcode() == IrOpcode::LogicalAnd) {
+            result = Implies(condition->Argument(0), depth + 1u) || Implies(condition->Argument(1), depth + 1u);
+        } else if (condition->IsPhi()) {
+            result = mergesOutsideLoops(*condition);
+            for (std::size_t index = 0; result && index < condition->ArgumentCount(); ++index) {
+                result = Implies(condition->Argument(index), depth + 1u);
+            }
+        } else if (const auto bit = threadBit(condition, waveSize)) {
+            result = wordsImply(bit->low, bit->high, depth + 1u);
         }
+        results[key] = result;
+        return result;
     }
-    return false;
-}
 
-bool implies(const IrValue* condition, const IrValue* mask, std::uint32_t waveSize, std::uint32_t depth) {
-    condition = condition->Resolve();
-    if (condition == mask || alwaysTrue(mask, waveSize)) return true;
-    if (condition->HasImmediate()) return condition->Type() == IrType::Bool && !condition->ImmediateBool();
-    if (depth > DepthLimit) return false;
-    if (condition->Opcode() == IrOpcode::LogicalAnd) return implies(condition->Argument(0), mask, waveSize, depth + 1u) || implies(condition->Argument(1), mask, waveSize, depth + 1u);
-    const auto bit = threadBit(condition, waveSize);
-    return bit && wordsImply(bit->low, bit->high, mask, waveSize, depth + 1u);
-}
+private:
+    static constexpr std::uint32_t ImplicationDepthLimit = 64;
+
+    bool mergesOutsideLoops(const IrValue& phi) const {
+        if (phi.Parent() == nullptr || !once.contains(phi.Parent()) || phi.ArgumentCount() != phi.PhiBlockCount()) return false;
+        for (std::size_t index = 0; index < phi.ArgumentCount(); ++index) {
+            const IrValue* incoming = phi.Argument(index)->Resolve();
+            if (!incoming->HasImmediate() && (incoming->Parent() == nullptr || !once.contains(incoming->Parent()))) return false;
+        }
+        return true;
+    }
+
+    static const IrValue* incomingFrom(const IrValue& phi, const IrBlock* predecessor) {
+        for (std::size_t index = 0; index < phi.PhiBlockCount(); ++index) {
+            if (phi.PhiBlock(index) == predecessor) return phi.Argument(index)->Resolve();
+        }
+        return nullptr;
+    }
+
+    bool wordsImply(const IrValue* low, const IrValue* high, std::uint32_t depth) {
+        if (isImmediate(low, 0u) && (waveSize == 32u || isImmediate(high, 0u))) return true;
+        const ImplicationKey key{low, high};
+        if (const auto known = results.find(key); known != results.end()) return known->second;
+        if (depth > ImplicationDepthLimit) return false;
+        results.emplace(key, false);
+        bool result = false;
+        if (low->Opcode() == IrOpcode::CompositeExtractU32x4 && isImmediate(low->Argument(1)->Resolve(), 0u)) {
+            const IrValue* ballot = low->Argument(0)->Resolve();
+            const bool sameBallot = waveSize == 32u || (high->Opcode() == IrOpcode::CompositeExtractU32x4 && high->Argument(0)->Resolve() == ballot && isImmediate(high->Argument(1)->Resolve(), 1u));
+            result = ballot->Opcode() == IrOpcode::Ballot && sameBallot && Implies(ballot->Argument(0), depth + 1u);
+        }
+        if (!result && low->Opcode() == IrOpcode::BitwiseAnd32) {
+            if (waveSize == 32u) {
+                result = wordsImply(low->Argument(0)->Resolve(), high, depth + 1u) || wordsImply(low->Argument(1)->Resolve(), high, depth + 1u);
+            } else if (high->Opcode() == IrOpcode::BitwiseAnd32) {
+                for (std::size_t lowIndex = 0; !result && lowIndex < 2u; ++lowIndex) {
+                    for (std::size_t highIndex = 0; !result && highIndex < 2u; ++highIndex) {
+                        result = wordsImply(low->Argument(lowIndex)->Resolve(), high->Argument(highIndex)->Resolve(), depth + 1u);
+                    }
+                }
+            }
+        }
+        if (!result && low->IsPhi() && mergesOutsideLoops(*low) && (waveSize == 32u || (high->IsPhi() && high->Parent() == low->Parent() && mergesOutsideLoops(*high)))) {
+            result = true;
+            for (std::size_t index = 0; result && index < low->PhiBlockCount(); ++index) {
+                const IrValue* highIncoming = waveSize == 32u ? high : incomingFrom(*high, low->PhiBlock(index));
+                result = highIncoming != nullptr && wordsImply(low->Argument(index)->Resolve(), highIncoming, depth + 1u);
+            }
+        }
+        results[key] = result;
+        return result;
+    }
+
+    const std::unordered_set<const IrBlock*>& once;
+    const IrValue* mask;
+    std::uint32_t waveSize;
+    bool always;
+    std::unordered_map<ImplicationKey, bool, ImplicationKeyHash> results;
+};
 
 std::unordered_set<const IrBlock*> blocksOutsideLoops(const IrProgram& program) {
     const auto& order = program.BlockOrder();
@@ -338,7 +407,7 @@ std::unordered_set<const IrBlock*> blocksOutsideLoops(const IrProgram& program) 
 }
 
 bool unobservedWhereMasked(const IrProgram& program, const std::unordered_set<const IrBlock*>& once, const IrValue& select, const IrValue* mask) {
-    const auto waveSize = program.WaveSize();
+    Implications implications(once, mask, program.WaveSize());
     std::vector<const IrValue*> pending{&select};
     std::unordered_set<const IrValue*> visited{&select};
     while (!pending.empty()) {
@@ -347,9 +416,9 @@ bool unobservedWhereMasked(const IrProgram& program, const std::unordered_set<co
         for (const IrUse& use : value->OperandUses()) {
             const IrValue* user = use.user;
             if (user->Parent() == nullptr || !once.contains(user->Parent())) return false;
-            if (isSelect(user->Opcode()) && use.operand == 1u && implies(user->Argument(0), mask, waveSize)) continue;
-            if (user->Opcode() == IrOpcode::LogicalAnd && use.operand < 2u && implies(user->Argument(1u - use.operand), mask, waveSize)) continue;
-            if (readsOnlyWhereActive(user->Opcode()) && use.operand + 1u < user->ArgumentCount() && implies(user->Argument(user->ArgumentCount() - 1u), mask, waveSize)) continue;
+            if (isSelect(user->Opcode()) && use.operand == 1u && implications.Implies(user->Argument(0))) continue;
+            if (user->Opcode() == IrOpcode::LogicalAnd && use.operand < 2u && implications.Implies(user->Argument(1u - use.operand))) continue;
+            if (readsOnlyWhereActive(user->Opcode()) && use.operand + 1u < user->ArgumentCount() && implications.Implies(user->Argument(user->ArgumentCount() - 1u))) continue;
             if (!user->IsPhi() && !isLaneLocal(user->Opcode()) && !isExplicitLodSample(program, *user)) return false;
             if (visited.insert(user).second) {
                 if (visited.size() > VisitLimit) return false;

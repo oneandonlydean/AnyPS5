@@ -275,6 +275,116 @@ int main() {
         return count == 0u && !gone;
     });
 
+    const auto mergedExec = [](bool wideBranch, bool loopMerge) {
+        Builder b;
+        auto& wide = b.mask(48u);
+        auto& exec = b.logicalAnd(wide, b.mask(32u));
+        auto& old = b.lane();
+        auto& written = b.select(exec, b.add(old, 1u), old);
+        IrBlock& head = *b.block;
+        IrBlock& body = b.newBlock();
+        IrBlock& merge = b.newBlock();
+        head.AddBranch(&body);
+        head.AddBranch(&merge);
+        body.AddBranch(&merge);
+        b.block = &body;
+        auto& killed = b.logicalAnd(wideBranch ? wide : exec, b.mask(16u));
+        auto& phi = b.program.CreateValue(IrOpcode::Phi, IrType::Bool);
+        merge.AppendInstruction(&phi);
+        phi.AddPhiOperand(&head, &exec);
+        phi.AddPhiOperand(&body, &killed);
+        if (loopMerge) {
+            IrBlock& exit = b.newBlock();
+            merge.AddBranch(&merge);
+            merge.AddBranch(&exit);
+            phi.AddPhiOperand(&merge, &phi);
+            b.block = &exit;
+        } else {
+            b.block = &merge;
+        }
+        b.keep(b.select(phi, b.add(written, 2u), old));
+        return std::pair{b.eliminate(), removed(written)};
+    };
+
+    passed &= run("an exec merged by a phi whose every incoming exec implies the write's exec drops the select", [&] {
+        const auto [count, gone] = mergedExec(false, false);
+        return count == 1u && gone;
+    });
+
+    passed &= run("an exec merged by a phi with a wider incoming exec keeps the select", [&] {
+        const auto [count, gone] = mergedExec(true, false);
+        return count == 0u && !gone;
+    });
+
+    passed &= run("an exec merged by a phi inside a loop keeps the select", [&] {
+        const auto [count, gone] = mergedExec(false, true);
+        return count == 0u && !gone;
+    });
+
+    const auto mergedWords = [](bool wideBranch) {
+        Builder b;
+        auto& wide = b.mask(48u);
+        auto& exec = b.logicalAnd(wide, b.mask(40u));
+        auto& old = b.lane();
+        auto& written = b.select(exec, b.add(old, 1u), old);
+        auto& saved = b.emit(IrOpcode::Ballot, IrType::U32x4, {&exec});
+        auto& savedLow = b.emit(IrOpcode::CompositeExtractU32x4, IrType::U32, {&saved, &b.constant(0u)});
+        auto& savedHigh = b.emit(IrOpcode::CompositeExtractU32x4, IrType::U32, {&saved, &b.constant(1u)});
+        IrBlock& head = *b.block;
+        IrBlock& body = b.newBlock();
+        IrBlock& merge = b.newBlock();
+        head.AddBranch(&body);
+        head.AddBranch(&merge);
+        body.AddBranch(&merge);
+        b.block = &body;
+        auto& survived = b.emit(IrOpcode::Ballot, IrType::U32x4, {&b.logicalAnd(wideBranch ? wide : exec, b.mask(24u))});
+        auto& survivedLow = b.emit(IrOpcode::CompositeExtractU32x4, IrType::U32, {&survived, &b.constant(0u)});
+        auto& survivedHigh = b.emit(IrOpcode::CompositeExtractU32x4, IrType::U32, {&survived, &b.constant(1u)});
+        auto& low = b.program.CreateValue(IrOpcode::Phi, IrType::U32);
+        auto& high = b.program.CreateValue(IrOpcode::Phi, IrType::U32);
+        merge.AppendInstruction(&low);
+        merge.AppendInstruction(&high);
+        low.AddPhiOperand(&head, &savedLow);
+        low.AddPhiOperand(&body, &survivedLow);
+        high.AddPhiOperand(&head, &savedHigh);
+        high.AddPhiOperand(&body, &survivedHigh);
+        b.block = &merge;
+        b.keep(b.select(b.threadBit(low, high), b.add(written, 2u), old));
+        return std::pair{b.eliminate(), removed(written)};
+    };
+
+    passed &= run("an exec rebuilt from mask words merged by phis implies the write's exec", [&] {
+        const auto [count, gone] = mergedWords(false);
+        return count == 1u && gone;
+    });
+
+    passed &= run("an exec rebuilt from merged mask words with a wider incoming ballot keeps the select", [&] {
+        const auto [count, gone] = mergedWords(true);
+        return count == 0u && !gone;
+    });
+
+    const auto chained = [](bool wideRoot) {
+        Builder b;
+        auto& wide = b.mask(48u);
+        auto& exec = b.logicalAnd(wide, b.mask(32u));
+        auto& old = b.lane();
+        auto& written = b.select(exec, b.add(old, 1u), old);
+        IrValue* later = wideRoot ? &wide : &exec;
+        for (std::uint32_t kill = 0; kill < 24u; ++kill) later = &b.logicalAnd(*later, b.mask(31u - kill));
+        b.keep(b.select(*later, b.add(written, 2u), old));
+        return std::pair{b.eliminate(), removed(written)};
+    };
+
+    passed &= run("an exec narrowed by a long chain of kills still implies the write's exec", [&] {
+        const auto [count, gone] = chained(false);
+        return count == 1u && gone;
+    });
+
+    passed &= run("a long chain of kills rooted at a wider exec keeps the select", [&] {
+        const auto [count, gone] = chained(true);
+        return count == 0u && !gone;
+    });
+
     passed &= run("a write in a loop must keep its select", [] {
         Builder b;
         auto& exec = b.mask(16u);

@@ -1,6 +1,7 @@
 #include "IntermediateRepresentation/IrBuilder.hpp"
 #include "Optimization/ConstantFolder.hpp"
 #include "Optimization/DeadCodeEliminator.hpp"
+#include "Optimization/MaskedSelectEliminator.hpp"
 #include "Optimization/ShaderInfoCollector.hpp"
 #include <array>
 #include <cstdint>
@@ -253,6 +254,90 @@ static void MergedRefused(IrOpcode opcode, std::uint32_t offset, std::uint32_t c
     }
     Require(false);
 }
+enum class HelperRead { Export, FullWaveExport, DataTestExport, Ballot };
+
+struct HelperProgram {
+    IrValue* written = nullptr;
+    IrValue* layer = nullptr;
+    IrValue* exported = nullptr;
+};
+
+static HelperProgram HelperOnly(IrProgram& program, HelperRead read) {
+    auto& entry = Begin(program);
+    auto& body = program.CreateBlock();
+    auto& merge = program.CreateBlock();
+    program.BlockOrder().push_back(&body);
+    program.BlockOrder().push_back(&merge);
+    entry.AddBranch(&body);
+    entry.AddBranch(&merge);
+    body.AddBranch(&merge);
+    IrBuilder builder(program);
+    builder.SetInsertionPoint(entry);
+    IrValue& helper = builder.Emit(IrOpcode::GetBuiltin, IrType::U32, {&builder.Constant(static_cast<std::uint32_t>(StageInputKind::HelperInvocation)), &builder.Constant(0u)});
+    IrValue& live = builder.IEqual(helper, builder.Constant(0u));
+    IrValue& ancillary = AncillaryBuiltin(builder);
+    IrValue& layer = builder.Emit(IrOpcode::BitFieldUExtract, IrType::U32, {&ancillary, &builder.Constant(16u), &builder.Constant(11u)});
+    IrValue& target = builder.Select(live, layer, builder.Constant(0u));
+    IrValue& tested = builder.LogicalAnd(live, FrontFacingBuiltin(builder));
+    IrValue& written = builder.Select(read == HelperRead::DataTestExport ? tested : live, builder.Constant(SelectOther), ancillary);
+    builder.SetInsertionPoint(body);
+    IrValue& squared = builder.Emit(IrOpcode::FPMul32, IrType::F32, {&builder.BitCastF32(written), &builder.BitCastF32(written)});
+    IrValue& killed = builder.Select(tested, builder.BitCastU32(squared), written);
+    IrValue& exec = program.CreateValue(IrOpcode::Phi, IrType::Bool);
+    IrValue& value = program.CreateValue(IrOpcode::Phi, IrType::U32);
+    merge.AppendInstruction(&exec);
+    merge.AppendInstruction(&value);
+    exec.AddPhiOperand(&entry, &live);
+    exec.AddPhiOperand(&body, &tested);
+    value.AddPhiOperand(&entry, &written);
+    value.AddPhiOperand(&body, &killed);
+    builder.SetInsertionPoint(merge);
+    IrValue& data = builder.Emit(IrOpcode::CompositeConstructU32x4, IrType::U32x4, {&value, &target, &builder.Constant(0u), &builder.Constant(0u)});
+    program.Metadata().exportInfo.push_back(ExportInfo {.kind = ExportTargetKind::Mrt, .index = 0u, .en = 0xFu, .done = true, .vm = true});
+    IrValue& guard = read == HelperRead::FullWaveExport ? builder.ConstantBool(true) : exec;
+    static_cast<void>(builder.Emit(IrOpcode::SetAttribute, IrType::Void, {&data, &guard}, ExportFlags {0u, 0u}));
+    if (read == HelperRead::Ballot) {
+        IrValue& ballot = builder.Emit(IrOpcode::Ballot, IrType::U32x4, {&builder.INotEqual(value, builder.Constant(0u))});
+        static_cast<void>(builder.Emit(IrOpcode::ReferenceU32, IrType::Void, {&builder.CompositeExtract(ballot, 0u)}));
+    }
+    static_cast<void>(builder.Emit(IrOpcode::Return, IrType::Void, {}));
+    return HelperProgram {&written, &layer, &value};
+}
+static void LowerMasked(IrProgram& program) {
+    ConstantFolder().Fold(program);
+    DeadCodeEliminator().RemoveIdentities(program);
+    DeadCodeEliminator().Eliminate(program);
+    static_cast<void>(MaskedSelectEliminator().Eliminate(program));
+    DeadCodeEliminator().Eliminate(program);
+    const ShaderPixelInputInfo pixel {};
+    ShaderInfoCollector().Collect(program, ShaderStageInputInfo {nullptr, &pixel, nullptr});
+}
+static void HelperLanesOnly() {
+    IrProgram program;
+    const HelperProgram built = HelperOnly(program, HelperRead::Export);
+    LowerMasked(program);
+    for (const IrBlock* block : program.BlockOrder()) {
+        for (const IrValue* inst : block->Instructions()) {
+            Require(inst->Opcode() != IrOpcode::GetBuiltin || static_cast<StageInputKind>(inst->Argument(0)->Resolve()->ImmediateU32()) != StageInputKind::PackedAncillary);
+        }
+    }
+    Require(built.written->Parent() == nullptr);
+    const IrValue* field = built.layer->Argument(0)->Resolve();
+    Require(field->Opcode() == IrOpcode::GetBuiltin && static_cast<StageInputKind>(field->Argument(0)->Resolve()->ImmediateU32()) == StageInputKind::Layer);
+    const IrValue* entryValue = built.exported->Argument(0)->Resolve();
+    Require(entryValue->HasImmediate() && entryValue->ImmediateU32() == SelectOther);
+}
+static void HelperLanesRefused(HelperRead read) {
+    IrProgram program;
+    static_cast<void>(HelperOnly(program, read));
+    try {
+        LowerMasked(program);
+    } catch (const std::runtime_error& error) {
+        Require(std::string(error.what()).find("unsupported live use") != std::string::npos);
+        return;
+    }
+    Require(false);
+}
 int main() {
     Extract(IrOpcode::BitFieldUExtract, 8u, 4u, StageInputKind::SampleId, 0u);
     Extract(IrOpcode::BitFieldUExtract, 9u, 2u, StageInputKind::SampleId, 1u);
@@ -292,4 +377,8 @@ int main() {
     MergedRefused(IrOpcode::BitwiseOr32, 1u, 0u, false);
     MergedRefused(IrOpcode::BitFieldUExtract, 12u, 4u, false);
     MergedRefused(IrOpcode::BitFieldUExtract, 0u, 2u, true);
+    HelperLanesOnly();
+    HelperLanesRefused(HelperRead::FullWaveExport);
+    HelperLanesRefused(HelperRead::DataTestExport);
+    HelperLanesRefused(HelperRead::Ballot);
 }
