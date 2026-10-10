@@ -8,6 +8,7 @@
 #include <mutex>
 #include <optional>
 #include <unordered_map>
+#include <utility>
 #include <vector>
 
 namespace AgcDriver::Graphics {
@@ -68,6 +69,8 @@ public:
     SlabSlot TakeSlot(const Context& context, std::uint32_t memoryType, std::size_t capacity, bool addressable);
     void PutSlot(VkDeviceMemory memory, VkDeviceSize offset) noexcept;
     std::size_t SlabBlocks();
+    VkDeviceSize Trim() noexcept;
+    std::pair<VkDeviceSize, VkDeviceSize> RetainedBytes();
 
 private:
     struct SlabBlock {
