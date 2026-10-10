@@ -9,6 +9,7 @@
 #include "prx/libSceAgcDriver/Execution/include/FragmentBarycentric.hpp"
 #include "prx/libSceAgcDriver/Execution/include/SubgroupClock.hpp"
 #include "prx/libSceAgcDriver/Execution/include/ShaderDeviceProfile.hpp"
+#include "prx/libSceAgcDriver/Execution/include/PresentationPass.hpp"
 #include "prx/libSceAgcDriver/Execution/include/PresentationScaler.hpp"
 #include "prx/libSceAgcDriver/Graphics/include/DepthSurface.hpp"
 #include "prx/libSceAgcDriver/Graphics/include/DccMetadata.hpp"
@@ -287,6 +288,8 @@ struct VulkanDevice::State {
     std::shared_ptr<std::vector<std::shared_ptr<Graphics::ShaderResources>>> copiedWriters = std::make_shared<std::vector<std::shared_ptr<Graphics::ShaderResources>>>();
     VkPhysicalDeviceMeshShaderPropertiesEXT meshLimits{VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_MESH_SHADER_PROPERTIES_EXT};
     std::unique_ptr<PresentationScaler> scaler;
+    std::unique_ptr<PresentationPass> presentation;
+    VkFormat surfaceFormat = VK_FORMAT_B8G8R8A8_UNORM;
     // The swapchain image AcquireImage took for the next present(), consumed by that present.
     bool imageAcquired = false;
     std::uint32_t acquiredIndex = 0;
@@ -470,6 +473,7 @@ struct VulkanDevice::State {
     // and its statistics taken (under presentMutex).
     void RetireSlot(PresentSlot& slot) {
         slot.inFlight = false;
+        if (presentation) presentation->Release(static_cast<std::size_t>(&slot - presentSlots.data()));
         slot.kept.reset();
         if (slot.dumpRecorded) {
             slot.dumpRecorded = false;
@@ -611,6 +615,7 @@ struct VulkanDevice::State {
             textureCache.reset();
             detiler.reset();
             colorTransfer.reset();
+            presentation.reset();
             scaler.reset();
             pipelineCache.reset();
             context.bufferPool.reset();
@@ -1339,14 +1344,15 @@ VulkanDevice::VulkanDevice(const PresentationWindow* window) : state(std::make_u
         std::vector<VkSurfaceFormatKHR> formats(formatCount);
         check(getFormats(selected, state->surface, &formatCount, formats.data()), "vkGetPhysicalDeviceSurfaceFormatsKHR");
         require(std::any_of(formats.begin(), formats.end(), [](const auto& format) { return format.format == VK_FORMAT_B8G8R8A8_UNORM && format.colorSpace == VK_COLOR_SPACE_SRGB_NONLINEAR_KHR; }), "BGRA8 sRGB-nonlinear surface format is unavailable");
+        require((surface.supportedUsageFlags & VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT) != 0, "surface does not support color attachment images");
         VkSwapchainCreateInfoKHR swapchain{VK_STRUCTURE_TYPE_SWAPCHAIN_CREATE_INFO_KHR};
         swapchain.surface = state->surface;
         swapchain.minImageCount = surface.minImageCount;
-        swapchain.imageFormat = VK_FORMAT_B8G8R8A8_UNORM;
+        swapchain.imageFormat = state->surfaceFormat;
         swapchain.imageColorSpace = VK_COLOR_SPACE_SRGB_NONLINEAR_KHR;
         swapchain.imageExtent = state->extent;
         swapchain.imageArrayLayers = 1;
-        swapchain.imageUsage = VK_IMAGE_USAGE_TRANSFER_DST_BIT;
+        swapchain.imageUsage = VK_IMAGE_USAGE_TRANSFER_DST_BIT | VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT;
         swapchain.imageSharingMode = VK_SHARING_MODE_EXCLUSIVE;
         swapchain.preTransform = VK_SURFACE_TRANSFORM_IDENTITY_BIT_KHR;
         swapchain.compositeAlpha = VK_COMPOSITE_ALPHA_OPAQUE_BIT_KHR;
@@ -1373,7 +1379,8 @@ VulkanDevice::VulkanDevice(const PresentationWindow* window) : state(std::make_u
             check(createFence(state->device, &fence, nullptr, &slot.fence), "vkCreateFence present");
             check(state->DeviceFunction<PFN_vkAllocateCommandBuffers>("vkAllocateCommandBuffers")(state->device, &allocation, &slot.commands), "vkAllocateCommandBuffers");
         }
-        state->scaler = std::make_unique<PresentationScaler>(graphicsContext(), VK_FORMAT_B8G8R8A8_UNORM, VK_FORMAT_B8G8R8A8_UNORM);
+        state->scaler = std::make_unique<PresentationScaler>(graphicsContext(), VK_FORMAT_B8G8R8A8_UNORM, state->surfaceFormat);
+        state->presentation = std::make_unique<PresentationPass>(graphicsContext(), state->presentSlots.size());
     }
 }
 
@@ -2001,11 +2008,11 @@ void VulkanDevice::Resize(std::uint32_t width, std::uint32_t height) {
     VkSwapchainCreateInfoKHR create{VK_STRUCTURE_TYPE_SWAPCHAIN_CREATE_INFO_KHR};
     create.surface = state->surface;
     create.minImageCount = surface.minImageCount;
-    create.imageFormat = VK_FORMAT_B8G8R8A8_UNORM;
+    create.imageFormat = state->surfaceFormat;
     create.imageColorSpace = VK_COLOR_SPACE_SRGB_NONLINEAR_KHR;
     create.imageExtent = {width, height};
     create.imageArrayLayers = 1;
-    create.imageUsage = VK_IMAGE_USAGE_TRANSFER_DST_BIT;
+    create.imageUsage = VK_IMAGE_USAGE_TRANSFER_DST_BIT | VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT;
     create.imageSharingMode = VK_SHARING_MODE_EXCLUSIVE;
     create.preTransform = VK_SURFACE_TRANSFORM_IDENTITY_BIT_KHR;
     create.compositeAlpha = VK_COMPOSITE_ALPHA_OPAQUE_BIT_KHR;
@@ -2322,12 +2329,13 @@ bool VulkanDevice::present(std::uint32_t width, std::uint32_t height, bool opaqu
     require(!residentConvert || (resident != nullptr && display != nullptr), "a converted resident presentation needs its image and display buffer");
     require(uniform == nullptr || (pixels.empty() && display == nullptr && resident == nullptr), "a uniform presentation has no other source");
     const bool direct = resident != nullptr && !residentConvert;
+    const bool drawn = resident != nullptr && residentConvert;
     // The scaler's source image, the color transfer's staging and the upload buffer are single
     // objects an in-flight blit through them may still read: the paths using or re-creating them
     // wait for every slot first. The game path did so before taking the mutex
     // (PresentWaitsForSlots); this is the fallback.
-    const bool shared = !clearOnly && !direct;
-    if ((shared || (!clearOnly && (state->scaler == nullptr || state->scaler->SourceWidth() != width || state->scaler->SourceHeight() != height))) && state->SharedSlotInFlight()) RetirePresents(0);
+    const bool shared = !clearOnly && resident == nullptr;
+    if (shared && state->SharedSlotInFlight()) RetirePresents(0);
     // The next slot is the oldest; a caller that did not retire it first (PresentPixels) waits here.
     if (state->presentSlots[state->presentCursor].inFlight) RetirePresents(state->presentSlots.size() - 1);
     auto& slot = state->presentSlots[state->presentCursor];
@@ -2376,8 +2384,10 @@ bool VulkanDevice::present(std::uint32_t width, std::uint32_t height, bool opaqu
     barrier.image = state->images[index];
     barrier.subresourceRange = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 1};
     auto pipelineBarrier = state->DeviceFunction<PFN_vkCmdPipelineBarrier>("vkCmdPipelineBarrier");
-    pipelineBarrier(commands, VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT, VK_PIPELINE_STAGE_TRANSFER_BIT, 0, 0, nullptr, 0, nullptr, 1, &barrier);
-    Graphics::Recorder::CountBarriers(CommandClass::PresentBlit);
+    if (!drawn) {
+        pipelineBarrier(commands, VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT, VK_PIPELINE_STAGE_TRANSFER_BIT, 0, 0, nullptr, 0, nullptr, 1, &barrier);
+        Graphics::Recorder::CountBarriers(CommandClass::PresentBlit);
+    }
     if (clearOnly) {
         APS5_LOG_OUT_DEBUG("Recording swapchain clear opaque=%u image=%p", static_cast<unsigned>(opaque), reinterpret_cast<void*>(barrier.image));
         VkClearColorValue clear{};
@@ -2385,27 +2395,26 @@ bool VulkanDevice::present(std::uint32_t width, std::uint32_t height, bool opaqu
         state->DeviceFunction<PFN_vkCmdClearColorImage>("vkCmdClearColorImage")(commands, barrier.image, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, &clear, 1, &barrier.subresourceRange);
     } else {
         APS5_LOG_OUT_DEBUG("Recording swapchain scaled blit width=%u height=%u bytes=%zu buffer=%p image=%p", width, height, pixels.size(), reinterpret_cast<void*>(state->uploadBuffer), reinterpret_cast<void*>(barrier.image));
-        require(state->scaler != nullptr, "presentation scaler is unavailable");
-        state->scaler->EnsureSourceImage(width, height);
+        require(state->scaler != nullptr && state->presentation != nullptr, "presentation scaler is unavailable");
+        if (shared) state->scaler->EnsureSourceImage(width, height);
+        const auto slotIndex = static_cast<std::size_t>(&slot - state->presentSlots.data());
         VkImageMemoryBarrier residentBarrier{VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER};
+        const VkPipelineStageFlags residentStage = drawn ? VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT : VK_PIPELINE_STAGE_TRANSFER_BIT;
+        const VkAccessFlags residentRead = drawn ? VK_ACCESS_SHADER_READ_BIT : VK_ACCESS_TRANSFER_READ_BIT;
         if (resident != nullptr) {
             // The draws and dispatches that produced the image were submitted before this command
             // buffer; their writes become visible to the blit here. The layout stays GENERAL, the
             // one the storage image is tracked in.
             residentBarrier.srcAccessMask = VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT | VK_ACCESS_SHADER_WRITE_BIT | VK_ACCESS_TRANSFER_WRITE_BIT;
-            residentBarrier.dstAccessMask = VK_ACCESS_TRANSFER_READ_BIT;
+            residentBarrier.dstAccessMask = residentRead;
             residentBarrier.oldLayout = VK_IMAGE_LAYOUT_GENERAL;
             residentBarrier.newLayout = VK_IMAGE_LAYOUT_GENERAL;
             residentBarrier.srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
             residentBarrier.dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
             residentBarrier.image = resident->Image();
             residentBarrier.subresourceRange = {VK_IMAGE_ASPECT_COLOR_BIT, 0, VK_REMAINING_MIP_LEVELS, 0, VK_REMAINING_ARRAY_LAYERS};
-            pipelineBarrier(commands, VK_PIPELINE_STAGE_ALL_COMMANDS_BIT, VK_PIPELINE_STAGE_TRANSFER_BIT, 0, 0, nullptr, 0, nullptr, 1, &residentBarrier);
+            pipelineBarrier(commands, VK_PIPELINE_STAGE_ALL_COMMANDS_BIT, residentStage, 0, 0, nullptr, 0, nullptr, 1, &residentBarrier);
             Graphics::Recorder::CountBarriers(CommandClass::PresentBlit);
-            if (residentConvert) {
-                state->colorTransfer->DetileImage(commands, resident->Image(), VK_IMAGE_LAYOUT_GENERAL, width, height, Graphics::ColorTileMode::RenderTarget, DisplayRedLow(display->pixelFormat), DisplayTenBit(display->pixelFormat));
-                state->scaler->RecordUpload(commands, state->colorTransfer->LinearBuffer());
-            }
         } else {
             if (display != nullptr) {
                 state->colorTransfer->Detile(commands, DisplayRedLow(display->pixelFormat), DisplayTenBit(display->pixelFormat));
@@ -2413,56 +2422,54 @@ bool VulkanDevice::present(std::uint32_t width, std::uint32_t height, bool opaqu
             if (uniform != nullptr) state->scaler->RecordClear(commands, *uniform);
             else state->scaler->RecordUpload(commands, display != nullptr ? state->colorTransfer->LinearBuffer() : state->uploadBuffer);
         }
-        VkClearColorValue letterbox{};
-        letterbox.float32[3] = 1.0f;
-        state->DeviceFunction<PFN_vkCmdClearColorImage>("vkCmdClearColorImage")(commands, barrier.image, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, &letterbox, 1, &barrier.subresourceRange);
-        VkImageMemoryBarrier letterboxBarrier{VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER};
-        letterboxBarrier.srcAccessMask = VK_ACCESS_TRANSFER_WRITE_BIT;
-        letterboxBarrier.dstAccessMask = VK_ACCESS_TRANSFER_WRITE_BIT;
-        letterboxBarrier.oldLayout = VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL;
-        letterboxBarrier.newLayout = VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL;
-        letterboxBarrier.srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
-        letterboxBarrier.dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
-        letterboxBarrier.image = barrier.image;
-        letterboxBarrier.subresourceRange = barrier.subresourceRange;
-        pipelineBarrier(commands, VK_PIPELINE_STAGE_TRANSFER_BIT, VK_PIPELINE_STAGE_TRANSFER_BIT, 0, 0, nullptr, 0, nullptr, 1, &letterboxBarrier);
-        Graphics::Recorder::CountBarriers(CommandClass::PresentBlit);
-        if (direct) PresentationScaler::RecordBlitFrom(graphicsContext(), commands, resident->Image(), VK_IMAGE_LAYOUT_GENERAL, width, height, residentFilter, barrier.image, state->extent.width, state->extent.height);
-        else state->scaler->RecordBlit(commands, barrier.image, state->extent.width, state->extent.height);
-        if (dumpFrame && direct) {
-            const auto scale = DumpScale();
-            slot.dumpWidth = (width + scale - 1) / scale;
-            slot.dumpHeight = (height + scale - 1) / scale;
-            slot.dumpScale = 1;
-            if (!slot.dumpScaler) slot.dumpScaler = std::make_unique<PresentationScaler>(graphicsContext(), VK_FORMAT_B8G8R8A8_UNORM, VK_FORMAT_B8G8R8A8_UNORM);
-            slot.dumpScaler->EnsureSourceImage(slot.dumpWidth, slot.dumpHeight);
-            slot.dumpScaler->RecordBlitInto(commands, resident->Image(), VK_IMAGE_LAYOUT_GENERAL, VK_FILTER_NEAREST, width, height);
-        }
-        if (resident != nullptr) {
-            // Later batches write the image again (the next frame into this buffer, a refresh): they
-            // start after the blit has read it.
-            residentBarrier.srcAccessMask = VK_ACCESS_TRANSFER_READ_BIT;
-            residentBarrier.dstAccessMask = VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT | VK_ACCESS_SHADER_WRITE_BIT | VK_ACCESS_TRANSFER_WRITE_BIT;
-            pipelineBarrier(commands, VK_PIPELINE_STAGE_TRANSFER_BIT, VK_PIPELINE_STAGE_ALL_COMMANDS_BIT, 0, 0, nullptr, 0, nullptr, 1, &residentBarrier);
-            Graphics::Recorder::CountBarriers(CommandClass::PresentBlit);
+        if (drawn) {
+            state->presentation->Bind(slotIndex, resident->Image(), width, height, display->pixelFormat);
+            state->presentation->RecordPresent(commands, slotIndex, barrier.image, state->surfaceFormat, state->extent, VK_IMAGE_LAYOUT_PRESENT_SRC_KHR);
+        } else {
+            state->scaler->RecordLetterbox(commands, width, height, barrier.image, state->extent.width, state->extent.height);
+            if (direct) PresentationScaler::RecordBlitFrom(graphicsContext(), commands, resident->Image(), VK_IMAGE_LAYOUT_GENERAL, width, height, residentFilter, barrier.image, state->extent.width, state->extent.height);
+            else state->scaler->RecordBlit(commands, barrier.image, state->extent.width, state->extent.height);
         }
         if (dumpFrame) {
-            if (!direct) {
+            const auto scale = DumpScale();
+            if (resident != nullptr) {
+                const auto extent = PresentationPass::DumpExtent(width, height, scale);
+                slot.dumpWidth = extent.width;
+                slot.dumpHeight = extent.height;
+                slot.dumpScale = 1;
+            } else {
                 slot.dumpWidth = state->scaler->SourceWidth();
                 slot.dumpHeight = state->scaler->SourceHeight();
-                slot.dumpScale = DumpScale();
+                slot.dumpScale = scale;
             }
             const auto dumpBytes = static_cast<std::size_t>(slot.dumpWidth) * slot.dumpHeight * 4;
             if (!slot.dumpBuffer || slot.dumpBuffer->Bytes().size() != dumpBytes) slot.dumpBuffer = std::make_unique<Graphics::Buffer>(graphicsContext(), dumpBytes, VK_BUFFER_USAGE_TRANSFER_DST_BIT);
-            (direct ? slot.dumpScaler : state->scaler)->RecordReadback(commands, slot.dumpBuffer->Handle());
+            if (drawn) {
+                state->presentation->RecordDump(commands, slotIndex, scale, slot.dumpBuffer->Handle());
+            } else if (direct) {
+                if (!slot.dumpScaler) slot.dumpScaler = std::make_unique<PresentationScaler>(graphicsContext(), VK_FORMAT_B8G8R8A8_UNORM, VK_FORMAT_B8G8R8A8_UNORM);
+                slot.dumpScaler->EnsureSourceImage(slot.dumpWidth, slot.dumpHeight);
+                slot.dumpScaler->RecordBlitInto(commands, resident->Image(), VK_IMAGE_LAYOUT_GENERAL, VK_FILTER_NEAREST, width, height);
+                slot.dumpScaler->RecordReadback(commands, slot.dumpBuffer->Handle());
+            } else {
+                state->scaler->RecordReadback(commands, slot.dumpBuffer->Handle());
+            }
+        }
+        if (resident != nullptr) {
+            residentBarrier.srcAccessMask = residentRead;
+            residentBarrier.dstAccessMask = VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT | VK_ACCESS_SHADER_WRITE_BIT | VK_ACCESS_TRANSFER_WRITE_BIT;
+            pipelineBarrier(commands, residentStage | VK_PIPELINE_STAGE_TRANSFER_BIT, VK_PIPELINE_STAGE_ALL_COMMANDS_BIT, 0, 0, nullptr, 0, nullptr, 1, &residentBarrier);
+            Graphics::Recorder::CountBarriers(CommandClass::PresentBlit);
         }
     }
-    barrier.srcAccessMask = VK_ACCESS_TRANSFER_WRITE_BIT;
-    barrier.dstAccessMask = 0;
-    barrier.oldLayout = VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL;
-    barrier.newLayout = VK_IMAGE_LAYOUT_PRESENT_SRC_KHR;
-    pipelineBarrier(commands, VK_PIPELINE_STAGE_TRANSFER_BIT, VK_PIPELINE_STAGE_BOTTOM_OF_PIPE_BIT, 0, 0, nullptr, 0, nullptr, 1, &barrier);
-    Graphics::Recorder::CountBarriers(CommandClass::PresentBlit);
+    if (!drawn) {
+        barrier.srcAccessMask = VK_ACCESS_TRANSFER_WRITE_BIT;
+        barrier.dstAccessMask = 0;
+        barrier.oldLayout = VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL;
+        barrier.newLayout = VK_IMAGE_LAYOUT_PRESENT_SRC_KHR;
+        pipelineBarrier(commands, VK_PIPELINE_STAGE_TRANSFER_BIT, VK_PIPELINE_STAGE_BOTTOM_OF_PIPE_BIT, 0, 0, nullptr, 0, nullptr, 1, &barrier);
+        Graphics::Recorder::CountBarriers(CommandClass::PresentBlit);
+    }
     if (slot.queries != VK_NULL_HANDLE) state->DeviceFunction<PFN_vkCmdWriteTimestamp>("vkCmdWriteTimestamp")(commands, VK_PIPELINE_STAGE_BOTTOM_OF_PIPE_BIT, slot.queries, 1);
     check(state->DeviceFunction<PFN_vkEndCommandBuffer>("vkEndCommandBuffer")(commands), "vkEndCommandBuffer");
     APS5_LOG_CHARS_OUT_DEBUG("Presentation command buffer recorded");
@@ -2537,8 +2544,7 @@ bool VulkanDevice::PresentWaitsForSlots(const DisplayBuffer* buffer) const {
     VkFilter filter = VK_FILTER_LINEAR;
     bool pending = false;
     bool convert = false;
-    if (PresentableResident(graphicsContext(), *buffer, filter, pending, convert) == nullptr || convert) return true;
-    return state->scaler == nullptr || state->scaler->SourceWidth() != buffer->width || state->scaler->SourceHeight() != buffer->height;
+    return PresentableResident(graphicsContext(), *buffer, filter, pending, convert) == nullptr;
 }
 
 void VulkanDevice::FlipBatches(std::uint64_t& submissions, std::uint64_t& unsignaled) const {
