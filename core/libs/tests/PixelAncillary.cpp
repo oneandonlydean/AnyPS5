@@ -340,6 +340,93 @@ static void HelperLanesRefused(HelperRead read, std::uint32_t chain = 0u) {
     }
     Require(false);
 }
+enum class LoopRead { ExportAfter, ExportInside, UniformLoop, RevivedExportInside };
+
+static IrValue& LaneBit(IrBuilder& builder, IrValue& low, IrValue& high) {
+    IrValue& lane = builder.Emit(IrOpcode::LaneId, IrType::U32, {});
+    IrValue& word = builder.Select(builder.Emit(IrOpcode::ULessThan32, IrType::Bool, {&lane, &builder.Constant(32u)}), low, high);
+    IrValue& shifted = builder.Emit(IrOpcode::ShiftRightLogical32, IrType::U32, {&word, &builder.BitwiseAnd(lane, builder.Constant(31u))});
+    return builder.INotEqual(builder.BitwiseAnd(shifted, builder.Constant(1u)), builder.Constant(0u));
+}
+static HelperProgram HelperLoop(IrProgram& program, LoopRead read) {
+    auto& entry = Begin(program);
+    auto& header = program.CreateBlock();
+    auto& exit = program.CreateBlock();
+    program.BlockOrder().push_back(&header);
+    program.BlockOrder().push_back(&exit);
+    entry.AddBranch(&header);
+    header.AddBranch(&header);
+    header.AddBranch(&exit);
+    IrBuilder builder(program);
+    builder.SetInsertionPoint(entry);
+    IrValue& helper = builder.Emit(IrOpcode::GetBuiltin, IrType::U32, {&builder.Constant(static_cast<std::uint32_t>(StageInputKind::HelperInvocation)), &builder.Constant(0u)});
+    IrValue& live = builder.IEqual(helper, builder.Constant(0u));
+    IrValue& ancillary = AncillaryBuiltin(builder);
+    IrValue& layer = builder.Emit(IrOpcode::BitFieldUExtract, IrType::U32, {&ancillary, &builder.Constant(16u), &builder.Constant(11u)});
+    IrValue& target = builder.Select(live, layer, builder.Constant(0u));
+    IrValue& written = builder.Select(live, builder.Constant(SelectOther), ancillary);
+    IrValue& frontFacing = FrontFacingBuiltin(builder);
+    IrValue& saved = builder.Emit(IrOpcode::Ballot, IrType::U32x4, {&live});
+    IrValue& savedLow = builder.CompositeExtract(saved, 0u);
+    IrValue& savedHigh = builder.CompositeExtract(saved, 1u);
+    IrValue& low = program.CreateValue(IrOpcode::Phi, IrType::U32);
+    IrValue& high = program.CreateValue(IrOpcode::Phi, IrType::U32);
+    IrValue& value = program.CreateValue(IrOpcode::Phi, IrType::U32);
+    header.AppendInstruction(&low);
+    header.AppendInstruction(&high);
+    header.AppendInstruction(&value);
+    low.AddPhiOperand(&entry, &savedLow);
+    high.AddPhiOperand(&entry, &savedHigh);
+    value.AddPhiOperand(&entry, &written);
+    builder.SetInsertionPoint(header);
+    IrValue& loopExec = read == LoopRead::UniformLoop ? live : LaneBit(builder, low, high);
+    IrValue& squared = builder.Emit(IrOpcode::FPMul32, IrType::F32, {&builder.BitCastF32(value), &builder.BitCastF32(value)});
+    IrValue& next = builder.Select(loopExec, builder.BitCastU32(squared), value);
+    IrValue& stay = builder.Emit(IrOpcode::Ballot, IrType::U32x4, {&frontFacing});
+    IrValue& stayLow = builder.CompositeExtract(stay, 0u);
+    IrValue& stayHigh = builder.CompositeExtract(stay, 1u);
+    const bool revived = read == LoopRead::RevivedExportInside;
+    low.AddPhiOperand(&header, revived ? &stayLow : &builder.BitwiseAnd(low, stayLow));
+    high.AddPhiOperand(&header, revived ? &stayHigh : &builder.BitwiseAnd(high, stayHigh));
+    value.AddPhiOperand(&header, &next);
+    program.Metadata().exportInfo.push_back(ExportInfo {.kind = ExportTargetKind::Mrt, .index = 0u, .en = 0xFu, .done = true, .vm = true});
+    const auto exportValue = [&](IrValue& guard) {
+        IrValue& data = builder.Emit(IrOpcode::CompositeConstructU32x4, IrType::U32x4, {&value, &target, &builder.Constant(0u), &builder.Constant(0u)});
+        static_cast<void>(builder.Emit(IrOpcode::SetAttribute, IrType::Void, {&data, &guard}, ExportFlags {0u, 0u}));
+    };
+    if (read == LoopRead::ExportInside || revived) exportValue(loopExec);
+    builder.SetInsertionPoint(exit);
+    if (read == LoopRead::ExportAfter) exportValue(LaneBit(builder, savedLow, savedHigh));
+    if (read == LoopRead::UniformLoop) exportValue(live);
+    static_cast<void>(builder.Emit(IrOpcode::Return, IrType::Void, {}));
+    return HelperProgram {&written, &layer, &value};
+}
+static void HelperLoopOnly(LoopRead read) {
+    IrProgram program;
+    const HelperProgram built = HelperLoop(program, read);
+    LowerMasked(program);
+    for (const IrBlock* block : program.BlockOrder()) {
+        for (const IrValue* inst : block->Instructions()) {
+            Require(inst->Opcode() != IrOpcode::GetBuiltin || static_cast<StageInputKind>(inst->Argument(0)->Resolve()->ImmediateU32()) != StageInputKind::PackedAncillary);
+        }
+    }
+    Require(built.written->Parent() == nullptr);
+    const IrValue* field = built.layer->Argument(0)->Resolve();
+    Require(field->Opcode() == IrOpcode::GetBuiltin && static_cast<StageInputKind>(field->Argument(0)->Resolve()->ImmediateU32()) == StageInputKind::Layer);
+    const IrValue* entryValue = built.exported->Argument(0)->Resolve();
+    Require(entryValue->HasImmediate() && entryValue->ImmediateU32() == SelectOther);
+}
+static void HelperLoopRefused(LoopRead read) {
+    IrProgram program;
+    static_cast<void>(HelperLoop(program, read));
+    try {
+        LowerMasked(program);
+    } catch (const std::runtime_error& error) {
+        Require(std::string(error.what()).find("unsupported live use") != std::string::npos);
+        return;
+    }
+    Require(false);
+}
 int main() {
     Extract(IrOpcode::BitFieldUExtract, 8u, 4u, StageInputKind::SampleId, 0u);
     Extract(IrOpcode::BitFieldUExtract, 9u, 2u, StageInputKind::SampleId, 1u);
@@ -385,4 +472,8 @@ int main() {
     HelperLanesRefused(HelperRead::DataTestExport);
     HelperLanesRefused(HelperRead::Ballot);
     HelperLanesRefused(HelperRead::FullWaveExport, 6000u);
+    HelperLoopOnly(LoopRead::ExportAfter);
+    HelperLoopOnly(LoopRead::ExportInside);
+    HelperLoopOnly(LoopRead::UniformLoop);
+    HelperLoopRefused(LoopRead::RevivedExportInside);
 }

@@ -77,6 +77,22 @@ struct Builder {
         return threadBit(low, high);
     }
 
+    std::pair<IrValue*, IrValue*> ballotWords(IrValue& predicate) {
+        auto& ballot = emit(IrOpcode::Ballot, IrType::U32x4, {&predicate});
+        return {&emit(IrOpcode::CompositeExtractU32x4, IrType::U32, {&ballot, &constant(0u)}), &emit(IrOpcode::CompositeExtractU32x4, IrType::U32, {&ballot, &constant(1u)})};
+    }
+
+    IrValue& wordAnd(IrValue& left, IrValue& right) {
+        return emit(IrOpcode::BitwiseAnd32, IrType::U32, {&left, &right});
+    }
+
+    IrValue& phi(IrType type, IrBlock& predecessor, IrValue& incoming) {
+        auto& created = program.CreateValue(IrOpcode::Phi, type);
+        block->AppendInstruction(&created);
+        created.AddPhiOperand(&predecessor, &incoming);
+        return created;
+    }
+
     void keep(IrValue& value) {
         (void)emit(IrOpcode::ReferenceU32, IrType::Void, {&value});
     }
@@ -339,8 +355,13 @@ int main() {
         return count == 0u && !gone;
     });
 
-    passed &= run("an exec merged by a phi inside a loop keeps the select", [&] {
+    passed &= run("an exec carried around a loop whose every incoming exec implies the write's exec drops the select", [&] {
         const auto [count, gone] = mergedExec(false, true);
+        return count == 1u && gone;
+    });
+
+    passed &= run("an exec carried around a loop with a wider incoming exec keeps the select", [&] {
+        const auto [count, gone] = mergedExec(true, true);
         return count == 0u && !gone;
     });
 
@@ -425,9 +446,10 @@ int main() {
         return b.eliminate() == 0u && !removed(written);
     });
 
-    passed &= run("a write read inside a later loop must keep its select", [] {
+    const auto laterLoop = [](bool wideRead) {
         Builder b;
-        auto& exec = b.mask(16u);
+        auto& wide = b.mask(48u);
+        auto& exec = b.logicalAnd(wide, b.mask(16u));
         auto& old = b.lane();
         auto& written = b.select(exec, b.add(old, 1u), old);
         IrBlock& head = *b.block;
@@ -435,7 +457,138 @@ int main() {
         head.AddBranch(&loop);
         loop.AddBranch(&loop);
         b.block = &loop;
-        b.keep(b.select(exec, b.add(written, 2u), old));
+        b.keep(b.select(wideRead ? wide : exec, b.add(written, 2u), old));
+        return std::pair{b.eliminate(), removed(written)};
+    };
+
+    passed &= run("a write read inside a later loop under its own exec loses its select", [&] {
+        const auto [count, gone] = laterLoop(false);
+        return count == 1u && gone;
+    });
+
+    passed &= run("a write read inside a later loop under a wider exec keeps its select", [&] {
+        const auto [count, gone] = laterLoop(true);
+        return count == 0u && !gone;
+    });
+
+    enum class Latch { Narrowed, Revived };
+    const auto carried = [](Latch latch, bool readInside) {
+        Builder b;
+        auto& wide = b.mask(48u);
+        auto& exec = b.logicalAnd(wide, b.mask(40u));
+        auto& old = b.lane();
+        auto& written = b.select(exec, b.add(old, 1u), old);
+        const auto [savedLow, savedHigh] = b.ballotWords(exec);
+        IrBlock& entry = *b.block;
+        IrBlock& header = b.newBlock();
+        IrBlock& exit = b.newBlock();
+        entry.AddBranch(&header);
+        header.AddBranch(&header);
+        header.AddBranch(&exit);
+        b.block = &header;
+        auto& low = b.phi(IrType::U32, entry, *savedLow);
+        auto& high = b.phi(IrType::U32, entry, *savedHigh);
+        auto& value = b.phi(IrType::U32, entry, written);
+        auto& loopExec = b.threadBit(low, high);
+        auto& next = b.select(loopExec, b.add(value, 2u), value);
+        if (readInside) b.keep(b.select(loopExec, b.add(value, 3u), old));
+        if (latch == Latch::Narrowed) {
+            const auto [stayLow, stayHigh] = b.ballotWords(b.mask(24u));
+            low.AddPhiOperand(&header, &b.wordAnd(low, *stayLow));
+            high.AddPhiOperand(&header, &b.wordAnd(high, *stayHigh));
+        } else {
+            const auto [revivedLow, revivedHigh] = b.ballotWords(wide);
+            low.AddPhiOperand(&header, revivedLow);
+            high.AddPhiOperand(&header, revivedHigh);
+        }
+        value.AddPhiOperand(&header, &next);
+        b.block = &exit;
+        b.keep(b.select(b.threadBit(*savedLow, *savedHigh), b.add(value, 4u), old));
+        return std::pair{b.eliminate(), removed(written)};
+    };
+
+    passed &= run("a write carried through a loop whose exec is saved, narrowed and restored loses its select", [&] {
+        const auto [count, gone] = carried(Latch::Narrowed, false);
+        return count == 1u && gone;
+    });
+
+    passed &= run("a write read inside a loop under the loop's narrowed exec loses its select", [&] {
+        const auto [count, gone] = carried(Latch::Narrowed, true);
+        return count == 1u && gone;
+    });
+
+    passed &= run("a lane that becomes active again inside a loop and reads the write keeps the select", [&] {
+        const auto [count, gone] = carried(Latch::Revived, true);
+        return count == 0u && !gone;
+    });
+
+    passed &= run("a lane that becomes active again inside a loop but never reads the write lets the select go", [&] {
+        const auto [count, gone] = carried(Latch::Revived, false);
+        return count == 1u && gone;
+    });
+
+    passed &= run("an exec proven only by assuming a loop phi is forgotten once that phi turns out wider", [] {
+        Builder b;
+        auto& wide = b.mask(48u);
+        auto& exec = b.logicalAnd(wide, b.mask(40u));
+        auto& old = b.lane();
+        auto& written = b.select(exec, b.add(old, 1u), old);
+        const auto [savedLow, savedHigh] = b.ballotWords(exec);
+        IrBlock& entry = *b.block;
+        IrBlock& header = b.newBlock();
+        IrBlock& kill = b.newBlock();
+        IrBlock& revive = b.newBlock();
+        IrBlock& latch = b.newBlock();
+        IrBlock& exit = b.newBlock();
+        entry.AddBranch(&header);
+        header.AddBranch(&kill);
+        header.AddBranch(&revive);
+        kill.AddBranch(&latch);
+        revive.AddBranch(&latch);
+        latch.AddBranch(&header);
+        latch.AddBranch(&exit);
+        b.block = &header;
+        auto& low = b.phi(IrType::U32, entry, *savedLow);
+        auto& high = b.phi(IrType::U32, entry, *savedHigh);
+        (void)b.select(b.threadBit(low, high), written, old);
+        b.block = &kill;
+        const auto [stayLow, stayHigh] = b.ballotWords(b.mask(24u));
+        auto& killedLow = b.wordAnd(low, *stayLow);
+        auto& killedHigh = b.wordAnd(high, *stayHigh);
+        b.keep(b.select(b.threadBit(killedLow, killedHigh), written, old));
+        b.block = &revive;
+        const auto [revivedLow, revivedHigh] = b.ballotWords(wide);
+        b.block = &latch;
+        auto& mergedLow = b.phi(IrType::U32, kill, killedLow);
+        auto& mergedHigh = b.phi(IrType::U32, kill, killedHigh);
+        mergedLow.AddPhiOperand(&revive, revivedLow);
+        mergedHigh.AddPhiOperand(&revive, revivedHigh);
+        low.AddPhiOperand(&latch, &mergedLow);
+        high.AddPhiOperand(&latch, &mergedHigh);
+        return b.eliminate() == 0u && !removed(written);
+    });
+
+    passed &= run("a write mask computed inside an earlier loop does not let that loop's phis stand for it", [] {
+        Builder b;
+        auto& old = b.lane();
+        IrBlock& entry = *b.block;
+        IrBlock& header = b.newBlock();
+        IrBlock& exit = b.newBlock();
+        entry.AddBranch(&header);
+        header.AddBranch(&header);
+        header.AddBranch(&exit);
+        b.block = &header;
+        auto& low = b.phi(IrType::U32, entry, b.constant(0u));
+        auto& high = b.phi(IrType::U32, entry, b.constant(0u));
+        auto& bound = b.phi(IrType::U32, entry, b.constant(64u));
+        auto& exec = b.emit(IrOpcode::ULessThan32, IrType::Bool, {&b.lane(), &bound});
+        const auto [stayLow, stayHigh] = b.ballotWords(exec);
+        low.AddPhiOperand(&header, stayLow);
+        high.AddPhiOperand(&header, stayHigh);
+        bound.AddPhiOperand(&header, &b.emit(IrOpcode::ISub32, IrType::U32, {&bound, &b.constant(8u)}));
+        b.block = &exit;
+        auto& written = b.select(exec, b.add(old, 1u), old);
+        b.keep(b.select(b.threadBit(low, high), b.add(written, 2u), old));
         return b.eliminate() == 0u && !removed(written);
     });
 

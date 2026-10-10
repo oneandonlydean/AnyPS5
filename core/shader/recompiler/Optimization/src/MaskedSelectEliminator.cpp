@@ -274,6 +274,11 @@ Region regionOf(const std::vector<Region>& regions, const IrBlock* block) {
     return block != nullptr && block->Id() < regions.size() ? regions[block->Id()] : Region::Unreached;
 }
 
+bool followable(const std::vector<Region>& regions, const IrBlock* block, bool acrossLoops) {
+    const Region region = regionOf(regions, block);
+    return region == Region::Once || (acrossLoops && region == Region::Loop);
+}
+
 struct ImplicationKey {
     const IrValue* first = nullptr;
     const IrValue* second = nullptr;
@@ -291,10 +296,13 @@ class Implications {
 public:
     Implications(const std::vector<Region>& regions, std::uint32_t waveSize, std::size_t& work) : regions(regions), waveSize(waveSize), work(work) {}
 
-    void Reset(const IrValue* writeMask) {
+    void Reset(const IrValue* writeMask, bool acrossLoops) {
         mask = writeMask;
+        loops = acrossLoops;
         always = alwaysTrue(writeMask, waveSize);
         results.clear();
+        proven.clear();
+        assumptionReads = 0;
     }
 
     bool Implies(const IrValue* condition, std::uint32_t depth = 0) {
@@ -302,33 +310,61 @@ public:
         if (condition == mask || always) return true;
         if (condition->HasImmediate()) return condition->Type() == IrType::Bool && !condition->ImmediateBool();
         const ImplicationKey key{condition, nullptr};
-        if (const auto known = results.find(key); known != results.end()) return known->second;
+        if (const auto known = lookup(key)) return *known;
         if (depth > ImplicationDepthLimit || work == 0) return false;
         --work;
-        results.emplace(key, false);
+        const Attempt attempt = assume(key);
         bool result = false;
         if (condition->Opcode() == IrOpcode::LogicalAnd) {
             result = Implies(condition->Argument(0), depth + 1u) || Implies(condition->Argument(1), depth + 1u);
         } else if (condition->IsPhi()) {
-            result = mergesOutsideLoops(*condition);
+            result = merges(*condition);
             for (std::size_t index = 0; result && index < condition->ArgumentCount(); ++index) {
                 result = Implies(condition->Argument(index), depth + 1u);
             }
         } else if (const auto bit = threadBit(condition, waveSize)) {
             result = wordsImply(bit->low, bit->high, depth + 1u);
         }
-        results[key] = result;
-        return result;
+        return settle(key, attempt, result);
     }
 
 private:
     static constexpr std::uint32_t ImplicationDepthLimit = 64;
 
-    bool mergesOutsideLoops(const IrValue& phi) const {
-        if (regionOf(regions, phi.Parent()) != Region::Once || phi.ArgumentCount() != phi.PhiBlockCount()) return false;
+    enum class Proof : std::uint8_t { Assumed, Implied, NotImplied };
+
+    struct Attempt {
+        std::size_t proven = 0;
+        std::size_t assumptionReads = 0;
+    };
+
+    std::optional<bool> lookup(const ImplicationKey& key) {
+        const auto known = results.find(key);
+        if (known == results.end()) return std::nullopt;
+        if (known->second == Proof::Assumed) ++assumptionReads;
+        return known->second != Proof::NotImplied;
+    }
+
+    Attempt assume(const ImplicationKey& key) {
+        results.emplace(key, Proof::Assumed);
+        return Attempt{proven.size(), assumptionReads};
+    }
+
+    bool settle(const ImplicationKey& key, const Attempt& attempt, bool implied) {
+        if (!implied && assumptionReads != attempt.assumptionReads) {
+            for (std::size_t index = attempt.proven; index < proven.size(); ++index) results.erase(proven[index]);
+            proven.resize(attempt.proven);
+        }
+        results[key] = implied ? Proof::Implied : Proof::NotImplied;
+        if (implied) proven.push_back(key);
+        return implied;
+    }
+
+    bool merges(const IrValue& phi) const {
+        if (!followable(regions, phi.Parent(), loops) || phi.ArgumentCount() != phi.PhiBlockCount()) return false;
         for (std::size_t index = 0; index < phi.ArgumentCount(); ++index) {
             const IrValue* incoming = phi.Argument(index)->Resolve();
-            if (!incoming->HasImmediate() && regionOf(regions, incoming->Parent()) != Region::Once) return false;
+            if (!incoming->HasImmediate() && !followable(regions, incoming->Parent(), loops)) return false;
         }
         return true;
     }
@@ -343,10 +379,10 @@ private:
     bool wordsImply(const IrValue* low, const IrValue* high, std::uint32_t depth) {
         if (isImmediate(low, 0u) && (waveSize == 32u || isImmediate(high, 0u))) return true;
         const ImplicationKey key{low, high};
-        if (const auto known = results.find(key); known != results.end()) return known->second;
+        if (const auto known = lookup(key)) return *known;
         if (depth > ImplicationDepthLimit || work == 0) return false;
         --work;
-        results.emplace(key, false);
+        const Attempt attempt = assume(key);
         bool result = false;
         if (low->Opcode() == IrOpcode::CompositeExtractU32x4 && isImmediate(low->Argument(1)->Resolve(), 0u)) {
             const IrValue* ballot = low->Argument(0)->Resolve();
@@ -364,23 +400,25 @@ private:
                 }
             }
         }
-        if (!result && low->IsPhi() && mergesOutsideLoops(*low) && (waveSize == 32u || (high->IsPhi() && high->Parent() == low->Parent() && mergesOutsideLoops(*high)))) {
+        if (!result && low->IsPhi() && merges(*low) && (waveSize == 32u || (high->IsPhi() && high->Parent() == low->Parent() && merges(*high)))) {
             result = true;
             for (std::size_t index = 0; result && index < low->PhiBlockCount(); ++index) {
                 const IrValue* highIncoming = waveSize == 32u ? high : incomingFrom(*high, low->PhiBlock(index));
                 result = highIncoming != nullptr && wordsImply(low->Argument(index)->Resolve(), highIncoming, depth + 1u);
             }
         }
-        results[key] = result;
-        return result;
+        return settle(key, attempt, result);
     }
 
     const std::vector<Region>& regions;
     std::uint32_t waveSize;
     std::size_t& work;
     const IrValue* mask = nullptr;
+    bool loops = false;
     bool always = false;
-    std::unordered_map<ImplicationKey, bool, ImplicationKeyHash> results;
+    std::unordered_map<ImplicationKey, Proof, ImplicationKeyHash> results;
+    std::vector<ImplicationKey> proven;
+    std::size_t assumptionReads = 0;
 };
 
 std::vector<Region> blockRegions(const IrProgram& program) {
@@ -436,8 +474,9 @@ public:
     MaskedLaneWalk(const IrProgram& program, const std::vector<Region>& regions) : program(program), regions(regions), limit(walkLimit(program)), implications(regions, program.WaveSize(), work) {}
 
     bool UnobservedWhereMasked(const IrValue& select, const IrValue* mask) {
+        const bool acrossLoops = mask->HasImmediate() || regionOf(regions, mask->Parent()) == Region::Once;
         work = limit;
-        implications.Reset(mask);
+        implications.Reset(mask, acrossLoops);
         startVisits();
         pending.clear();
         pending.push_back(&select);
@@ -447,7 +486,7 @@ public:
             pending.pop_back();
             for (const IrUse& use : value->OperandUses()) {
                 const IrValue* user = use.user;
-                if (regionOf(regions, user->Parent()) != Region::Once) return false;
+                if (!followable(regions, user->Parent(), acrossLoops)) return false;
                 if (isSelect(user->Opcode()) && use.operand == 1u && implications.Implies(user->Argument(0))) continue;
                 if (user->Opcode() == IrOpcode::LogicalAnd && use.operand < 2u && implications.Implies(user->Argument(1u - use.operand))) continue;
                 if (readsOnlyWhereActive(user->Opcode()) && use.operand + 1u < user->ArgumentCount() && implications.Implies(user->Argument(user->ArgumentCount() - 1u))) continue;
