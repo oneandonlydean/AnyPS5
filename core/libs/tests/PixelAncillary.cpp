@@ -262,7 +262,7 @@ struct HelperProgram {
     IrValue* exported = nullptr;
 };
 
-static HelperProgram HelperOnly(IrProgram& program, HelperRead read) {
+static HelperProgram HelperOnly(IrProgram& program, HelperRead read, std::uint32_t chain = 0u) {
     auto& entry = Begin(program);
     auto& body = program.CreateBlock();
     auto& merge = program.CreateBlock();
@@ -292,7 +292,9 @@ static HelperProgram HelperOnly(IrProgram& program, HelperRead read) {
     value.AddPhiOperand(&entry, &written);
     value.AddPhiOperand(&body, &killed);
     builder.SetInsertionPoint(merge);
-    IrValue& data = builder.Emit(IrOpcode::CompositeConstructU32x4, IrType::U32x4, {&value, &target, &builder.Constant(0u), &builder.Constant(0u)});
+    IrValue* shaded = &value;
+    for (std::uint32_t step = 0; step < chain; ++step) shaded = &builder.IAdd(*shaded, helper);
+    IrValue& data = builder.Emit(IrOpcode::CompositeConstructU32x4, IrType::U32x4, {shaded, &target, &builder.Constant(0u), &builder.Constant(0u)});
     program.Metadata().exportInfo.push_back(ExportInfo {.kind = ExportTargetKind::Mrt, .index = 0u, .en = 0xFu, .done = true, .vm = true});
     IrValue& guard = read == HelperRead::FullWaveExport ? builder.ConstantBool(true) : exec;
     static_cast<void>(builder.Emit(IrOpcode::SetAttribute, IrType::Void, {&data, &guard}, ExportFlags {0u, 0u}));
@@ -312,9 +314,9 @@ static void LowerMasked(IrProgram& program) {
     const ShaderPixelInputInfo pixel {};
     ShaderInfoCollector().Collect(program, ShaderStageInputInfo {nullptr, &pixel, nullptr});
 }
-static void HelperLanesOnly() {
+static void HelperLanesOnly(std::uint32_t chain = 0u) {
     IrProgram program;
-    const HelperProgram built = HelperOnly(program, HelperRead::Export);
+    const HelperProgram built = HelperOnly(program, HelperRead::Export, chain);
     LowerMasked(program);
     for (const IrBlock* block : program.BlockOrder()) {
         for (const IrValue* inst : block->Instructions()) {
@@ -327,9 +329,9 @@ static void HelperLanesOnly() {
     const IrValue* entryValue = built.exported->Argument(0)->Resolve();
     Require(entryValue->HasImmediate() && entryValue->ImmediateU32() == SelectOther);
 }
-static void HelperLanesRefused(HelperRead read) {
+static void HelperLanesRefused(HelperRead read, std::uint32_t chain = 0u) {
     IrProgram program;
-    static_cast<void>(HelperOnly(program, read));
+    static_cast<void>(HelperOnly(program, read, chain));
     try {
         LowerMasked(program);
     } catch (const std::runtime_error& error) {
@@ -378,7 +380,9 @@ int main() {
     MergedRefused(IrOpcode::BitFieldUExtract, 12u, 4u, false);
     MergedRefused(IrOpcode::BitFieldUExtract, 0u, 2u, true);
     HelperLanesOnly();
+    HelperLanesOnly(6000u);
     HelperLanesRefused(HelperRead::FullWaveExport);
     HelperLanesRefused(HelperRead::DataTestExport);
     HelperLanesRefused(HelperRead::Ballot);
+    HelperLanesRefused(HelperRead::FullWaveExport, 6000u);
 }

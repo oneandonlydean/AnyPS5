@@ -162,6 +162,29 @@ int main() {
         return b.eliminate() == 2u && removed(first) && removed(second) && !removed(sink);
     });
 
+    passed &= run("a write read through thousands of lane-local values still loses its select", [] {
+        Builder b;
+        auto& exec = b.mask(16u);
+        auto& old = b.lane();
+        auto& written = b.select(exec, b.add(old, 1u), old);
+        IrValue* value = &written;
+        for (std::uint32_t step = 0; step < 6000u; ++step) value = &b.add(*value, step);
+        b.keep(b.select(exec, *value, old));
+        return b.eliminate() == 1u && removed(written);
+    });
+
+    passed &= run("thousands of lane-local values ending in a wider read keep the select", [] {
+        Builder b;
+        auto& wide = b.mask(32u);
+        auto& exec = b.logicalAnd(wide, b.mask(16u));
+        auto& old = b.lane();
+        auto& written = b.select(exec, b.add(old, 1u), old);
+        IrValue* value = &written;
+        for (std::uint32_t step = 0; step < 6000u; ++step) value = &b.add(*value, step);
+        b.keep(b.select(wide, *value, old));
+        return b.eliminate() == 0u && !removed(written);
+    });
+
     passed &= run("cross-lane reads must keep the select", [] {
         bool ok = true;
         for (const IrOpcode opcode : {IrOpcode::ReadFirstLane, IrOpcode::DppMoveU32, IrOpcode::BpermuteU32, IrOpcode::Permlane16U32, IrOpcode::SwizzleU32}) {

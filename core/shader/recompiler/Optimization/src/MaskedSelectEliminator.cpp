@@ -1,6 +1,7 @@
 #include "Optimization/MaskedSelectEliminator.hpp"
 #include "Optimization/DeadCodeEliminator.hpp"
 #include "RdnaDecoder/RdnaInstruction.hpp"
+#include <algorithm>
 #include <optional>
 #include <unordered_map>
 #include <unordered_set>
@@ -10,7 +11,8 @@
 namespace ShaderRecompiler {
 namespace {
 
-constexpr std::size_t VisitLimit = 4096;
+constexpr std::size_t MinimumWalkLimit = 4096;
+constexpr std::size_t WalkLimitPerInstruction = 2;
 constexpr std::uint32_t DepthLimit = 8;
 
 bool isSelect(IrOpcode opcode) {
@@ -266,6 +268,12 @@ bool alwaysTrue(const IrValue* value, std::uint32_t waveSize, std::uint32_t dept
     return bit && isImmediate(bit->low, 0xffffffffu) && isImmediate(bit->high, 0xffffffffu);
 }
 
+enum class Region : std::uint8_t { Unreached, Once, Loop };
+
+Region regionOf(const std::vector<Region>& regions, const IrBlock* block) {
+    return block != nullptr && block->Id() < regions.size() ? regions[block->Id()] : Region::Unreached;
+}
+
 struct ImplicationKey {
     const IrValue* first = nullptr;
     const IrValue* second = nullptr;
@@ -281,7 +289,13 @@ struct ImplicationKeyHash {
 
 class Implications {
 public:
-    Implications(const std::unordered_set<const IrBlock*>& once, const IrValue* mask, std::uint32_t waveSize) : once(once), mask(mask), waveSize(waveSize), always(alwaysTrue(mask, waveSize)) {}
+    Implications(const std::vector<Region>& regions, std::uint32_t waveSize, std::size_t& work) : regions(regions), waveSize(waveSize), work(work) {}
+
+    void Reset(const IrValue* writeMask) {
+        mask = writeMask;
+        always = alwaysTrue(writeMask, waveSize);
+        results.clear();
+    }
 
     bool Implies(const IrValue* condition, std::uint32_t depth = 0) {
         condition = condition->Resolve();
@@ -289,7 +303,8 @@ public:
         if (condition->HasImmediate()) return condition->Type() == IrType::Bool && !condition->ImmediateBool();
         const ImplicationKey key{condition, nullptr};
         if (const auto known = results.find(key); known != results.end()) return known->second;
-        if (depth > ImplicationDepthLimit) return false;
+        if (depth > ImplicationDepthLimit || work == 0) return false;
+        --work;
         results.emplace(key, false);
         bool result = false;
         if (condition->Opcode() == IrOpcode::LogicalAnd) {
@@ -310,10 +325,10 @@ private:
     static constexpr std::uint32_t ImplicationDepthLimit = 64;
 
     bool mergesOutsideLoops(const IrValue& phi) const {
-        if (phi.Parent() == nullptr || !once.contains(phi.Parent()) || phi.ArgumentCount() != phi.PhiBlockCount()) return false;
+        if (regionOf(regions, phi.Parent()) != Region::Once || phi.ArgumentCount() != phi.PhiBlockCount()) return false;
         for (std::size_t index = 0; index < phi.ArgumentCount(); ++index) {
             const IrValue* incoming = phi.Argument(index)->Resolve();
-            if (!incoming->HasImmediate() && (incoming->Parent() == nullptr || !once.contains(incoming->Parent()))) return false;
+            if (!incoming->HasImmediate() && regionOf(regions, incoming->Parent()) != Region::Once) return false;
         }
         return true;
     }
@@ -329,7 +344,8 @@ private:
         if (isImmediate(low, 0u) && (waveSize == 32u || isImmediate(high, 0u))) return true;
         const ImplicationKey key{low, high};
         if (const auto known = results.find(key); known != results.end()) return known->second;
-        if (depth > ImplicationDepthLimit) return false;
+        if (depth > ImplicationDepthLimit || work == 0) return false;
+        --work;
         results.emplace(key, false);
         bool result = false;
         if (low->Opcode() == IrOpcode::CompositeExtractU32x4 && isImmediate(low->Argument(1)->Resolve(), 0u)) {
@@ -359,14 +375,15 @@ private:
         return result;
     }
 
-    const std::unordered_set<const IrBlock*>& once;
-    const IrValue* mask;
+    const std::vector<Region>& regions;
     std::uint32_t waveSize;
-    bool always;
+    std::size_t& work;
+    const IrValue* mask = nullptr;
+    bool always = false;
     std::unordered_map<ImplicationKey, bool, ImplicationKeyHash> results;
 };
 
-std::unordered_set<const IrBlock*> blocksOutsideLoops(const IrProgram& program) {
+std::vector<Region> blockRegions(const IrProgram& program) {
     const auto& order = program.BlockOrder();
     if (order.empty()) return {};
     std::unordered_map<const IrBlock*, int> state;
@@ -399,46 +416,88 @@ std::unordered_set<const IrBlock*> blocksOutsideLoops(const IrProgram& program) 
             looping.insert(body.begin(), body.end());
         }
     }
-    std::unordered_set<const IrBlock*> result;
+    std::vector<Region> result;
     for (const auto& [block, visited] : state) {
-        if (visited == 2 && !looping.contains(block)) result.insert(block);
+        if (visited != 2) continue;
+        if (block->Id() >= result.size()) result.resize(block->Id() + 1u, Region::Unreached);
+        result[block->Id()] = looping.contains(block) ? Region::Loop : Region::Once;
     }
     return result;
 }
 
-bool unobservedWhereMasked(const IrProgram& program, const std::unordered_set<const IrBlock*>& once, const IrValue& select, const IrValue* mask) {
-    Implications implications(once, mask, program.WaveSize());
-    std::vector<const IrValue*> pending{&select};
-    std::unordered_set<const IrValue*> visited{&select};
-    while (!pending.empty()) {
-        const IrValue* value = pending.back();
-        pending.pop_back();
-        for (const IrUse& use : value->OperandUses()) {
-            const IrValue* user = use.user;
-            if (user->Parent() == nullptr || !once.contains(user->Parent())) return false;
-            if (isSelect(user->Opcode()) && use.operand == 1u && implications.Implies(user->Argument(0))) continue;
-            if (user->Opcode() == IrOpcode::LogicalAnd && use.operand < 2u && implications.Implies(user->Argument(1u - use.operand))) continue;
-            if (readsOnlyWhereActive(user->Opcode()) && use.operand + 1u < user->ArgumentCount() && implications.Implies(user->Argument(user->ArgumentCount() - 1u))) continue;
-            if (!user->IsPhi() && !isLaneLocal(user->Opcode()) && !isExplicitLodSample(program, *user)) return false;
-            if (visited.insert(user).second) {
-                if (visited.size() > VisitLimit) return false;
-                pending.push_back(user);
+std::size_t walkLimit(const IrProgram& program) {
+    std::size_t instructions = 0;
+    for (const IrBlock* block : program.BlockOrder()) instructions += block->Instructions().size();
+    return std::max(MinimumWalkLimit, WalkLimitPerInstruction * instructions);
+}
+
+class MaskedLaneWalk {
+public:
+    MaskedLaneWalk(const IrProgram& program, const std::vector<Region>& regions) : program(program), regions(regions), limit(walkLimit(program)), implications(regions, program.WaveSize(), work) {}
+
+    bool UnobservedWhereMasked(const IrValue& select, const IrValue* mask) {
+        work = limit;
+        implications.Reset(mask);
+        startVisits();
+        pending.clear();
+        pending.push_back(&select);
+        static_cast<void>(firstVisit(select));
+        while (!pending.empty()) {
+            const IrValue* value = pending.back();
+            pending.pop_back();
+            for (const IrUse& use : value->OperandUses()) {
+                const IrValue* user = use.user;
+                if (regionOf(regions, user->Parent()) != Region::Once) return false;
+                if (isSelect(user->Opcode()) && use.operand == 1u && implications.Implies(user->Argument(0))) continue;
+                if (user->Opcode() == IrOpcode::LogicalAnd && use.operand < 2u && implications.Implies(user->Argument(1u - use.operand))) continue;
+                if (readsOnlyWhereActive(user->Opcode()) && use.operand + 1u < user->ArgumentCount() && implications.Implies(user->Argument(user->ArgumentCount() - 1u))) continue;
+                if (!user->IsPhi() && !isLaneLocal(user->Opcode()) && !isExplicitLodSample(program, *user)) return false;
+                if (firstVisit(*user)) {
+                    if (work == 0) return false;
+                    --work;
+                    pending.push_back(user);
+                }
             }
         }
+        return true;
     }
-    return true;
-}
+
+private:
+    void startVisits() {
+        if (++epoch != 0u) return;
+        std::fill(visits.begin(), visits.end(), 0u);
+        epoch = 1u;
+    }
+
+    bool firstVisit(const IrValue& value) {
+        const std::uint32_t id = value.Id();
+        if (id >= visits.size()) visits.resize(id + 1u, 0u);
+        if (visits[id] == epoch) return false;
+        visits[id] = epoch;
+        return true;
+    }
+
+    const IrProgram& program;
+    const std::vector<Region>& regions;
+    std::size_t limit;
+    std::size_t work = 0;
+    Implications implications;
+    std::vector<const IrValue*> pending;
+    std::vector<std::uint32_t> visits;
+    std::uint32_t epoch = 0;
+};
 
 }
 
 MaskedSelectEliminationStats MaskedSelectEliminator::Eliminate(IrProgram& program) const {
     MaskedSelectEliminationStats stats;
-    const auto once = blocksOutsideLoops(program);
+    const auto regions = blockRegions(program);
+    MaskedLaneWalk walk(program, regions);
     bool changed = true;
     while (changed) {
         changed = false;
         for (auto blockIt = program.BlockOrder().rbegin(); blockIt != program.BlockOrder().rend(); ++blockIt) {
-            const bool single = once.contains(*blockIt);
+            const bool single = regionOf(regions, *blockIt) == Region::Once;
             auto& instructions = (*blockIt)->Instructions();
             auto it = instructions.end();
             while (it != instructions.begin()) {
@@ -446,7 +505,7 @@ MaskedSelectEliminationStats MaskedSelectEliminator::Eliminate(IrProgram& progra
                 IrValue* inst = *it;
                 if (!isSelect(inst->Opcode()) || inst->ArgumentCount() != 3u || !inst->HasUses()) continue;
                 const IrValue* mask = inst->Argument(0)->Resolve();
-                if (!alwaysTrue(mask, program.WaveSize()) && (!single || !unobservedWhereMasked(program, once, *inst, mask))) continue;
+                if (!alwaysTrue(mask, program.WaveSize()) && (!single || !walk.UnobservedWhereMasked(*inst, mask))) continue;
                 inst->ReplaceAllUsesWith(inst->Argument(1));
                 inst->Invalidate();
                 inst->SetParent(nullptr);
