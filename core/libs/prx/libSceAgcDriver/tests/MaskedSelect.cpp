@@ -592,7 +592,7 @@ int main() {
         return b.eliminate() == 0u && !removed(written);
     });
 
-    const auto sample = [](IrShaderStage stage, std::uint32_t sampleFlags) {
+    const auto sample = [](IrShaderStage stage, std::uint32_t sampleFlags, IrOpcode opcode = IrOpcode::ImageSampleRaw) {
         Builder b;
         b.program.Resources().stage = stage;
         MemoryInfo memory;
@@ -608,7 +608,7 @@ int main() {
         MemoryFlags flags{0u, 0u};
         std::uint64_t bits = 0;
         std::memcpy(&bits, &flags, sizeof(flags));
-        auto& sampled = b.emit(IrOpcode::ImageSampleRaw, IrType::U32x4, {&image, &sampler, &address}, bits);
+        auto& sampled = b.emit(opcode, IrType::U32x4, {&image, &sampler, &address}, bits);
         b.keep(b.select(exec, b.emit(IrOpcode::CompositeExtractU32x4, IrType::U32, {&sampled, &b.constant(0u)}), old));
         b.eliminate();
         return removed(written);
@@ -620,6 +620,26 @@ int main() {
 
     passed &= run("an explicit-LOD sample reads only its lane and drops the select", [&] {
         return sample(IrShaderStage::Pixel, RdnaImageSampleFlagLevelZero) && sample(IrShaderStage::Mesh, 0u);
+    });
+
+    passed &= run("a pixel gather without an LOD of its own takes it from the quad and keeps the select", [&] {
+        return !sample(IrShaderStage::Pixel, 0u, IrOpcode::ImageGatherRaw) && !sample(IrShaderStage::Pixel, RdnaImageSampleFlagBias, IrOpcode::ImageGatherRaw);
+    });
+
+    passed &= run("a gather with an explicit LOD reads only its lane and drops the select", [&] {
+        return sample(IrShaderStage::Pixel, RdnaImageSampleFlagLevelZero, IrOpcode::ImageGatherRaw) && sample(IrShaderStage::Pixel, RdnaImageSampleFlagLod, IrOpcode::ImageGatherRaw) &&
+               sample(IrShaderStage::Mesh, 0u, IrOpcode::ImageGatherRaw);
+    });
+
+    passed &= run("an image size query reads only its lane's level and drops the select", [] {
+        Builder b;
+        auto& exec = b.mask(16u);
+        auto& old = b.lane();
+        auto& written = b.select(exec, b.add(old, 1u), old);
+        auto& address = b.emit(IrOpcode::MakeImageAddress, IrType::ImageAddress, {&written});
+        auto& size = b.emit(IrOpcode::ImageQueryDimensions, IrType::U32x4, {&b.emit(IrOpcode::GetImageResource, IrType::ImageResource, {}), &address});
+        b.keep(b.select(exec, b.emit(IrOpcode::CompositeExtractU32x4, IrType::U32, {&size, &b.constant(0u)}), old));
+        return b.eliminate() == 1u && removed(written);
     });
 
     const auto guarded = [](IrOpcode opcode, bool sameExec, bool asActive) {
@@ -643,6 +663,12 @@ int main() {
                 b.keep(b.select(exec, b.emit(IrOpcode::CompositeExtractU32x4, IrType::U32, {&read, &b.constant(0u)}), old));
                 break;
             }
+            case IrOpcode::ImageWrite: {
+                auto& address = b.emit(IrOpcode::MakeImageAddress, IrType::ImageAddress, {&old, &old});
+                auto& texel = b.emit(IrOpcode::CompositeConstructU32x4, IrType::U32x4, {&written, &old, &old, &old});
+                b.emit(opcode, IrType::Void, {&b.emit(IrOpcode::GetImageResource, IrType::ImageResource, {}), &address, &texel, &active});
+                break;
+            }
             default:
                 b.emit(opcode, IrType::Void, {&b.emit(IrOpcode::CompositeConstructU32x4, IrType::U32x4, {&written, &old, &old, &old}), &active});
                 break;
@@ -657,6 +683,10 @@ int main() {
 
     passed &= run("a store, load or export under a wider exec keeps the select", [&] {
         return !guarded(IrOpcode::WriteSharedU32, false, false) && !guarded(IrOpcode::LoadBufferU32, false, false) && !guarded(IrOpcode::ImageRead, false, false) && !guarded(IrOpcode::SetAttribute, false, false);
+    });
+
+    passed &= run("an image write under the write's exec drops the select, under a wider exec or as its exec keeps it", [&] {
+        return guarded(IrOpcode::ImageWrite, true, false) && !guarded(IrOpcode::ImageWrite, false, false) && !guarded(IrOpcode::ImageWrite, true, true);
     });
 
     passed &= run("a value used as a store's exec keeps the select", [&] {

@@ -171,6 +171,7 @@ bool isLaneLocal(IrOpcode opcode) {
         case IrOpcode::FPFrexpMant64:
         case IrOpcode::FPFrexpExp64:
         case IrOpcode::MakeImageAddress:
+        case IrOpcode::ImageQueryDimensions:
             return true;
         default:
             return false;
@@ -205,6 +206,7 @@ bool readsOnlyWhereActive(IrOpcode opcode) {
         case IrOpcode::WriteSharedU32x4:
         case IrOpcode::SetAttribute:
         case IrOpcode::ImageRead:
+        case IrOpcode::ImageWrite:
             return true;
         default:
             return false;
@@ -212,7 +214,7 @@ bool readsOnlyWhereActive(IrOpcode opcode) {
 }
 
 bool isExplicitLodSample(const IrProgram& program, const IrValue& value) {
-    if (value.Opcode() != IrOpcode::ImageSampleRaw) return false;
+    if (value.Opcode() != IrOpcode::ImageSampleRaw && value.Opcode() != IrOpcode::ImageGatherRaw) return false;
     if (program.Resources().stage != IrShaderStage::Pixel) return true;
     const auto index = value.Flags<MemoryFlags>().index;
     if (index >= program.Resources().memoryInfo.size()) return false;
