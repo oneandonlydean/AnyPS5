@@ -2,6 +2,11 @@
 #include "prx/libSceAgcDriver/Execution/include/Driver/Shaders/ShaderRegistry.hpp"
 #include "prx/libSceAgcDriver/Execution/include/Driver/Diagnostics.hpp"
 #include "prx/libSceAgcDriver/Execution/include/GuestMemory.hpp"
+#include "Translation/NggPassthrough.hpp"
+#include <map>
+#include <mutex>
+#include <string>
+#include <tuple>
 
 namespace AgcDriver::DriverDetail {
 
@@ -10,6 +15,48 @@ namespace {
 std::uint32_t ReadGraphicsRegister(const Registers& registers, std::uint32_t offset) {
     const auto found = registers.find(offset);
     return found == registers.end() ? 0u : found->second;
+}
+
+bool PassthroughNeedsSubgroup(const QueueState& queue, const ShaderRegistry& registry) {
+    Graphics::NoteRegisterRead(Graphics::RegisterBank::Context, 0x2d5);
+    const auto stages = ReadGraphicsRegister(queue.context, 0x2d5);
+    if ((stages & 0x02000024u) != 0x02000000u) return false;
+    Graphics::NoteRegisterRead(Graphics::RegisterBank::Shader, 0xc8);
+    Graphics::NoteRegisterRead(Graphics::RegisterBank::Shader, 0xc9);
+    Graphics::NoteRegisterRead(Graphics::RegisterBank::Shader, 0x8b);
+    Graphics::NoteRegisterRead(Graphics::RegisterBank::UserConfig, 0x25b);
+    const auto high = ReadGraphicsRegister(queue.shader, 0xc9);
+    require((high & ~0xffu) == 0, "reserved graphics program address bits are set");
+    const auto address = (static_cast<std::uint64_t>(ReadGraphicsRegister(queue.shader, 0xc8)) << 8u) | (static_cast<std::uint64_t>(high) << 40u);
+    auto it = registry.upper_bound(address);
+    require(it != registry.begin(), "NGG passthrough program does not belong to a registered shader");
+    --it;
+    const auto& snapshot = it->second;
+    require(address - snapshot->codeAddress < snapshot->code.size() * sizeof(std::uint32_t) && (address - snapshot->codeAddress) % sizeof(std::uint32_t) == 0, "NGG passthrough program is outside registered shader code");
+    const auto group = queue.userConfig.find(0x25b);
+    require(group != queue.userConfig.end(), "NGG passthrough draw without GE_CNTL");
+    const auto resources = ReadGraphicsRegister(queue.shader, 0x8b);
+    const auto userCount = ((resources >> 1u) & 0x1fu) | (((resources >> 27u) & 1u) << 5u);
+    const auto codeOffset = static_cast<std::size_t>((address - snapshot->codeAddress) / sizeof(std::uint32_t));
+    const ShaderRecompiler::NggSubgroupLimits limits{(stages & 0x00400000u) != 0 ? 32u : 64u, (group->second >> 9u) & 0x1ffu, group->second & 0x1ffu};
+    using Key = std::tuple<const ShaderSnapshot*, std::size_t, std::uint32_t, std::uint32_t, std::uint32_t, std::uint32_t>;
+    struct Verdict {
+        std::weak_ptr<const ShaderSnapshot> snapshot;
+        bool subgroup;
+    };
+    static std::mutex mutex;
+    static std::map<Key, Verdict> verdicts;
+    const Key key{snapshot.get(), codeOffset, userCount, limits.waveSize, limits.vertices, limits.primitives};
+    {
+        std::lock_guard lock(mutex);
+        const auto found = verdicts.find(key);
+        if (found != verdicts.end() && found->second.snapshot.lock() == snapshot) return found->second.subgroup;
+    }
+    const auto reason = ShaderRecompiler::NggPassthroughSubgroupDependence(std::span(snapshot->code).subspan(codeOffset), userCount, limits);
+    std::lock_guard lock(mutex);
+    std::erase_if(verdicts, [](const auto& entry) { return entry.second.snapshot.expired(); });
+    verdicts.insert_or_assign(key, Verdict{snapshot, reason.has_value()});
+    return reason.has_value();
 }
 
 }
@@ -113,7 +160,7 @@ void DecodeGraphicsPrograms(DrawDecode& decoded, const QueueState& queue, const 
 
 std::shared_ptr<DrawDecode> Driver::decodeDraw(const QueueState& queue, const Submission& submission) {
     auto product = std::make_shared<DrawDecode>();
-    product->state = Graphics::DecodeState(queue);
+    product->state = Graphics::DecodeState(queue, PassthroughNeedsSubgroup(queue, *submission.shaders));
     DecodeGraphicsPrograms(*product, queue, *submission.shaders, false, true);
     product->pixel = Graphics::DecodePixelStageInfo(queue.context, Graphics::ExportMappings(product->state), Graphics::PixelProgramSkipped(queue));
     product->pixel.targetExportPacking = Graphics::ExportPackings(product->state);

@@ -36,7 +36,11 @@ struct TranslateOptions {
     std::optional<ShaderFloatMode> floatMode;
     ShaderStageInputInfo inputInfo;
     const EmbeddedFetchPlan* embeddedFetch = nullptr;
+    bool subgroupContextMarkers = false;
 };
+
+inline constexpr std::uint32_t SubgroupMarkerFirstRegister = NumScalarRegs;
+inline constexpr std::uint32_t SubgroupMarkerVectorOffset = 8u;
 
 class InstructionTranslator {
 public:

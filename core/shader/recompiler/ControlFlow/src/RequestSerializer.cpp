@@ -482,6 +482,9 @@ void writeMeshConfiguration(Writer& writer, const MeshConfiguration& configurati
     writer.WriteU32(configuration.ldsSizeDwords);
     writer.WriteU32(configuration.provokingVertex);
     writer.WriteU32(configuration.esgsItemSize);
+    writer.WriteBool(configuration.passthrough);
+    writer.WriteU32(configuration.reuseVertices);
+    writer.WriteU32(configuration.reusePrimitives);
 }
 
 MeshConfiguration readMeshConfiguration(Reader& reader, std::uint32_t version) {
@@ -495,6 +498,9 @@ MeshConfiguration readMeshConfiguration(Reader& reader, std::uint32_t version) {
     configuration.ldsSizeDwords = reader.ReadU32();
     configuration.provokingVertex = reader.ReadU32();
     configuration.esgsItemSize = version >= 4u ? reader.ReadU32() : 4u;
+    configuration.passthrough = version >= 16u ? reader.ReadBool() : false;
+    configuration.reuseVertices = version >= 16u ? reader.ReadU32() : 0u;
+    configuration.reusePrimitives = version >= 16u ? reader.ReadU32() : 0u;
     return configuration;
 }
 
@@ -732,7 +738,7 @@ std::string RequestSerializer::Serialize(const RecompileRequest& request) const 
     std::string buffer;
     Writer writer(buffer);
     writer.WriteU32(0x41505335u);
-    writer.WriteU32(15u);
+    writer.WriteU32(16u);
     writeShaderBinary(writer, request.shader);
     writeGuestContext(writer, request.context);
     writeSpirvTarget(writer, request.target);
@@ -759,7 +765,7 @@ DeserializedRequest RequestSerializer::Deserialize(std::string_view text) const 
     Reader reader(decoded);
     if (reader.ReadU32() != 0x41505335u) throw std::runtime_error("invalid recompile request signature");
     const auto version = reader.ReadU32();
-    if (version < 1u || version > 15u) throw std::runtime_error("unsupported recompile request serialization version");
+    if (version < 1u || version > 16u) throw std::runtime_error("unsupported recompile request serialization version");
     DeserializedRequest result{};
     result.request.shader = readShaderBinary(reader, result.shaderCode, result.shaderHeader);
     result.request.context = readGuestContext(reader, result, version);

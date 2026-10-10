@@ -41,8 +41,14 @@ struct MeshArguments {
     std::uint32_t layers;
     std::uint32_t indexCount;
     std::uint32_t firstIndex;
+    std::uint32_t groupStride = 0;
 };
 static_assert(sizeof(MeshArguments) == ShaderRecompiler::MeshArgumentBytes);
+struct MeshGroupTable {
+    std::uint32_t groups = 0;
+    std::vector<std::uint32_t> words;
+};
+MeshGroupTable BuildMeshGroupTable(const ShaderRecompiler::MeshConfiguration& mesh, std::span<const std::byte> indices, std::uint32_t indexSize, std::uint32_t indexCount);
 struct MeshArgumentRules {
     std::uint32_t indexCount;
     std::uint32_t inputSize;

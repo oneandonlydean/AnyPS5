@@ -232,6 +232,10 @@ bool PreparedAtUse(const ShaderSnapshot& snapshot, const ShaderRecompiler::Recom
         APS5_LOG_ERR("The null pixel program has no wave%u artifact for this draw; preparing it at draw", request.context.waveSize);
         return true;
     }
+    if (!snapshot.header.empty() && request.graphics && request.graphics->mesh && request.graphics->mesh->passthrough) {
+        APS5_LOG_ERR("NGG passthrough program 0x%llx needs its subgroup; preparing its mesh artifact at draw", static_cast<unsigned long long>(request.shader.codeAddress));
+        return true;
+    }
     if (!snapshot.header.empty()) return snapshot.prepared->deferred;
     if (snapshot.type != 0 || request.shader.stage != ShaderRecompiler::ShaderStage::Compute) throw std::runtime_error("AGC driver: unregistered program is not a compute shader");
     APS5_LOG_ERR("Compute shader 0x%llx was not registered; preparing its artifact at dispatch", static_cast<unsigned long long>(snapshot.codeAddress));

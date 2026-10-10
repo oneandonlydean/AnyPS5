@@ -72,6 +72,7 @@ struct IrResourcePlan {
     // Detail::ComputePureFlatSlots): a driver may reuse a capture whose words differ only there.
     std::vector<std::uint8_t> pureFlatSlots;
     bool requiresSpecializationMemory = false;
+    bool allocationRequests = false;
     bool srtPlanComplete = false;
     bool resourceTrackingComplete = false;
     ShaderInfo info;

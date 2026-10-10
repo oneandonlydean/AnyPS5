@@ -262,6 +262,9 @@ struct MeshConfiguration {
     std::uint32_t ldsSizeDwords;
     std::uint32_t provokingVertex;
     std::uint32_t esgsItemSize = 0;
+    bool passthrough = false;
+    std::uint32_t reuseVertices = 0;
+    std::uint32_t reusePrimitives = 0;
 };
 
 struct TessellationConfiguration {
@@ -277,7 +280,12 @@ inline constexpr std::uint32_t MeshDrawPushBytes = 24;
 inline constexpr std::uint32_t MeshArgumentAddressDword = 4;
 inline constexpr std::uint32_t MeshArgumentIndexCountDword = 3;
 inline constexpr std::uint32_t MeshArgumentFirstIndexDword = 4;
-inline constexpr std::uint32_t MeshArgumentBytes = 20;
+inline constexpr std::uint32_t MeshArgumentGroupStrideDword = 5;
+inline constexpr std::uint32_t MeshArgumentBytes = 24;
+inline constexpr std::uint32_t MeshGroupRecordHeaderDwords = 2;
+constexpr std::uint32_t MeshGroupTableStride(const MeshConfiguration& mesh) {
+    return MeshGroupRecordHeaderDwords + mesh.reuseVertices + mesh.reusePrimitives;
+}
 inline constexpr std::uint32_t MeshIndexBufferUserWord = 4;
 inline constexpr std::uint32_t WorkgroupMemoryDescriptorSet = 1;
 

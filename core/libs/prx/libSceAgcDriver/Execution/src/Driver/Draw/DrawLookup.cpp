@@ -22,6 +22,9 @@ void Driver::lookupDraw(const Submission& submission, const std::shared_ptr<Vulk
             if (graphics.stages.mesh) {
                 const auto& mesh = *graphics.stages.mesh;
                 for (const auto value : {mesh.inputPrimitive, mesh.primitivesPerGroup, mesh.verticesPerGroup, mesh.maxVertices, mesh.maxPrimitives, mesh.threadsPerGroup, mesh.ldsSizeDwords, mesh.provokingVertex, mesh.esgsItemSize}) mix(value);
+                mix(mesh.passthrough);
+                mix(mesh.reuseVertices);
+                mix(mesh.reusePrimitives);
             }
             mix(graphics.stages.tessellation.has_value());
             if (graphics.stages.tessellation) {

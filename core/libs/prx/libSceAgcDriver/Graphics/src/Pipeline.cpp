@@ -646,6 +646,10 @@ void pipelineKey(std::vector<std::byte>& key, const Context& context, const Stat
         append(key, mesh.threadsPerGroup);
         append(key, mesh.ldsSizeDwords);
         append(key, mesh.provokingVertex);
+        append(key, mesh.esgsItemSize);
+        append(key, mesh.passthrough);
+        append(key, mesh.reuseVertices);
+        append(key, mesh.reusePrimitives);
     }
     append(key, state.stages.tessellation.has_value());
     if (state.stages.tessellation) {

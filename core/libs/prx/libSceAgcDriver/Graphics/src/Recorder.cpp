@@ -2532,6 +2532,21 @@ bool Recorder::refreshDrawSnapshot(DrawSnapshot& entry, std::uint64_t address, s
     return true;
 }
 
+std::shared_ptr<Buffer> Recorder::DerivedDrawBuffer(const std::shared_ptr<Buffer>& copy, std::uint64_t key, std::uint32_t& value) const {
+    const auto found = derivedDrawBuffers.find({copy.get(), key});
+    if (found == derivedDrawBuffers.end() || found->second.copy.lock() != copy) return {};
+    value = found->second.value;
+    return found->second.derived;
+}
+
+void Recorder::KeepDerivedDrawBuffer(const std::shared_ptr<Buffer>& copy, std::uint64_t key, std::shared_ptr<Buffer> derived, std::uint32_t value) {
+    if (derivedDrawBuffers.size() >= derivedDrawSweep) {
+        std::erase_if(derivedDrawBuffers, [](const auto& entry) { return entry.second.copy.expired(); });
+        derivedDrawSweep = std::max<std::size_t>(256, 2 * derivedDrawBuffers.size());
+    }
+    derivedDrawBuffers.insert_or_assign(std::pair{copy.get(), key}, DerivedDrawBufferEntry{copy, std::move(derived), value});
+}
+
 void Recorder::KeepDrawSnapshot(std::uint64_t address, std::size_t bytes, std::uint64_t generation, std::uint64_t registryGeneration, std::shared_ptr<Buffer> buffer, SnapshotUse use, std::uint32_t derived) {
     const bool storage = use == SnapshotUse::Storage;
     const auto budget = storage ? DrawSnapshotBudget : DrawInputBudget;

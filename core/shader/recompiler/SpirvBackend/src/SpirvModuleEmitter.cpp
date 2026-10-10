@@ -1088,6 +1088,36 @@ std::uint32_t EmitMeshArgument(SpirvValueEmitContext& ctx, const IrValue& inst) 
     return value;
 }
 
+std::uint32_t EmitMeshTableLoad(SpirvValueEmitContext& ctx, const IrValue& inst) {
+    auto& state = ctx.state;
+    if (state.program.Resources().stage != IrShaderStage::Mesh) {
+        ctx.Fail(inst, "mesh table load outside a mesh shader");
+    }
+    const auto index = ctx.Arg(inst, 0);
+    const auto condition = ctx.Arg(inst, 1);
+    const auto push = [&](std::uint32_t dword) {
+        const auto pointer = state.module.AllocateId();
+        state.module.AddFunction(spv::OpAccessChain, TypePushConstantElementPointer(state), pointer, state.pushConstantVariable, ConstantU32(state, 0u), ConstantU32(state, MeshDrawPushOffsetBytes / 4u + dword));
+        const auto value = state.module.AllocateId();
+        state.module.AddFunction(spv::OpLoad, TypeU32(state), value, pointer);
+        return Unary(state, spv::OpUConvert, TypeScalarU64(state), value);
+    };
+    const auto low = push(MeshArgumentAddressDword);
+    const auto high = push(MeshArgumentAddressDword + 1u);
+    const auto address = Binary(state, spv::OpBitwiseOr, TypeScalarU64(state), low, Binary(state, spv::OpShiftLeftLogical, TypeScalarU64(state), high, ConstantU32(state, 32u)));
+    const auto present = Binary(state, spv::OpINotEqual, TypeBool(state), address, BdaConstant(state, 0u));
+    const auto load = Binary(state, spv::OpLogicalAnd, TypeBool(state), present, condition);
+    return EmitValueOrZeroIfCondition(state, load, [&]() {
+        const auto offset = Binary(state, spv::OpShiftLeftLogical, TypeScalarU64(state), Unary(state, spv::OpUConvert, TypeScalarU64(state), index), ConstantU32(state, 2u));
+        const auto element = Binary(state, spv::OpIAdd, TypeScalarU64(state), address, offset);
+        const auto pointer = state.module.AllocateId();
+        state.module.AddFunction(spv::OpConvertUToPtr, TypePointer(state, spv::StorageClassPhysicalStorageBuffer, TypeU32(state)), pointer, element);
+        const auto loaded = state.module.AllocateId();
+        state.module.AddFunction(spv::OpLoad, TypeU32(state), loaded, pointer, spv::MemoryAccessAlignedMask, 4u);
+        return loaded;
+    });
+}
+
 std::uint32_t EmitGetTessellationAttribute(SpirvValueEmitContext& ctx, const IrValue& inst) {
     return EmitValueOrZeroIfCondition(ctx.state, ctx.Arg(inst, 2), [&]() {
         const auto value = ctx.state.module.AllocateId();

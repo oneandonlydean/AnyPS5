@@ -1244,6 +1244,13 @@ void verifyMeshConfiguration() {
     other.graphics = GraphicsCompileContext{0u, {}, otherMesh, std::nullopt, {}};
     RecompileCacheKey::Build(other, key);
     require(key != first && RecompileCacheKey::ContextHash(request) != RecompileCacheKey::ContextHash(other), "the cache keys ignore the mesh configuration");
+    otherMesh = mesh;
+    otherMesh.passthrough = true;
+    other.graphics = GraphicsCompileContext{0u, {}, otherMesh, std::nullopt, {}};
+    RecompileCacheKey::Build(other, key);
+    require(key != first && RecompileCacheKey::ContextHash(request) != RecompileCacheKey::ContextHash(other), "the cache keys ignore passthrough input layout");
+    const auto passReplay = RequestSerializer{}.Deserialize(RequestSerializer{}.Serialize(other));
+    require(passReplay.request.graphics->mesh->passthrough && !replay.request.graphics->mesh->passthrough, "passthrough input layout was lost in serialization");
     const std::array<std::uint32_t, 8> users{};
     request.context.waveSize = 32u;
     request.context.userData = users;
@@ -1373,12 +1380,12 @@ void verifyPixelRequestSerialization() {
     minimal.context.waveSize = 64;
     minimal.context.pixel = ShaderPixelStageInfo{};
     const auto encoded = serializer.Serialize(minimal);
-    require(requestPrefix(encoded, 8u) == "NVNQQQ8AAAA=", "new requests did not use serialization version 15");
+    require(requestPrefix(encoded, 8u) == "NVNQQRAAAAA=", "new requests did not use serialization version 16");
     constexpr std::size_t mappingOffset = 8u + 37u + 18u + 163u;
     for (std::size_t bytes = 0; bytes < 17u; ++bytes) {
         expectFailure([&] { static_cast<void>(serializer.Deserialize(requestPrefix(encoded, mappingOffset + bytes))); }, "truncated data", "a truncated pixel mapping, packing or dual-source flag was accepted");
     }
-    for (const auto unsupported : {"NVNQQQAAAAA=", "NVNQQRAAAAA="}) {
+    for (const auto unsupported : {"NVNQQQAAAAA=", "NVNQQREAAAA="}) {
         expectFailure([&] { static_cast<void>(serializer.Deserialize(unsupported)); }, "serialization version", "an unsupported request version was accepted");
     }
 }

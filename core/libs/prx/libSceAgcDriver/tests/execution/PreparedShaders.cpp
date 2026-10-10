@@ -85,8 +85,34 @@ void NullPixelAtDraw(AgcDriver::VulkanDevice& device) {
     Require(AgcDriver::DriverDetail::SourceHandleFor(snapshot, 0, request) == snapshot.prepared->entries.back().handle && snapshot.prepared->entries.size() == 2, "the null pixel program was prepared again for the same draw");
 }
 
+void PassthroughMeshAtDraw(AgcDriver::VulkanDevice& device) {
+    alignas(256) static constexpr std::array<std::uint32_t, 28> code{
+        0x938cff02, 0x0009000c, 0x938dff02, 0x00090016, 0x8f0e8c0d, 0x887c0e0c, 0xbf900009, 0xd7650009,
+        0x000100c1, 0xd7660009, 0x000212c1, 0x7da8120d, 0xbf880002, 0xf8000941, 0x00000000, 0xbefe04c1,
+        0x7da8120c, 0xbf880009, 0xe0382000, 0x80021005, 0xe0382010, 0x80021405, 0xbf8c3f70, 0xf80008cf,
+        0x13121110, 0xf800020f, 0x17161514, 0xbf810000,
+    };
+    AgcDriver::DriverDetail::ShaderSnapshot snapshot{reinterpret_cast<std::uintptr_t>(code.data()), 0, 2, {code.begin(), code.end()}, {}};
+    snapshot.header.resize(sizeof(Shader));
+    std::vector<std::uint32_t> users(12, 0u);
+    const ShaderRecompiler::MeshConfiguration mesh{4u, 21u, 63u, 64u, 64u, 64u, 0u, 0u, 4u, true};
+    ShaderRecompiler::RecompileRequest request{
+        {ShaderRecompiler::ShaderStage::Mesh, snapshot.codeAddress, snapshot.code, 0, {}},
+        {64, 0, users, std::nullopt, std::nullopt, ShaderRecompiler::ShaderVertexStageInfo{}, {}},
+        device.Target(),
+        {0, 0, 0, ShaderRecompiler::MeshDrawPushOffsetBytes},
+        ShaderRecompiler::GraphicsCompileContext{0, {}, mesh, std::nullopt, {0, 63, 0, 1}}
+    };
+    const auto handle = AgcDriver::DriverDetail::SourceHandleFor(snapshot, 0, request);
+    Require(snapshot.prepared->entries.size() == 1 && snapshot.prepared->entries.front().handle == handle, "a registered passthrough program that needs its subgroup was not prepared at draw");
+    Require(AgcDriver::DriverDetail::SourceHandleFor(snapshot, 0, request) == handle && snapshot.prepared->entries.size() == 1, "a registered passthrough program was prepared again for the same draw");
+    request.graphics->mesh->passthrough = false;
+    ExpectFailure([&] { static_cast<void>(AgcDriver::DriverDetail::SourceHandleFor(snapshot, 0, request)); }, "artifact is missing");
+}
+
 void Run(AgcDriver::VulkanDevice& device) {
     NullPixelAtDraw(device);
+    PassthroughMeshAtDraw(device);
     alignas(256) std::array<std::uint32_t, 1> code{0xbf810000u};
     std::array<std::uint32_t, 4> users{};
     const ShaderRecompiler::ShaderComputeStageInfo compute{{1, 1, 1}, 0, {false, false, false}, false, 1, {}};
