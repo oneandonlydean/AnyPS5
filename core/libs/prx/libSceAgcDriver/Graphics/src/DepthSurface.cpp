@@ -213,6 +213,8 @@ std::shared_ptr<Texture> DepthSurfaceTexture(const Context& context, std::span<c
         const bool d16 = target.format == VK_FORMAT_D16_UNORM || target.format == VK_FORMAT_D16_UNORM_S8_UINT;
         const bool depthBits = words.size() >= 4 && ShaderRecompiler::DepthBitsTextureWidth(words[1], words[3]) == (d16 ? 16u : 32u);
         if (ResolveTextureFormat(resource.format) != (d16 ? VK_FORMAT_R16_UNORM : VK_FORMAT_R32_SFLOAT) && !depthBits) return nullptr;
+    } else if (BytesPerElement(resource.format) != 1u) {
+        return nullptr;
     }
     return (*found)->Sampled(words, resource, components);
 }
