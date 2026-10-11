@@ -211,8 +211,7 @@ void Run(AgcDriver::VulkanDevice& device, std::uint8_t* block) {
     Require(AgcDriver::Graphics::StorageImageServesKeys(*image, AddressOf(copied)), "the written image does not serve the copied keys");
     Require(image->UploadedKeys() == DccKeys::Uncompressed && image->FilledKeys() == DccKeys::Uncompressed, "the written image still holds the clear it was uploaded under");
     const bool stillWatched = AgcDriver::GuestMemory::Watched(surface, SurfaceBytes);
-    const bool keepsCopy = !stillWatched || AgcDriver::Graphics::WatchedImportsStampPages();
-    Require(image->GuestSnapshotValid() == keepsCopy, !keepsCopy ? "a fast-cleared upload of write-watched memory read its guest bytes" : stillWatched ? "a fast-cleared upload of write-watched memory that an import window can stamp kept no guest bytes to compare" : "a fast-cleared upload of untracked memory kept no guest bytes to compare");
+    Require(image->GuestSnapshotValid() == !stillWatched, stillWatched ? "a fast-cleared upload of write-watched memory read its guest bytes" : "a fast-cleared upload of untracked memory kept no guest bytes to compare");
     const auto pendingVersion = image->Version();
     for (int repeat = 0; repeat < 3; ++repeat) {
         Require(image->Refresh(), "an unchanged pending image was uploaded again");
