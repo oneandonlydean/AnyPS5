@@ -48,7 +48,7 @@ void Append(std::vector<std::uint32_t>& commands, std::uint32_t opcode, std::ini
     commands.insert(commands.end(), payload);
 }
 
-std::vector<std::uint32_t> DrawTwice() {
+std::vector<std::uint32_t> DrawThrice() {
     const auto color = reinterpret_cast<std::uintptr_t>(ColorMemory.data());
     const auto vertex = reinterpret_cast<std::uintptr_t>(VertexCode.data());
     const auto pixel = reinterpret_cast<std::uintptr_t>(PixelCode.data());
@@ -83,20 +83,22 @@ std::vector<std::uint32_t> DrawTwice() {
     for (const auto& [offset, value] : shader) Append(commands, 0x76, {offset, value});
     Append(commands, 0x2d, {3, 2});
     Append(commands, 0x2d, {3, 2});
+    Append(commands, 0x2d, {3, 2});
     return commands;
 }
 
-void SecondDrawHitsTheCache(bool libraries) {
+void ThirdDrawHitsTheCache(bool libraries) {
     Registered(VertexHeader, VertexCode.data(), sizeof(VertexCode), 2);
     Registered(PixelHeader, PixelCode.data(), sizeof(PixelCode), 1);
-    auto commands = DrawTwice();
+    auto commands = DrawThrice();
     Packet packet{commands.data(), static_cast<std::uint32_t>(commands.size()), 0, {}};
     Require(sceAgcDriverSubmitDcb(&packet) == 0, "the draw submission failed");
     AgcDriverWaitIdle_nid_postfix();
     const auto counters = AgcDriver::DriverDetail::Driver::Get().DrawCacheCounters();
     const auto mode = std::string(libraries ? "with" : "without") + " graphics pipeline libraries";
     const auto layout = counters.misses[static_cast<std::size_t>(DrawMiss::Layout)];
-    Require(counters.lookups == 2 && counters.absent == 1, mode + ": the two draws made " + std::to_string(counters.lookups) + " draw-cache lookups (" + std::to_string(counters.absent) + " without an entry), expected 2 lookups with 1 absent");
+    Require(counters.lookups == 3 && counters.absent == 2, mode + ": the three draws made " + std::to_string(counters.lookups) + " draw-cache lookups (" + std::to_string(counters.absent) + " without an entry), expected 3 lookups with 2 absent");
+    Require(counters.inserts == 1, mode + ": the three draws inserted " + std::to_string(counters.inserts) + " draw entries, expected 1: a key is cached the second time it is seen");
     Require(layout == 0, mode + ": the repeated draw missed the draw cache on its push offset (" + std::to_string(layout) + " layout misses)");
     Require(counters.hits == 1, mode + ": the repeated draw did not reuse the cached draw (" + std::to_string(counters.hits) + " hits)");
 }
@@ -112,7 +114,7 @@ int main() {
             libraries = device->GraphicsPipelineLibraries();
         }
         if (!libraries && std::getenv("APS5_NO_GPL") == nullptr) return VulkanTestSkipped;
-        SecondDrawHitsTheCache(libraries);
+        ThirdDrawHitsTheCache(libraries);
         AgcDriverShutdown_nid_postfix();
         std::cout << "A repeated draw reused the cached draw " << (libraries ? "with" : "without") << " graphics pipeline libraries\n";
         return 0;
