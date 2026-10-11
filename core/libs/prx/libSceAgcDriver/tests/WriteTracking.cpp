@@ -301,6 +301,94 @@ void CheckCollectBoundaries() {
 }
 }
 
+void CheckImportWindow() {
+    void* memory = AllocateWatched(3 * Block);
+    const auto base = reinterpret_cast<std::uint64_t>(memory);
+    auto* bytes = static_cast<volatile std::uint8_t*>(memory);
+    std::memset(memory, 0x11, 3 * Block);
+    const auto synced = CollectWritesUncached(base, 3 * Block);
+    Require(synced != 0, "the import window block is not collected");
+    Require(ImportWatched(base, 3 * Block, [&] {
+        bytes[0x100] = 0x11;
+        bytes[Block + 0x2000] = 0x22;
+        return true;
+    }), "the import window import failed");
+    Require(Watched(base, 3 * Block), "an import window left its range unwatched");
+    const std::array<std::uint64_t, 3> generations{synced, synced, synced};
+    std::array<std::uint8_t, 3> changed{};
+    std::array<std::uint8_t, 3> cpu{};
+    Require(ChangedBlocks(base, 3 * Block, generations, changed, cpu), "the import window block is not tracked");
+    Require(changed[0] == BlockUnchanged && UnchangedSince(base, Block, synced), "a page an import window resolved without changing its bytes reads as written");
+    Require(changed[1] == BlockWritten && WrittenSince(base + Block, Block, synced) && cpu[1] == 1, "a store of new bytes within an import window was missed");
+    Require(changed[2] == BlockUnchanged && cpu[2] == 0, "a block the import window did not touch reads as written");
+    Require(cpu[0] == 1, "a page an import window resolved no longer counts as possibly touched by the CPU");
+    const auto after = CollectWritesUncached(base, 3 * Block);
+    bytes[0x100] = 0x33;
+    static_cast<void>(CollectWritesUncached(base, 3 * Block));
+    Require(!UnchangedSince(base, Block, after), "a store after the import window was missed");
+}
+
+void ProtectPage(std::uint64_t address, bool readable) {
+#ifdef _WIN32
+    DWORD previous = 0;
+    Require(VirtualProtect(reinterpret_cast<void*>(address), 4096, readable ? PAGE_READWRITE : PAGE_NOACCESS, &previous) != 0, "cannot change the protection of a test page");
+#else
+    Require(mprotect(reinterpret_cast<void*>(address), 4096, readable ? PROT_READ | PROT_WRITE : PROT_NONE) == 0, "cannot change the protection of a test page");
+#endif
+}
+
+void CheckUnwatchedImport() {
+    void* memory = AllocateWatched(3 * Block);
+    const auto base = reinterpret_cast<std::uint64_t>(memory);
+    auto* bytes = static_cast<volatile std::uint8_t*>(memory);
+    std::memset(memory, 0x11, 3 * Block);
+    const auto synced = CollectWritesUncached(base, 3 * Block);
+    Require(synced != 0, "the unwatched import block is not collected");
+    const auto imported = base + Block / 2;
+    const std::size_t importedBytes = Block + Block / 2;
+    const auto unreadable = base + Block + 0x3000;
+    ProtectPage(unreadable, false);
+    bool threw = false;
+    bool ran = false;
+    try {
+        static_cast<void>(ImportWatched(imported, importedBytes, [&] {
+            ran = true;
+            return true;
+        }));
+    } catch (const std::runtime_error&) {
+        threw = true;
+    }
+    Require(threw && !ran, "an import that stays watched did not read its range before the import");
+    threw = false;
+    try {
+        Require(ImportWatched(imported, importedBytes, [&] {
+            bytes[Block / 2 + 0x100] = 0x22;
+            ran = true;
+            return true;
+        }, false), "an import that leaves the watch failed");
+    } catch (const std::runtime_error&) {
+        threw = true;
+    }
+    Require(!threw && ran, "an import that leaves the watch read its range");
+    ProtectPage(unreadable, true);
+    Require(!Watched(imported, importedBytes) && !Watched(imported, 4096) && !Watched(base + Block, Block), "an import that leaves the watch is still watched");
+    Require(Watched(base + 2 * Block, Block), "an import that leaves the watch unwatched a block outside its range");
+    Require(UnchangedSince(base + 2 * Block, Block, synced), "an import that leaves the watch stamped a block outside its range");
+#ifndef _WIN32
+    Require(Watched(base, Block / 2), "an import that leaves the watch unwatched the pages before its range");
+    const std::array<std::uint64_t, 1> generations{synced};
+    std::array<std::uint8_t, 1> changed{};
+    std::array<std::uint8_t, 1> cpu{};
+    Require(ChangedBlocks(base, Block / 2, generations, changed, cpu), "the pages before an import that leaves the watch are not tracked");
+    Require(changed[0] == BlockUnchanged && UnchangedSince(base, Block / 2, synced) && !WrittenSince(base, Block / 2, synced), "a store to a page that left the watch reads as a store to the watched pages of its block");
+    Require(cpu[0] == 1, "a page resolved while an import left the watch no longer counts as possibly touched by the CPU");
+    const auto after = CollectWritesUncached(base, Block / 2);
+    bytes[0x100] = 0x33;
+    static_cast<void>(CollectWritesUncached(base, Block / 2));
+    Require(after != 0 && !UnchangedSince(base, Block / 2, after), "a store beside an import that left the watch was missed");
+#endif
+}
+
 int main() {
     try {
         if (!WriteWatched()) {
@@ -315,6 +403,8 @@ int main() {
 #endif
         CheckVersionRanges();
         CheckCollectBoundaries();
+        CheckImportWindow();
+        CheckUnwatchedImport();
     } catch (const std::exception& error) {
         std::cerr << "write tracking test failed: " << error.what() << "\n";
         return 1;
