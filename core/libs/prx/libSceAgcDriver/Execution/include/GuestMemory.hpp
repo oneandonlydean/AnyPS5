@@ -114,7 +114,6 @@ bool UnchangedSinceCollected(std::uint64_t address, std::size_t bytes, std::uint
 // watched arena, or for a generation of 0, a block reads as changed.
 constexpr std::uint8_t BlockUnchanged = 0;
 constexpr std::uint8_t BlockWritten = 1;
-constexpr std::uint8_t BlockMaybeWritten = 2;
 bool ChangedBlocks(std::uint64_t address, std::size_t bytes, std::span<const std::uint64_t> generations, std::span<std::uint8_t> changed, std::span<std::uint8_t> cpu = {});
 
 // Serializes device work: draws, dispatches, presentation and the deferred write-backs below. The
