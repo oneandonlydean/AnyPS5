@@ -189,7 +189,7 @@ public:
         }
 #endif
         Require(block != nullptr, "depth plane guest layers: cannot allocate the guest block");
-        GuestAllocations::Mutation().Add(block, BlockBytes, true, true);
+        GuestAllocations::Mutation().Add(block, BlockBytes, true, true, true);
     }
 
     ~WatchedBlock() {
