@@ -151,6 +151,76 @@ void importWindowTests(const Context& context) {
     ::operator delete(block, std::align_val_t{window});
 }
 
+void importJoinTests(const Context& context) {
+    constexpr std::size_t piece = 65536;
+    constexpr std::size_t window = 2 * piece;
+    void* block = ::operator new(12 * piece, std::align_val_t{window});
+    auto* guest = static_cast<std::uint8_t*>(block);
+    const auto first = reinterpret_cast<std::uintptr_t>(block);
+    auto importing = context;
+    importing.hostImportAlignment = piece;
+    SetHostImportWindow(window);
+    const auto change = [&](std::size_t at, std::size_t pieces, bool add) {
+        auto* mutation = GuestAllocations::GuestAllocationsBegin_nid_postfix();
+        if (add) GuestAllocations::GuestAllocationsAdd_nid_postfix(mutation, guest + at * piece, pieces * piece, true, false, true);
+        else GuestAllocations::GuestAllocationsRemove_nid_postfix(mutation, guest + at * piece);
+        GuestAllocations::GuestAllocationsEnd_nid_postfix(mutation);
+    };
+    for (std::size_t index = 0; index < 5; ++index) change(index, 1, true);
+    const auto* joined = HostImportFor(importing, first + window - 16, 32);
+    Require(joined != nullptr && joined->base == first && joined->bytes == 2 * window, "completely registered windows were not imported as one span");
+    const auto joinedBuffer = joined->buffer;
+    const auto* partial = HostImportFor(importing, first + 2 * window, piece);
+    Require(partial != nullptr && partial->base == first + 2 * window && partial->bytes == piece, "a span reached into a partly registered window");
+    Require(HostImportFor(importing, first + 2 * window - 16, 32) == nullptr, "a view crossing into a partly registered window was imported");
+    change(5, 1, true);
+    change(6, 1, true);
+    change(7, 1, true);
+    const auto* completed = HostImportFor(importing, first + 2 * window, 16);
+    Require(completed != nullptr && completed->base == first + 2 * window && completed->bytes == 2 * window, "windows completed later were not imported as a span of their own");
+    const auto* kept = HostImportFor(importing, first, 16);
+    Require(kept != nullptr && kept->buffer == joinedBuffer && kept->bytes == 2 * window, "windows completed later re-imported the span beside them");
+    Require(HostImportFor(importing, first + 2 * window - 16, 32) == nullptr, "an imported span was extended");
+    change(1, 1, false);
+    const auto* alone = HostImportFor(importing, first, piece);
+    Require(alone != nullptr && alone->base == first && alone->bytes == piece, "the span outlived the removal of one of its ranges");
+    const auto* rest = HostImportFor(importing, first + window, window);
+    Require(rest != nullptr && rest->base == first + window && rest->bytes == window, "the window left whole by the removal was not imported again");
+    const auto* beside = HostImportFor(importing, first + 2 * window, 16);
+    Require(beside != nullptr && beside->base == first + 2 * window && beside->bytes == 2 * window, "the removal changed the span beside it");
+    for (std::size_t index : {0, 2, 3, 4, 5, 6, 7}) change(index, 1, false);
+    Require(HostImportFor(importing, first, piece) == nullptr, "the host imports outlived their ranges");
+    change(0, 5, true);
+    change(5, 4, true);
+    const auto* large = HostImportFor(importing, first, 9 * piece);
+    Require(large != nullptr && large->base == first && large->bytes == 9 * piece, "a buffer over two adjacent ranges larger than the window was not imported as one span");
+    const auto largeBuffer = large->buffer;
+    change(9, 1, true);
+    const auto* after = HostImportFor(importing, first + 9 * piece, piece);
+    Require(after != nullptr && after->base == first + 9 * piece && after->bytes == piece, "a range registered after a span was not imported alone");
+    const auto* same = HostImportFor(importing, first, 9 * piece);
+    Require(same != nullptr && same->buffer == largeBuffer, "a range registered after a span re-imported it");
+    change(0, 5, false);
+    change(5, 4, false);
+    change(9, 1, false);
+    Require(HostImportFor(importing, first, piece) == nullptr, "the host imports outlived their ranges");
+    change(0, 5, true);
+    const auto* early = HostImportFor(importing, first, 5 * piece);
+    Require(early != nullptr && early->base == first && early->bytes == 5 * piece, "a range larger than the window was not imported");
+    const auto earlyBuffer = early->buffer;
+    change(5, 4, true);
+    const auto* late = HostImportFor(importing, first + 5 * piece, 4 * piece);
+    Require(late != nullptr && late->base == first + 5 * piece && late->bytes == 4 * piece, "a range registered beside an import was not imported alone");
+    const auto* still = HostImportFor(importing, first, 16);
+    Require(still != nullptr && still->buffer == earlyBuffer && still->bytes == 5 * piece, "a range registered beside an import re-imported it");
+    Require(HostImportFor(importing, first, 9 * piece) == nullptr, "an import was extended over a range registered later");
+    change(0, 5, false);
+    change(5, 4, false);
+    Require(HostImportFor(importing, first, piece) == nullptr, "the host imports outlived their ranges");
+    SetHostImportWindow(0);
+    ::operator delete(block, std::align_val_t{window});
+}
+
 ShaderRecompiler::DescriptorBinding binding(Role role, std::uint32_t slot) {
     return {ShaderRecompiler::DescriptorKind::StorageBuffer, role, 0, slot, 1, {}, false};
 }
@@ -1106,6 +1176,7 @@ void RunBdaResourceTests(const Context& context, const BdaTestAccess& access) {
     importCrossingTests(context, access);
     importSpanTests(context);
     importWindowTests(context);
+    importJoinTests(context);
     heapMirrorTests(context, access);
     importedHeapMirrorTests(context, access);
     importWatchTests();

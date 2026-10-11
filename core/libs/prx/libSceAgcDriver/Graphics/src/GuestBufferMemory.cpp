@@ -564,26 +564,74 @@ std::size_t leasedIndexContaining(const GuestAllocations::Lease& lease, std::uin
 
 std::atomic<std::uint64_t> importWindow{0};
 
-ImportRun importRun(const GuestAllocations::Lease& lease, std::uint64_t address) {
-    const auto index = leasedIndexContaining(lease, address);
-    if (index == lease.size()) return {};
+struct WindowRun {
+    std::size_t first = 0;
+    std::size_t last = 0;
+    bool whole = false;
+};
+
+WindowRun windowRun(const GuestAllocations::Lease& lease, std::size_t index, std::uint64_t window) {
     const auto& containing = *lease[index];
-    std::uint64_t low = 0;
-    std::uint64_t high = std::numeric_limits<std::uint64_t>::max();
-    const auto window = importWindow.load(std::memory_order_relaxed);
-    if (window != 0) {
-        low = address / window * window;
-        high = low + window;
-        if (containing.address < low || containing.address + containing.bytes > high) {
-            low = containing.address;
-            high = containing.address + containing.bytes;
-        }
-    }
+    const auto low = containing.address / window * window;
+    const auto high = low + window;
+    if (containing.address + containing.bytes > high) return {index, index, true};
     auto first = index;
     while (first > 0 && lease[first - 1]->address >= low && continuesRun(*lease[first - 1], *lease[first])) --first;
     auto last = index;
     while (last + 1 < lease.size() && lease[last + 1]->address + lease[last + 1]->bytes <= high && continuesRun(*lease[last], *lease[last + 1])) ++last;
-    if (window != 0 && (lease[first]->address != low || lease[last]->address + lease[last]->bytes != high)) first = last = index;
+    if (lease[first]->address != low || lease[last]->address + lease[last]->bytes != high) return {index, index, false};
+    return {first, last, true};
+}
+
+bool holdsWindowRuns(const HostImport& entry, const GuestAllocations::Lease& lease, std::uint64_t window) {
+    const auto found = std::lower_bound(lease.begin(), lease.end(), entry.base, [](const auto& range, std::uint64_t value) { return range->address < value; });
+    const auto begin = static_cast<std::size_t>(found - lease.begin());
+    const auto end = begin + entry.ranges.size();
+    if (entry.ranges.empty() || end > lease.size()) return false;
+    for (std::size_t index = begin; index < end; ++index) {
+        if (entry.ranges[index - begin].owner_before(lease[index]) || lease[index].owner_before(entry.ranges[index - begin])) return false;
+    }
+    for (std::size_t index = begin; index < end;) {
+        const auto run = windowRun(lease, index, window);
+        if (run.first != index || run.last >= end || (!run.whole && end - begin != 1)) return false;
+        index = run.last + 1;
+    }
+    return true;
+}
+
+const HostImport* heldImport(const GuestAllocations::Lease& lease, std::size_t index, std::uint64_t window) {
+    const auto& imports = Imports().imports;
+    const auto found = imports.upper_bound(lease[index]->address);
+    if (found == imports.begin()) return nullptr;
+    const auto& entry = std::prev(found)->second;
+    return lease[index]->address < entry.base + entry.bytes && holdsWindowRuns(entry, lease, window) ? &entry : nullptr;
+}
+
+ImportRun importRun(const GuestAllocations::Lease& lease, std::uint64_t address) {
+    const auto index = leasedIndexContaining(lease, address);
+    if (index == lease.size()) return {};
+    const auto window = importWindow.load(std::memory_order_relaxed);
+    auto first = index;
+    auto last = index;
+    if (window == 0) {
+        while (first > 0 && continuesRun(*lease[first - 1], *lease[first])) --first;
+        while (last + 1 < lease.size() && continuesRun(*lease[last], *lease[last + 1])) ++last;
+    } else {
+        if (const auto* held = heldImport(lease, index, window)) return {held->base, held->bytes, held->ranges};
+        const auto run = windowRun(lease, index, window);
+        first = run.first;
+        last = run.last;
+        while (run.whole && first > 0 && continuesRun(*lease[first - 1], *lease[first])) {
+            const auto before = windowRun(lease, first - 1, window);
+            if (!before.whole || heldImport(lease, first - 1, window) != nullptr) break;
+            first = before.first;
+        }
+        while (run.whole && last + 1 < lease.size() && continuesRun(*lease[last], *lease[last + 1])) {
+            const auto after = windowRun(lease, last + 1, window);
+            if (!after.whole || heldImport(lease, last + 1, window) != nullptr) break;
+            last = after.last;
+        }
+    }
     if (first != last && Imports().unaliasedSpans.contains(lease[first]->address)) return {lease[index]->address, lease[index]->bytes, {lease[index]}};
     ImportRun run{lease[first]->address, lease[last]->address + lease[last]->bytes - lease[first]->address, {}};
     run.ranges.assign(lease.begin() + static_cast<std::ptrdiff_t>(first), lease.begin() + static_cast<std::ptrdiff_t>(last) + 1);
