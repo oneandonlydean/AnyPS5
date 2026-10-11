@@ -28,7 +28,6 @@ struct HostImport {
     VkDeviceAddress address;
     void* alias = nullptr;
     std::shared_ptr<const GuestAllocations::Range> range {};
-    std::vector<std::shared_ptr<const GuestAllocations::Range>> ranges {};
     // Identity for the life of this import (see HostImportSerial); 0 until first asked for.
     std::uint64_t serial = 0;
     bool unwatched = false;

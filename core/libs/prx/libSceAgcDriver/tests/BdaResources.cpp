@@ -71,52 +71,21 @@ void importCrossingTests(const Context& context, const BdaTestAccess& access) {
         const auto crossing = leased.Descriptor(second - 16, 32, adjustment);
         const auto crossingBytes = access.bytes(crossing.buffer);
         Require(crossing.offset + crossing.range <= crossingBytes.size(), "a view crossing into the next registered range is bound past its host import");
-        Require(secondImport.base == first && secondImport.bytes == 2 * half, "adjacent registered ranges with the same access were not imported as one span");
-        Require(crossing.buffer == secondImport.buffer && crossing.offset + adjustment == second - 16 - secondImport.base, "a view crossing into the next registered range is not bound in place in the spanning import");
+        Require(crossingBytes[crossing.offset + adjustment + 15] == std::byte{0x11} && crossingBytes[crossing.offset + adjustment + 16] == std::byte{0x22}, "a view crossing into the next registered range misses its bytes");
         const auto inside = leased.Descriptor(second + 64, 16, adjustment);
         const auto insideBytes = access.bytes(inside.buffer);
-        Require(inside.offset + inside.range <= insideBytes.size() && (inside.buffer == secondImport.buffer ? inside.offset + adjustment == second + 64 - secondImport.base : insideBytes[inside.offset + adjustment] == std::byte{0x22}), "a view in the second registered range is bound past its buffer or misses its bytes");
+        Require(inside.offset + inside.range <= insideBytes.size() && (inside.buffer == secondImport.buffer ? inside.offset + adjustment == 64 : insideBytes[inside.offset + adjustment] == std::byte{0x22}), "a view in the second registered range is bound past its buffer or misses its bytes");
         for (const auto& range : leased.AddressRanges()) {
             if (range.end <= first || range.begin >= second + half) continue;
             const auto mapped = access.addressBytes(range.deviceAddress);
             Require(mapped.size() >= range.end - range.begin, "a BDA range runs past the end of its host import");
-            if (range.begin <= second && second < range.end && (range.deviceAddress < secondImport.address || range.deviceAddress >= secondImport.address + secondImport.bytes)) Require(mapped[second - range.begin] == std::byte{0x22}, "the BDA range over the second registered range misses its bytes");
+            if (range.begin <= second && second < range.end && range.deviceAddress != secondImport.address) Require(mapped[second - range.begin] == std::byte{0x22}, "the BDA range over the second registered range misses its bytes");
         }
         leased.WriteBack();
     }
     registry(false);
     Require(HostImportFor(importing, first, half) == nullptr && !HostImportCovers(importing, second, half), "the host imports outlived their ranges");
     ::operator delete(block, std::align_val_t{half});
-}
-
-void importSpanTests(const Context& context) {
-    constexpr std::size_t piece = 65536;
-    void* block = ::operator new(3 * piece, std::align_val_t{piece});
-    auto* guest = static_cast<std::uint8_t*>(block);
-    const auto first = reinterpret_cast<std::uintptr_t>(block);
-    auto importing = context;
-    importing.hostImportAlignment = piece;
-    const auto change = [&](std::uint8_t* range, bool add, bool writable) {
-        auto* mutation = GuestAllocations::GuestAllocationsBegin_nid_postfix();
-        if (add) GuestAllocations::GuestAllocationsAdd_nid_postfix(mutation, range, piece, true, writable, true);
-        else GuestAllocations::GuestAllocationsRemove_nid_postfix(mutation, range);
-        GuestAllocations::GuestAllocationsEnd_nid_postfix(mutation);
-    };
-    change(guest, true, false);
-    change(guest + piece, true, false);
-    change(guest + 2 * piece, true, true);
-    const auto* span = HostImportFor(importing, first + piece - 16, 32);
-    Require(span != nullptr && span->base == first && span->bytes == 2 * piece, "adjacent read-only ranges were not imported as one span");
-    const auto* writable = HostImportFor(importing, first + 2 * piece, piece);
-    Require(writable != nullptr && writable->base == first + 2 * piece && writable->bytes == piece, "a writable range joined the read-only span");
-    Require(HostImportFor(importing, first + 2 * piece - 16, 32) == nullptr, "a view crossing ranges of different access was imported");
-    change(guest + piece, false, false);
-    const auto* alone = HostImportFor(importing, first, piece);
-    Require(alone != nullptr && alone->base == first && alone->bytes == piece, "the span outlived the removal of one of its ranges");
-    Require(HostImportFor(importing, first + piece, 16) == nullptr, "the removed range is still imported");
-    change(guest, false, false);
-    change(guest + 2 * piece, false, false);
-    ::operator delete(block, std::align_val_t{piece});
 }
 
 ShaderRecompiler::DescriptorBinding binding(Role role, std::uint32_t slot) {
@@ -1036,7 +1005,6 @@ void RunBdaResourceTests(const Context& context, const BdaTestAccess& access) {
         if (dropped.enabled) Require(dropped.waiterDrops == after.waiterDrops + 1 && LeaseCounters().cacheDrops == dropped.waiterDrops, "the free did not drop the cached address space");
     }
     importCrossingTests(context, access);
-    importSpanTests(context);
     heapMirrorTests(context, access);
     importedHeapMirrorTests(context, access);
     importWatchTests();
