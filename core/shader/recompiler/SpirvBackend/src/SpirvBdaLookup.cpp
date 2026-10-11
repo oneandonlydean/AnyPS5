@@ -132,17 +132,13 @@ static std::uint32_t DefineBdaNoteWrite(SpirvEmitterState& state) {
     state.module.AddFunction(spv::OpVariable, TypePointer(state, spv::StorageClassFunction, boolean), done, spv::StorageClassFunction);
     const auto counter = state.module.AllocateId();
     state.module.AddFunction(spv::OpVariable, TypePointer(state, spv::StorageClassFunction, u32), counter, spv::StorageClassFunction);
-    const auto held = state.module.AllocateId();
-    state.module.AddFunction(spv::OpVariable, TypePointer(state, spv::StorageClassFunction, u32), held, spv::StorageClassFunction);
     state.module.AddFunction(spv::OpStore, done, ConstantBool(state, false));
     state.module.AddFunction(spv::OpStore, counter, constant(0u));
-    state.module.AddFunction(spv::OpStore, held, constant(0u));
     const auto u64 = TypeScalarU64(state);
     const auto key = binary(spv::OpIAdd, u32, Unary(state, spv::OpUConvert, u32, binary(spv::OpShiftRightLogical, u64, address, BdaConstant(state, BdaAbi::WrittenChunkShift))), constant(1));
     const auto page = binary(spv::OpBitwiseAnd, u32, Unary(state, spv::OpUConvert, u32, binary(spv::OpShiftRightLogical, u64, address, BdaConstant(state, BdaAbi::WrittenPageShift))), constant(BdaAbi::WrittenChunkPages - 1u));
     const auto bit = binary(spv::OpShiftLeftLogical, u32, constant(1u), page);
     const auto hash = binary(spv::OpShiftRightLogical, u32, binary(spv::OpIMul, u32, key, constant(0x9e3779b1u)), constant(32u - static_cast<std::uint32_t>(std::countr_zero(BdaAbi::WrittenPageSlots))));
-    const auto keyWordOf = [&](std::uint32_t slot) { return binary(spv::OpIAdd, u32, constant(BdaAbi::WrittenSlotsWord), binary(spv::OpShiftLeftLogical, u32, slot, constant(1u))); };
     const auto scope = constant(spv::ScopeDevice);
     const auto relaxed = constant(spv::MemorySemanticsMaskNone);
     const auto header = state.module.AllocateId();
@@ -160,8 +156,7 @@ static std::uint32_t DefineBdaNoteWrite(SpirvEmitterState& state) {
     state.module.AddFunction(spv::OpBranchConditional, searching, body, merge);
     EmitLabel(state, body);
     const auto slot = binary(spv::OpBitwiseAnd, u32, binary(spv::OpIAdd, u32, hash, probe), constant(BdaAbi::WrittenPageSlots - 1u));
-    const auto keyWord = keyWordOf(slot);
-    state.module.AddFunction(spv::OpStore, held, slot);
+    const auto keyWord = binary(spv::OpIAdd, u32, constant(BdaAbi::WrittenSlotsWord), binary(spv::OpShiftLeftLogical, u32, slot, constant(1u)));
     const auto current = state.module.AllocateId();
     state.module.AddFunction(spv::OpAtomicLoad, u32, current, BdaWord(state, state.faultBufferVariable, keyWord), scope, relaxed);
     const auto same = binary(spv::OpIEqual, boolean, current, key);
@@ -177,6 +172,16 @@ static std::uint32_t DefineBdaNoteWrite(SpirvEmitterState& state) {
             state.module.AddFunction(spv::OpAtomicStore, BdaWord(state, state.faultBufferVariable, binary(spv::OpIAdd, u32, constant(BdaAbi::WrittenListWord), index)), scope, relaxed, slot);
         });
     });
+    const auto holds = state.module.AllocateId();
+    state.module.AddFunction(spv::OpLoad, boolean, holds, done);
+    EmitIfCondition(state, holds, [&] {
+        const auto maskWord = binary(spv::OpIAdd, u32, keyWord, constant(1u));
+        const auto mask = state.module.AllocateId();
+        state.module.AddFunction(spv::OpAtomicLoad, u32, mask, BdaWord(state, state.faultBufferVariable, maskWord), scope, relaxed);
+        EmitIfCondition(state, binary(spv::OpIEqual, boolean, binary(spv::OpBitwiseAnd, u32, mask, bit), constant(0u)), [&] {
+            state.module.AddFunction(spv::OpAtomicOr, u32, state.module.AllocateId(), BdaWord(state, state.faultBufferVariable, maskWord), scope, relaxed, bit);
+        });
+    });
     state.module.AddFunction(spv::OpBranch, continuation);
     EmitLabel(state, continuation);
     state.module.AddFunction(spv::OpStore, counter, binary(spv::OpIAdd, u32, probe, constant(1u)));
@@ -184,16 +189,6 @@ static std::uint32_t DefineBdaNoteWrite(SpirvEmitterState& state) {
     EmitLabel(state, merge);
     const auto noted = state.module.AllocateId();
     state.module.AddFunction(spv::OpLoad, boolean, noted, done);
-    EmitIfCondition(state, noted, [&] {
-        const auto heldSlot = state.module.AllocateId();
-        state.module.AddFunction(spv::OpLoad, u32, heldSlot, held);
-        const auto maskWord = binary(spv::OpIAdd, u32, keyWordOf(heldSlot), constant(1u));
-        const auto mask = state.module.AllocateId();
-        state.module.AddFunction(spv::OpAtomicLoad, u32, mask, BdaWord(state, state.faultBufferVariable, maskWord), scope, relaxed);
-        EmitIfCondition(state, binary(spv::OpIEqual, boolean, binary(spv::OpBitwiseAnd, u32, mask, bit), constant(0u)), [&] {
-            state.module.AddFunction(spv::OpAtomicOr, u32, state.module.AllocateId(), BdaWord(state, state.faultBufferVariable, maskWord), scope, relaxed, bit);
-        });
-    });
     EmitIfCondition(state, Unary(state, spv::OpLogicalNot, boolean, noted), [&] {
         state.module.AddFunction(spv::OpAtomicStore, BdaWord(state, state.faultBufferVariable, constant(BdaAbi::WrittenOverflowWord)), scope, relaxed, constant(1u));
     });
