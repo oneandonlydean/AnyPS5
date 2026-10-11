@@ -23,6 +23,7 @@
 #include <array>
 #include <atomic>
 #include <tuple>
+#include <utility>
 #include <functional>
 #include <bit>
 #include <condition_variable>
@@ -162,10 +163,6 @@ struct HostImports {
     VkDevice watchDevice = VK_NULL_HANDLE;
     bool unwatchImports = false;
     bool unwatchDmaBufImports = false;
-    // Whether making an import of each kind was seen to stamp the imported pages (the probe's
-    // writtenAtImport): its import window then stamps a range the import leaves watched.
-    bool importsStampPages = true;
-    bool dmaBufImportsStampPages = true;
 };
 
 HostImports& Imports() {
@@ -452,20 +449,39 @@ const char* createChunkedDmaBufImport(const Context& context, HostImport& entry,
 }
 #endif
 
+#ifndef _WIN32
+struct BackingFile {
+    BackingFile() = default;
+    BackingFile(const BackingFile&) = delete;
+    BackingFile& operator=(const BackingFile&) = delete;
+    ~BackingFile() {
+        if (file >= 0) close(file);
+    }
+    int file = -1;
+    std::uint64_t offset = 0;
+};
+
+bool sharedBacking(const Context& context, const HostImport& entry, BackingFile& backing) {
+    return context.dmaBufImport && GuestArena::GuestArenaSharedBacking_nid_postfix(static_cast<std::uintptr_t>(entry.base), static_cast<std::size_t>(entry.bytes), &backing.file, &backing.offset);
+}
+
+const char* createBackingImport(const Context& context, HostImport& entry, BackingFile& backing, VkResult& failure) {
+    const int file = std::exchange(backing.file, -1);
+    bool fits = false;
+    VkResult chunkFailure = VK_SUCCESS;
+    if (createChunkedDmaBufImport(context, entry, file, backing.offset, fits, chunkFailure) == nullptr && fits) {
+        close(file);
+        return nullptr;
+    }
+    return createDmaBufImport(context, entry, file, backing.offset, failure);
+}
+#endif
+
 const char* createImport(const Context& context, HostImport& entry, VkResult& failure) {
     const char* step = createHostPointerImport(context, entry, failure);
 #ifndef _WIN32
-    int file = -1;
-    std::uint64_t offset = 0;
-    if (step != nullptr && context.dmaBufImport && GuestArena::GuestArenaSharedBacking_nid_postfix(static_cast<std::uintptr_t>(entry.base), static_cast<std::size_t>(entry.bytes), &file, &offset)) {
-        bool fits = false;
-        VkResult chunkFailure = VK_SUCCESS;
-        if (createChunkedDmaBufImport(context, entry, file, offset, fits, chunkFailure) == nullptr && fits) {
-            close(file);
-            return nullptr;
-        }
-        step = createDmaBufImport(context, entry, file, offset, failure);
-    }
+    BackingFile backing;
+    if (step != nullptr && sharedBacking(context, entry, backing)) step = createBackingImport(context, entry, backing, failure);
 #endif
     return step;
 }
@@ -491,21 +507,14 @@ void decideImportWatch(const Context& context, HostImports& state) {
     state.watchDevice = context.device;
     state.unwatchImports = true;
     state.unwatchDmaBufImports = false;
-    state.importsStampPages = false;
-    state.dmaBufImportsStampPages = false;
     if (context.hostImportAlignment != 0 && GuestMemory::WriteWatched()) std::fprintf(stderr, "[write-watch] Windows direct host imports use comparisons; separate shared aliases retain guest write tracking\n");
 #else
     const auto request = importWatchRequest();
     state.watchDevice = context.device;
     state.unwatchImports = false;
     state.unwatchDmaBufImports = false;
-    state.importsStampPages = false;
-    state.dmaBufImportsStampPages = false;
     if (context.hostImportAlignment == 0 || !GuestMemory::WriteWatched()) return;
     if (request == ImportWatchRequest::Watch) {
-        // Not probed: whether an import stamps its pages is unknown.
-        state.importsStampPages = true;
-        state.dmaBufImportsStampPages = true;
         std::fprintf(stderr, "[write-watch] host imports stay watched (APS5_WRITE_WATCH_IMPORTS=watch)\n");
         return;
     }
@@ -521,11 +530,9 @@ void decideImportWatch(const Context& context, HostImports& state) {
         std::fprintf(stderr, "[write-watch] host imports resolve write protection: unknown (probe failed at %s, %d); imported ranges are compared\n", probe.failure, static_cast<int>(probe.result));
     } else {
         state.unwatchImports = probe.writtenAfterSubmit != 0 || probe.writtenAfterFill != 0;
-        state.importsStampPages = probe.writtenAtImport != 0;
         std::fprintf(stderr, "[write-watch] host imports resolve write protection: %s (%u of %u scratch pages written after a GPU read, %u after a GPU write, %u after the import); imported ranges %s\n", state.unwatchImports ? "yes" : "no", probe.writtenAfterSubmit, probe.pages, probe.writtenAfterFill, probe.writtenAtImport, state.unwatchImports ? "are compared" : "stay watched");
     }
     state.unwatchDmaBufImports = state.unwatchImports;
-    state.dmaBufImportsStampPages = state.importsStampPages;
     if (!context.dmaBufImport) return;
     const auto dmaBuf = ProbeDmaBufImportWriteProtection(context);
     if (dmaBuf.failure != nullptr) {
@@ -534,7 +541,6 @@ void decideImportWatch(const Context& context, HostImports& state) {
         return;
     }
     state.unwatchDmaBufImports = dmaBuf.writtenAfterSubmit != 0 || dmaBuf.writtenAfterFill != 0 || dmaBuf.writtenByCpu == 0;
-    state.dmaBufImportsStampPages = dmaBuf.writtenAtImport != 0;
     std::fprintf(stderr, "[write-watch] dma-buf imports keep write protection: %s (%u of %u scratch pages written after a GPU read, %u after a GPU write, %u after the import, %u seen after a CPU store); imported ranges %s\n", state.unwatchDmaBufImports ? "no" : "yes", dmaBuf.writtenAfterSubmit, dmaBuf.pages, dmaBuf.writtenAfterFill, dmaBuf.writtenAtImport, dmaBuf.writtenByCpu, state.unwatchDmaBufImports ? "are compared" : "stay watched");
 #endif
 }
@@ -699,15 +705,26 @@ const HostImport* importAllocation(const Context& context, HostImports& state, s
     decideImportWatch(context, state);
     VkResult result = VK_SUCCESS;
     const char* step = nullptr;
-    GuestMemory::ImportWatched(base, bytes, [&] {
-        step = createImport(context, entry, result);
-        return step == nullptr;
-    });
-    entry.unwatched = step == nullptr && (entry.dmaBuf ? state.unwatchDmaBufImports : state.unwatchImports);
 #ifdef _WIN32
-    if (entry.alias != nullptr) entry.unwatched = false;
+    const bool watchedHostPointer = entry.alias != nullptr || !state.unwatchImports;
+    const bool watchedDmaBuf = watchedHostPointer;
+#else
+    const bool watchedHostPointer = !state.unwatchImports;
+    const bool watchedDmaBuf = !state.unwatchDmaBufImports;
 #endif
-    if (entry.unwatched) GuestMemory::Unwatch(base, bytes);
+    GuestMemory::ImportWatched(base, bytes, [&] {
+        step = watchedDmaBuf == watchedHostPointer ? createImport(context, entry, result) : createHostPointerImport(context, entry, result);
+        return step == nullptr;
+    }, watchedHostPointer);
+#ifndef _WIN32
+    if (BackingFile backing; step != nullptr && watchedDmaBuf != watchedHostPointer && sharedBacking(context, entry, backing)) {
+        GuestMemory::ImportWatched(base, bytes, [&] {
+            step = createBackingImport(context, entry, backing, result);
+            return step == nullptr;
+        }, watchedDmaBuf);
+    }
+#endif
+    entry.unwatched = step == nullptr && !(entry.dmaBuf ? watchedDmaBuf : watchedHostPointer);
     if (step != nullptr) {
 #ifdef _WIN32
         GuestArena::GuestArenaUnmapAlias_nid_postfix(entry.alias);
@@ -1920,27 +1937,6 @@ ImportWatch PrepareImportWatch(const Context& context) {
     std::lock_guard lock(state.mutex);
     decideImportWatch(context, state);
     return state.unwatchImports ? ImportWatch::Unwatch : ImportWatch::Watch;
-}
-
-namespace {
-
-bool stampsWatchedPages(const HostImports& state) {
-    return (!state.unwatchImports && state.importsStampPages) || (!state.unwatchDmaBufImports && state.dmaBufImportsStampPages);
-}
-
-}
-
-bool WatchedImportsStampPages(const Context& context) {
-    auto& state = Imports();
-    std::lock_guard lock(state.mutex);
-    decideImportWatch(context, state);
-    return stampsWatchedPages(state);
-}
-
-bool WatchedImportsStampPages() {
-    auto& state = Imports();
-    std::lock_guard lock(state.mutex);
-    return state.watchDevice == VK_NULL_HANDLE || stampsWatchedPages(state);
 }
 
 void SetImportWatch(const Context& context, ImportWatch watch) {

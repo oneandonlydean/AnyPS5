@@ -3562,9 +3562,7 @@ void importWindowTests(const Device& device, Recorder& recorder) {
         void* block;
         ~Release() { ReleaseWatched(block, bytes); }
     } release{block};
-    const auto probe = ProbeImportWriteProtection(base);
-    Require(probe.failure == nullptr, "(w) the import probe failed");
-    const bool importWrites = probe.writtenAtImport != 0;
+    Require(ProbeImportWriteProtection(base).failure == nullptr, "(w) the import probe failed");
     const auto decided = PrepareImportWatch(base);
     if (decided == ImportWatch::Unwatch) {
         std::cout << "host imports are compared, not watched: the import window not tested\n";
@@ -3633,16 +3631,11 @@ void importWindowTests(const Device& device, Recorder& recorder) {
         }
         Require(!import->unwatched && Watched(address, bytes), "(w) an import under the watch decision left the watch");
         CollectWritesUncached(address, surfaceBytes);
-        if (importWrites) {
-            Require(!UnchangedSince(address, surfaceBytes, cached), "(w) a cache over the pages the import reported sees no change");
-            Require(image->Generation() != 0 && !UnchangedSince(address, surfaceBytes, image->Generation()), "(w) the storage image took its generation after the import window");
-            std::array<std::uint8_t, surfaceBytes / 65536> changed{};
-            const std::array<std::uint64_t, surfaceBytes / 65536> generations{cached, cached, cached, cached};
-            Require(ChangedBlocks(address, surfaceBytes, generations, changed) && std::all_of(changed.begin(), changed.end(), [](std::uint8_t value) { return value == BlockMaybeWritten; }), "(w) the pages the import reported read as written by the CPU");
-            Require(!WrittenSince(address, surfaceBytes, cached), "(w) the import window reads as a CPU store");
-        } else {
-            std::cout << "the import reports no pages here: only the pending results of the import window checked\n";
-        }
+        Require(UnchangedSince(address, surfaceBytes, cached), "(w) an import that stored nothing reads as a change to a cache taken before it");
+        Require(image->Generation() != 0 && UnchangedSince(address, surfaceBytes, image->Generation()), "(w) an import that stored nothing reads as a change to the pending storage image");
+        std::array<std::uint8_t, surfaceBytes / 65536> changed{};
+        const std::array<std::uint64_t, surfaceBytes / 65536> generations{cached, cached, cached, cached};
+        Require(ChangedBlocks(address, surfaceBytes, generations, changed) && std::all_of(changed.begin(), changed.end(), [](std::uint8_t value) { return value == BlockUnchanged; }), "(w) the pages the import resolved read as written");
         const auto after = CollectWritesUncached(address, surfaceBytes);
         Require(after != 0 && UnchangedSince(address, surfaceBytes, after), "(w) the imported range is not watched again after the import window");
         image->Refresh();
