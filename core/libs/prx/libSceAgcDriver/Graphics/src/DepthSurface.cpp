@@ -479,6 +479,22 @@ std::vector<std::unique_ptr<DepthSurface>>& surfaces() {
     return *list;
 }
 
+struct DetachedWriter {
+    VkDevice device = VK_NULL_HANDLE;
+    std::weak_ptr<StorageTexture> storage;
+    std::uint32_t layer = 0;
+    std::uint64_t bytes = 0;
+};
+
+std::map<std::uint64_t, DetachedWriter>& detachedWriters() {
+    static auto* writers = new std::map<std::uint64_t, DetachedWriter>();
+    return *writers;
+}
+
+void dropDetachedWriters(VkDevice device, std::uint64_t address, std::uint64_t bytes) {
+    std::erase_if(detachedWriters(), [&](const auto& entry) { return entry.second.device == device && entry.first < address + bytes && address < entry.first + entry.second.bytes; });
+}
+
 std::set<std::uint64_t>& clearedHtiles() {
     static auto* cleared = new std::set<std::uint64_t>();
     return *cleared;
@@ -518,7 +534,18 @@ VkImageView DepthSurfaceView(const Context& context, const DepthTarget& target) 
         bound = surfaces().back().get();
         bound->clearDepth = target.clearDepth;
         bound->clearStencil = target.clearStencil;
+        if (const auto detached = detachedWriters().find(target.address); detached != detachedWriters().end() && detached->second.device == context.device) {
+            const auto storage = detached->second.storage.lock();
+            if (storage != nullptr && storageFits(target, storage->Descriptor(), storage->StorageFormat())) {
+                bound->writer = storage;
+                bound->writerLayer = detached->second.layer;
+                bound->TakeWrites();
+            }
+        }
     }
+    const bool d16 = target.format == VK_FORMAT_D16_UNORM || target.format == VK_FORMAT_D16_UNORM_S8_UINT;
+    dropDetachedWriters(context.device, target.address, DepthSliceBytes(target.extent, d16 ? 2u : 4u));
+    if (target.stencilAddress != 0) dropDetachedWriters(context.device, target.stencilAddress, DepthSliceBytes(target.extent, 1u));
     for (const auto& surface : surfaces()) {
         if (surface.get() != bound && surface->context.device == context.device && surface->Overlaps(*bound)) surface->retired = true;
     }
@@ -552,6 +579,7 @@ void RetireDepthSurfaces(VkDevice device, std::uint64_t address, std::uint64_t b
     for (const auto& surface : surfaces()) {
         if (surface->context.device == device && surface->Overlaps(address, bytes)) surface->retired = true;
     }
+    dropDetachedWriters(device, address, bytes);
 }
 
 bool RetireDepthSurfacesForStorage(VkDevice device, const GuestTextureResource& descriptor, VkFormat storageFormat, std::uint64_t bytes) {
@@ -562,6 +590,7 @@ bool RetireDepthSurfacesForStorage(VkDevice device, const GuestTextureResource& 
     for (const auto& surface : list) {
         if (surface->context.device == device && surface->Overlaps(descriptor.baseAddress, bytes)) surface->retired = true;
     }
+    dropDetachedWriters(device, descriptor.baseAddress, bytes);
     return true;
 }
 
@@ -569,6 +598,7 @@ void ClearDepthSurfaces(VkDevice device) {
     std::lock_guard lock(surfacesMutex());
     drawnDepth = nullptr;
     std::erase_if(surfaces(), [&](const auto& surface) { return surface->context.device == device; });
+    std::erase_if(detachedWriters(), [&](const auto& entry) { return entry.second.device == device; });
     std::erase_if(planeCopies(), [&](const auto& entry) { return std::get<0>(entry.first) == device; });
 }
 
@@ -652,6 +682,30 @@ void SeedStorageFromDepth(const Context& context, const std::shared_ptr<StorageT
         surface.writer = storage;
         surface.seeded = storage.get();
         surface.writerLayer = layer;
+    }
+}
+
+void NoteDepthSurfaceWriter(VkDevice device, const std::shared_ptr<StorageTexture>& storage) {
+    std::lock_guard lock(surfacesMutex());
+    const auto& descriptor = storage->Descriptor();
+    const auto format = storage->StorageFormat();
+    const bool wide = format == VK_FORMAT_R32_SFLOAT || format == VK_FORMAT_R32_UINT || format == VK_FORMAT_R32_SINT;
+    const bool narrow = format == VK_FORMAT_R16_UINT || format == VK_FORMAT_R16_UNORM || format == VK_FORMAT_R16_SINT || format == VK_FORMAT_R16_SNORM || format == VK_FORMAT_R16_SFLOAT;
+    if ((!wide && !narrow) || descriptor.mipCount != 1 || (descriptor.dimension != TextureDimension::k2D && descriptor.dimension != TextureDimension::k2DArray)) return;
+    const auto sliceBytes = DepthSliceBytes({descriptor.width, descriptor.height}, wide ? 4u : 2u);
+    const auto layers = descriptor.dimension == TextureDimension::k2DArray ? descriptor.depthOrLastArray + 1u : 1u;
+    for (std::uint32_t layer = 0; layer < layers; ++layer) {
+        const auto address = descriptor.baseAddress + static_cast<std::uint64_t>(layer) * sliceBytes;
+        bool held = false;
+        for (const auto& surface : surfaces()) {
+            if (surface->context.device != device || surface->target.address != address || !storageFits(surface->target, descriptor, format)) continue;
+            held = true;
+            if (!surface->retired) continue;
+            surface->writer = storage;
+            surface->seeded = nullptr;
+            surface->writerLayer = layer;
+        }
+        if (!held) detachedWriters()[address] = {device, storage, layer, sliceBytes};
     }
 }
 
