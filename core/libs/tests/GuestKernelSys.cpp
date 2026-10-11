@@ -9,6 +9,10 @@
 #include <fstream>
 #include <source_location>
 #include <string>
+#ifdef __linux__
+#include <cerrno>
+#include <unistd.h>
+#endif
 
 extern "C" {
 int APS5_VABI fstatfs_nid_postfix(int, void*);
@@ -105,6 +109,20 @@ int main() {
     char directoryPath[1024];
     Require(getcwd_nid_postfix(directoryPath, sizeof(directoryPath)) == directoryPath);
     Require(std::strcmp(directoryPath, ("/" + root.filename().string()).c_str()) == 0);
+#ifdef __linux__
+    Require(chdir_nid_postfix("/") == 0);
+    const auto originalPermissions = std::filesystem::status(root).permissions();
+    std::filesystem::permissions(root, std::filesystem::perms::owner_read | std::filesystem::perms::owner_write);
+    const bool searchDenied = ::access(root.c_str(), X_OK) == -1 && errno == EACCES;
+    const int deniedResult = searchDenied ? fchdir_nid_postfix(directory) : 0;
+    const int deniedError = Error();
+    const bool cwdUnchanged = getcwd_nid_postfix(directoryPath, sizeof(directoryPath)) == directoryPath && std::strcmp(directoryPath, "/") == 0;
+    std::filesystem::permissions(root, std::filesystem::perms::owner_exec);
+    const int searchOnlyResult = fchdir_nid_postfix(directory);
+    std::filesystem::permissions(root, originalPermissions);
+    if (searchDenied) Require(deniedResult == -1 && deniedError == EACCES && cwdUnchanged);
+    Require(searchOnlyResult == 0);
+#endif
     Require(sceKernelClose(fileDescriptor) == 0);
     Require(sceKernelClose(directory) == 0);
     Require(fchdir_nid_postfix(directory) == -1 && Error() == 9);

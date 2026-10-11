@@ -1356,6 +1356,15 @@ std::uint64_t Recorder::ReapsWithWork() {
     return holdCounters.reapsWithWork;
 }
 
+bool Recorder::WaitForReleases(std::chrono::milliseconds timeout) {
+    const auto deadline = std::chrono::steady_clock::now() + timeout;
+    while (deferredPending.load(std::memory_order_acquire) != 0) {
+        if (std::chrono::steady_clock::now() > deadline) return false;
+        std::this_thread::sleep_for(std::chrono::milliseconds(1));
+    }
+    return true;
+}
+
 VkCommandBuffer Recorder::Commands(VkAccessFlags* coveredAccess) {
     ensureOpen();
     // Work recorded after a draw's render pass or an inline store run must see their writes: the
@@ -2559,6 +2568,40 @@ void Recorder::KeepDrawSnapshot(std::uint64_t address, std::size_t bytes, std::u
         throw;
     }
     pool.bytes += bytes;
+}
+
+bool Recorder::KnownHighestIndex(std::uint64_t address, std::size_t bytes, SnapshotUse use, std::optional<std::uint32_t>& highest) {
+    const auto found = indexRanges.find({address, use, bytes});
+    if (found == indexRanges.end()) return false;
+    if (found->second.registryGeneration != GuestAllocations::GuestAllocationsGeneration_nid_postfix() || !GuestMemory::UnchangedSince(address, bytes, found->second.generation)) {
+        indexRangeRecency.erase(found->second.recent);
+        indexRanges.erase(found);
+        return false;
+    }
+    indexRangeRecency.splice(indexRangeRecency.end(), indexRangeRecency, found->second.recent);
+    highest = found->second.highest;
+    return true;
+}
+
+void Recorder::KeepHighestIndex(std::uint64_t address, std::size_t bytes, SnapshotUse use, std::uint64_t generation, std::uint64_t registryGeneration, std::optional<std::uint32_t> highest) {
+    Require(use != SnapshotUse::Storage && use != SnapshotUse::Vertex, "a highest index belongs to an index buffer");
+    if (generation == 0) return;
+    const DrawSnapshotKey key{address, use, bytes};
+    if (const auto found = indexRanges.find(key); found != indexRanges.end()) {
+        indexRangeRecency.erase(found->second.recent);
+        indexRanges.erase(found);
+    }
+    while (indexRanges.size() >= IndexRangeEntries) {
+        indexRanges.erase(indexRangeRecency.front());
+        indexRangeRecency.pop_front();
+    }
+    indexRangeRecency.push_back(key);
+    try {
+        indexRanges.emplace(key, IndexRange{generation, registryGeneration, std::prev(indexRangeRecency.end()), highest});
+    } catch (...) {
+        indexRangeRecency.pop_back();
+        throw;
+    }
 }
 
 void Recorder::OnComplete(std::function<void()> action) {

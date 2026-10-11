@@ -8,6 +8,11 @@
 #include <stdexcept>
 #include <string>
 #include <system_error>
+#ifdef __linux__
+#include <cerrno>
+#include <fcntl.h>
+#include <unistd.h>
+#endif
 #include "SceTypes.hpp"
 #include "prx/libc/include/General.hpp"
 #include "prx/libkernel/File/include/DirectoryDescriptor.hpp"
@@ -101,6 +106,9 @@ int APS5_VABI fchdir_nid_postfix(int fd) {
     int error = 0;
     const char* path = GetDirectoryDescriptorPath_nid_no_patch(fd, &error);
     if (path == nullptr) return static_cast<int>(Fail(error));
+#ifdef __linux__
+    if (::faccessat(fd, ".", X_OK, AT_EACCESS) != 0) return static_cast<int>(Fail(errno));
+#endif
     error = SetWorkingDirectory_nid_no_patch(path);
     if (error != 0) return static_cast<int>(Fail(error));
     return 0;
