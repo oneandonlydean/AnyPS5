@@ -4263,6 +4263,129 @@ void depthSurfaceProofTests(const Device& device, Recorder& recorder) {
     Require(!DepthSurfaceHolds(context, layered, texture.get()), "a layered depth lookup took the fast proof instead of the full walk");
 }
 
+void depthSurfaceWriterTests(const Device& device, Recorder& recorder) {
+    const auto& base = device.GetContext();
+    constexpr std::uint32_t side = 64;
+    constexpr std::size_t slice = 65536;
+    constexpr std::size_t bytes = 4 * slice;
+#ifdef _WIN32
+    void* block = VirtualAlloc(nullptr, bytes, MEM_RESERVE | MEM_COMMIT, PAGE_READWRITE);
+#else
+    void* block = std::aligned_alloc(65536, bytes);
+#endif
+    Require(block != nullptr, "cannot allocate the depth writer block");
+    std::memset(block, 0, bytes);
+    const auto address = reinterpret_cast<std::uint64_t>(block);
+    {
+        GuestAllocations::Mutation mutation;
+        mutation.Add(block, bytes, true, true, true);
+    }
+    struct Unregister {
+        const Context& context;
+        void* block;
+        ~Unregister() {
+            ClearDepthSurfaces(context.device);
+            {
+                GuestAllocations::Mutation mutation;
+                mutation.Remove(block);
+            }
+#ifdef _WIN32
+            VirtualFree(block, 0, MEM_RELEASE);
+#else
+            std::free(block);
+#endif
+        }
+    } unregister{base, block};
+    Require(DepthSliceBytes({side, side}, 4) == slice, "the test depth plane has an unexpected size");
+    TextureDetiler detiler(base);
+    auto context = base;
+    context.detiler = &detiler;
+    const auto view = [&](std::uint64_t at, std::uint32_t extent) {
+        GuestTextureResource resource{};
+        resource.baseAddress = at;
+        resource.width = extent;
+        resource.height = extent;
+        resource.mipCount = 1;
+        resource.tileMode = TextureTileMode::kZ64KBX;
+        resource.dimension = TextureDimension::k2D;
+        resource.format = 22;
+        resource.dstSelX = 4;
+        resource.dstSelY = 5;
+        resource.dstSelZ = 6;
+        resource.dstSelW = 7;
+        return resource;
+    };
+    const auto depth = [&](std::uint64_t at) { return DepthTarget{at, 0, {side, side}, VK_FORMAT_D32_SFLOAT, 1.0f, 0}; };
+    const VkImageSubresourceRange range{VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 1};
+    const auto write = [&](const std::shared_ptr<StorageTexture>& image, float value) {
+        const auto commands = recorder.Commands();
+        recorder.Keep(image);
+        VkClearColorValue color{};
+        color.float32[0] = value;
+        RecordMemoryBarrier(context, commands, VK_PIPELINE_STAGE_ALL_COMMANDS_BIT, VK_PIPELINE_STAGE_TRANSFER_BIT, VK_ACCESS_SHADER_WRITE_BIT | VK_ACCESS_TRANSFER_WRITE_BIT | VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT, VK_ACCESS_TRANSFER_WRITE_BIT);
+        context.Function<PFN_vkCmdClearColorImage>("vkCmdClearColorImage")(commands, image->Image(), VK_IMAGE_LAYOUT_GENERAL, &color, 1, &range);
+        RecordMemoryBarrier(context, commands, VK_PIPELINE_STAGE_TRANSFER_BIT, VK_PIPELINE_STAGE_ALL_COMMANDS_BIT, VK_ACCESS_TRANSFER_WRITE_BIT, VK_ACCESS_SHADER_READ_BIT | VK_ACCESS_SHADER_WRITE_BIT | VK_ACCESS_TRANSFER_READ_BIT | VK_ACCESS_TRANSFER_WRITE_BIT);
+        image->MarkDirty();
+    };
+    const auto planeHolds = [&](const std::shared_ptr<StorageTexture>& image, std::uint64_t at, float value) {
+        write(image, 0.0625f);
+        SeedStorageFromDepth(context, image);
+        Buffer readback(context, static_cast<std::size_t>(side) * side * sizeof(float), VK_BUFFER_USAGE_TRANSFER_DST_BIT);
+        const auto commands = recorder.Commands();
+        RecordMemoryBarrier(context, commands, VK_PIPELINE_STAGE_ALL_COMMANDS_BIT, VK_PIPELINE_STAGE_TRANSFER_BIT, VK_ACCESS_SHADER_WRITE_BIT | VK_ACCESS_TRANSFER_WRITE_BIT | VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT, VK_ACCESS_TRANSFER_READ_BIT);
+        VkBufferImageCopy copy{};
+        copy.imageSubresource = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 0, 1};
+        copy.imageExtent = {side, side, 1};
+        context.Function<PFN_vkCmdCopyImageToBuffer>("vkCmdCopyImageToBuffer")(commands, image->Image(), VK_IMAGE_LAYOUT_GENERAL, readback.Handle(), 1, &copy);
+        RecordMemoryBarrier(context, commands, VK_PIPELINE_STAGE_TRANSFER_BIT, VK_PIPELINE_STAGE_HOST_BIT, VK_ACCESS_TRANSFER_WRITE_BIT, VK_ACCESS_HOST_READ_BIT);
+        recorder.Submit();
+        device.WaitQueue();
+        recorder.Sync();
+        DepthSurfaceView(context, depth(at));
+        const auto texels = readback.Bytes();
+        for (std::size_t offset = 0; offset < texels.size(); offset += sizeof(float)) {
+            float texel = 0;
+            std::memcpy(&texel, texels.data() + offset, sizeof(texel));
+            if (texel != value) return false;
+        }
+        return true;
+    };
+    {
+        auto image = std::make_shared<StorageTexture>(context, detiler, view(address, side), 0);
+        write(image, 0.25f);
+        NoteDepthSurfaceWriter(context.device, image);
+        Require(DepthSurfaceView(context, depth(address)) != VK_NULL_HANDLE, "the depth surface has no view");
+        Require(planeHolds(image, address, 0.25f), "a depth surface first bound over a written storage image of its layout did not take the image's texels");
+        RetireDepthSurfaces(context.device, address, slice);
+        write(image, 0.5f);
+        NoteDepthSurfaceWriter(context.device, image);
+        DepthSurfaceView(context, depth(address));
+        Require(planeHolds(image, address, 0.5f), "a retired depth surface bound again after a written storage image of its layout did not take the image's texels");
+        NoteDepthSurfaceWriter(context.device, image);
+        write(image, 0.125f);
+        DepthSurfaceView(context, depth(address));
+        Require(planeHolds(image, address, 0.5f), "a live depth surface took a storage image it was not seeded into");
+    }
+    {
+        const auto other = address + 2 * slice;
+        auto image = std::make_shared<StorageTexture>(context, detiler, view(other, side), 0);
+        write(image, 0.25f);
+        NoteDepthSurfaceWriter(context.device, image);
+        RetireDepthSurfaces(context.device, other + 4096, 4096);
+        DepthSurfaceView(context, depth(other));
+        Require(planeHolds(image, other, 1.0f), "a depth surface took a storage image another writer covered before it was bound");
+    }
+    {
+        const auto other = address + 3 * slice;
+        auto image = std::make_shared<StorageTexture>(context, detiler, view(other, side / 2), 0);
+        write(image, 0.25f);
+        NoteDepthSurfaceWriter(context.device, image);
+        DepthSurfaceView(context, depth(other));
+        auto full = std::make_shared<StorageTexture>(context, detiler, view(other, side), 0);
+        Require(planeHolds(full, other, 1.0f), "a depth surface took a storage image of another extent");
+    }
+}
+
 }
 
 class SampleProgram {
@@ -4974,6 +5097,11 @@ int main(int argc, char** argv) {
             std::cout << "CMASK copied clear, write-back and failure tests passed\n";
             return 0;
         }
+        if (argc == 2 && std::string_view(argv[1]) == "--depth-surface-writer-only") {
+            depthSurfaceWriterTests(device, recorder);
+            std::cout << "Depth surface writer tests passed\n";
+            return 0;
+        }
         if (argc == 2 && std::string_view(argv[1]) == "--draw-descriptors-only") {
             drawDescriptorWriteTests(device, recorder);
             std::cout << "Draw descriptor writes and snapshot overrides passed\n";
@@ -4997,6 +5125,7 @@ int main(int argc, char** argv) {
         resourceReadTests(device, recorder);
         readWrittenStagingTests(device, recorder);
         depthSurfaceProofTests(device, recorder);
+        depthSurfaceWriterTests(device, recorder);
         misalignedSnapshotTests(device, recorder);
         misalignedRegionTests(device, recorder);
         drawSnapshotReuseTests(device, recorder);
