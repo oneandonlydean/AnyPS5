@@ -774,7 +774,8 @@ std::list<CachedStorageTexture>::iterator findStorageByImage(StorageTextureCache
 }
 
 // Evicts an entry: its pending results go to guest memory first (the image may die with the entry).
-void evictStorage(StorageTextureCache& cache, std::list<CachedStorageTexture>::iterator it) {
+std::shared_ptr<StorageTexture> evictStorage(StorageTextureCache& cache, std::list<CachedStorageTexture>::iterator it) {
+    auto texture = it->texture;
     it->texture->SetCached(false);
     noteUncached(it->texture);
     it->texture->Flush();
@@ -782,6 +783,7 @@ void evictStorage(StorageTextureCache& cache, std::list<CachedStorageTexture>::i
     cache.index.erase(it->key);
     cache.byImage.erase(it->texture.get());
     cache.entries.erase(it);
+    return texture;
 }
 
 // Storage images are shared by every descriptor of one surface (address, extent, layers, format, tile
@@ -850,47 +852,52 @@ std::shared_ptr<StorageTexture> lookupStorageTexture(const Context& context, std
     const auto resource = StorageSurface(context, viewed);
     const StorageKey key{context.device, SurfaceKey(context, resource)};
     auto& cache = StorageTextures();
-    std::lock_guard lock(cache.mutex);
-    if (resource.mipCount > AllocatedLevels(resource)) {
-        auto allocated = resource;
-        allocated.mipCount = AllocatedLevels(resource);
-        if (const auto found = findStorage(cache, {context.device, SurfaceKey(context, allocated)}); found != cache.entries.end()) evictStorage(cache, found);
+    std::vector<std::shared_ptr<StorageTexture>> evicted;
+    std::shared_ptr<StorageTexture> texture;
+    {
+        std::lock_guard lock(cache.mutex);
+        if (resource.mipCount > AllocatedLevels(resource)) {
+            auto allocated = resource;
+            allocated.mipCount = AllocatedLevels(resource);
+            if (const auto found = findStorage(cache, {context.device, SurfaceKey(context, allocated)}); found != cache.entries.end()) evicted.push_back(evictStorage(cache, found));
+        }
+        auto it = findStorage(cache, key);
+        if (it != cache.entries.end() && MetadataMoved(*it->texture, resource)) {
+            evicted.push_back(evictStorage(cache, it));
+            it = cache.entries.end();
+        }
+        if (it != cache.entries.end()) {
+            it->texture->Refresh();
+            cache.entries.splice(cache.entries.begin(), cache.entries, it);
+            texture = it->texture;
+            counters.storageHits.fetch_add(1, std::memory_order_relaxed);
+            if (profile) LookupOutcomes::Add(LookupOutcomes::StorageHit, start);
+        } else {
+            if (guestBytes == 0) guestBytes = DescribeSurface(resource).guestBytes;
+            if (StorageTexture::FlushPending(resource.baseAddress, static_cast<std::size_t>(guestBytes), nullptr, "storage image creation", PublishScope::None) && profile) start = LookupOutcomes::Add(LookupOutcomes::PendingFlush, start);
+            CachedStorageTexture entry{key, mip, std::make_shared<StorageTexture>(context, *context.detiler, resource, mip)};
+            static const bool keepNew = std::getenv("APS5_NO_KEEP_NEW_STORAGE") == nullptr;
+            if (auto* recorder = Recorder::Active(); keepNew && recorder != nullptr && GuestMemory::GpuMutex().HeldByThisThread() && recorder->Recording()) recorder->Keep(entry.texture);
+            entry.accounted = heldBytes(*entry.texture);
+            const auto budget = storageBudget(context);
+            while (!cache.entries.empty() && cache.bytes + entry.accounted > budget) evicted.push_back(evictStorage(cache, std::prev(cache.entries.end())));
+            cache.bytes += entry.accounted;
+            texture = entry.texture;
+            cache.entries.push_front(std::move(entry));
+            cache.index[key] = cache.entries.begin();
+            cache.byImage[texture.get()] = cache.entries.begin();
+            texture->SetCached(true);
+            counters.storageCreated.fetch_add(1, std::memory_order_relaxed);
+            if (profile) LookupOutcomes::Add(LookupOutcomes::StorageMade, start);
+        }
     }
-    auto it = findStorage(cache, key);
-    if (it != cache.entries.end() && MetadataMoved(*it->texture, resource)) {
-        evictStorage(cache, it);
-        it = cache.entries.end();
+    for (const auto& image : evicted) {
+        std::vector<std::shared_ptr<ShaderResources>> resources;
+        SharedResourceCache().RemoveImage(image.get(), &resources);
+        if (auto* recorder = Recorder::Active(); recorder != nullptr && recorder->Recording()) {
+            for (auto& resource : resources) recorder->Keep(std::move(resource));
+        }
     }
-    if (it != cache.entries.end()) {
-        it->texture->Refresh();
-        cache.entries.splice(cache.entries.begin(), cache.entries, it);
-        counters.storageHits.fetch_add(1, std::memory_order_relaxed);
-        if (profile) LookupOutcomes::Add(LookupOutcomes::StorageHit, start);
-        return it->texture;
-    }
-    // Results other images hold over this memory reach it before the new image reads it: a hit's
-    // Refresh flushes them, the constructor's upload does not, and a GPU-direct upload reads the
-    // import buffer without the flush hook. The flush is recorded ahead of the upload in the batch.
-    if (guestBytes == 0) guestBytes = DescribeSurface(resource).guestBytes;
-    if (StorageTexture::FlushPending(resource.baseAddress, static_cast<std::size_t>(guestBytes), nullptr, "storage image creation", PublishScope::None) && profile) start = LookupOutcomes::Add(LookupOutcomes::PendingFlush, start);
-    CachedStorageTexture entry{key, mip, std::make_shared<StorageTexture>(context, *context.detiler, resource, mip)};
-    // The constructor's upload may have recorded into the open batch (a GPU clear, a direct
-    // detile) before the image could keep itself (no weak_from_this yet): the batch keeps it here,
-    // so an eviction or a failed view before it ran cannot destroy a referenced image.
-    // APS5_NO_KEEP_NEW_STORAGE=1 leaves the image to its cache entry alone, as before.
-    static const bool keepNew = std::getenv("APS5_NO_KEEP_NEW_STORAGE") == nullptr;
-    if (auto* recorder = Recorder::Active(); keepNew && recorder != nullptr && GuestMemory::GpuMutex().HeldByThisThread() && recorder->Recording()) recorder->Keep(entry.texture);
-    entry.accounted = heldBytes(*entry.texture);
-    const auto budget = storageBudget(context);
-    while (!cache.entries.empty() && cache.bytes + entry.accounted > budget) evictStorage(cache, std::prev(cache.entries.end()));
-    cache.bytes += entry.accounted;
-    auto texture = entry.texture;
-    cache.entries.push_front(std::move(entry));
-    cache.index[key] = cache.entries.begin();
-    cache.byImage[texture.get()] = cache.entries.begin();
-    texture->SetCached(true);
-    counters.storageCreated.fetch_add(1, std::memory_order_relaxed);
-    if (profile) LookupOutcomes::Add(LookupOutcomes::StorageMade, start);
     return texture;
 }
 
@@ -2557,6 +2564,19 @@ void ResourceCache::Remove(const Key& key, const ShaderResources* object) {
         if (found == index.end() || found->second->second.get() != object) return;
     }
     erase(key);
+}
+
+void ResourceCache::RemoveImage(const StorageTexture* image, std::vector<std::shared_ptr<ShaderResources>>* evicted) {
+    std::lock_guard lock(mutex);
+    for (auto it = entries.begin(); it != entries.end();) {
+        if (!it->second->ReadsImage(image)) {
+            ++it;
+            continue;
+        }
+        if (evicted != nullptr) evicted->push_back(std::move(it->second));
+        index.erase(it->first);
+        it = entries.erase(it);
+    }
 }
 
 bool ResourceCache::Touch(const Key& key) {

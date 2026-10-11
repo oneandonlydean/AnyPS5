@@ -135,6 +135,7 @@ static int SceIoErrorFromErrno(int error) {
 extern "C" {
 
 int APS5_VABI sceKernelOpen(const char* path, int flags, std::uint16_t mode) {
+    if (path != nullptr && *path == '\0') return SCE_KERNEL_ERROR_ENOENT;
     APS5_LOG_OUT("path=%s flags=0x%X nativeFlags=0x%X mode=0%o", path, flags, MapFlags(flags), mode);
     if (path != nullptr && File::IsRandomDevicePath(path)) {
         if ((flags & SCE_KERNEL_O_ACCMODE) != SCE_KERNEL_O_RDONLY) throw std::runtime_error(std::string(__func__) + ": writing to " + path + " is not implemented");
@@ -226,6 +227,7 @@ int APS5_VABI sceKernelStat(const char* path, FileStat* sb) {
     if (sb == nullptr) {
         throw std::invalid_argument(std::string(__func__) + ": sb is null");
     }
+    if (*path == '\0') return SceErrorFromErrno(2);
     std::filesystem::path native;
     try {
         native = ResolvePath_nid_no_patch(path);
@@ -249,6 +251,7 @@ int APS5_VABI sceKernelUnlink(const char* path) {
     if (path == nullptr) {
         throw std::invalid_argument(std::string(__func__) + ": path is null");
     }
+    if (*path == '\0') return SceErrorFromErrno(2);
     auto native = ResolvePath_nid_no_patch(path);
     constexpr int GuestEperm = 1;
     std::error_code error;

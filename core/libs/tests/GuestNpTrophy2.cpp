@@ -7,6 +7,7 @@ extern "C" {
 int APS5_VABI sceNpTrophy2RegisterUnlockCallback(void*, void*);
 int APS5_VABI sceNpTrophy2UnregisterUnlockCallback();
 int APS5_VABI sceNpTrophy2GetGameInfo(int, int, NpTrophy2GameDetails*, NpTrophy2GameData*);
+int APS5_VABI sceNpTrophy2ShowTrophyList(int);
 }
 
 static void Require(bool value) { if (!value) std::abort(); }
@@ -20,6 +21,8 @@ int main() {
     Require(sceNpTrophy2UnregisterUnlockCallback() == 0);
     Require(sceNpTrophy2RegisterUnlockCallback(reinterpret_cast<void*>(&OnUnlock), &userdata) == 0);
     Require(sceNpTrophy2UnregisterUnlockCallback() == 0);
+
+    Require(sceNpTrophy2ShowTrophyList(1) == 0);
 
     NpTrophy2GameDetails details{};
     NpTrophy2GameData data{};

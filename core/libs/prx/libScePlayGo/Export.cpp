@@ -2,6 +2,7 @@
 #include <cstddef>
 #include "SceTypes.hpp"
 #include "prx/libc/include/General.hpp"
+#include <cstring>
 #include <fstream>
 #include <iterator>
 #include <regex>
@@ -24,19 +25,32 @@ static constexpr int SCE_PLAYGO_ERROR_BAD_CHUNK_ID = static_cast<int>(0x80B2000C
 static constexpr int SCE_PLAYGO_ERROR_BAD_SIZE = static_cast<int>(0x80B2000B);
 static constexpr int SCE_PLAYGO_ERROR_BAD_LOCUS = static_cast<int>(0x80B20010);
 
-// The package's chunk table is not part of the dump, so the chunk set comes from the title's
-// playgo-chunkdefs.xml: every listed chunk plus chunks 0 through the default chunk. When that file
-// exists, IDs outside the set are rejected; without it the table is unknown and every ID is accepted.
 struct ChunkTable {
     std::set<uint16_t> ids{0};
     bool defined = false;
 };
 
+static bool ReadPackageChunks(ChunkTable& table) {
+    constexpr std::size_t CountOffset = 0x0A;
+    std::ifstream file(ResolvePath_nid_no_patch("/app0/sce_sys/playgo-chunk.dat"), std::ios::binary);
+    char header[CountOffset + sizeof(uint16_t)]{};
+    if (!file.read(header, sizeof(header)) || std::memcmp(header, "plgx", 4) != 0) return false;
+    uint16_t count = 0;
+    std::memcpy(&count, header + CountOffset, sizeof(count));
+    if (count == 0) return false;
+    for (uint32_t id = 0; id < count; ++id) table.ids.insert(static_cast<uint16_t>(id));
+    table.defined = true;
+    return true;
+}
+
 static const ChunkTable& Chunks() {
     static const ChunkTable chunks = [] {
         ChunkTable table;
         std::ifstream file(ResolvePath_nid_no_patch("/app0/playgo-chunkdefs.xml"));
-        if (!file) return table;
+        if (!file) {
+            ReadPackageChunks(table);
+            return table;
+        }
         table.defined = true;
         auto& result = table.ids;
         const std::string text((std::istreambuf_iterator<char>(file)), std::istreambuf_iterator<char>());

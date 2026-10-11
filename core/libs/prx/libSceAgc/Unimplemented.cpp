@@ -50,11 +50,6 @@ int APS5_VABI sceAgcDcbSetWorkloadStreamInactive() {
  return 0;
 }
 
-int APS5_VABI sceAgcDebugRaiseException() {
- NotImplemented_nid_no_patch(__func__);
- return 0;
-}
-
 int APS5_VABI sceAgcGetDefaultCxStateFlat() {
  NotImplemented_nid_no_patch(__func__);
  return 0;

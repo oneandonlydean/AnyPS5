@@ -121,6 +121,13 @@ static bool ExtendedBits(long double value, std::uint64_t mantissa, std::uint16_
     return actualMantissa == mantissa && actualSignExponent == signExponent;
 }
 
+static void CheckHypotSpecialValue() {
+    Require(std::bit_cast<std::uint64_t>(hypot_nid_postfix(INFINITY, std::bit_cast<double>(0x7ff0000000000001ull))) == 0x7ff0000000000000ull);
+    Require(std::bit_cast<std::uint64_t>(hypot_nid_postfix(std::bit_cast<double>(0x7ff0000000000001ull), INFINITY)) == 0x7ff0000000000000ull);
+    Require(std::bit_cast<std::uint64_t>(hypot_nid_postfix(-INFINITY, std::bit_cast<double>(0x7ff0000000000001ull))) == 0x7ff0000000000000ull);
+    Require(std::bit_cast<std::uint64_t>(hypot_nid_postfix(std::bit_cast<double>(0x7ff0000000000001ull), -INFINITY)) == 0x7ff0000000000000ull);
+}
+
 static void CheckLongDouble() {
     Require(ExtendedBits(acosl_nid_postfix(-1.0L), 0xc90fdaa22168c235ull, 0x4000));
     Require(ExtendedBits(acosl_nid_postfix(0.0L), 0xc90fdaa22168c235ull, 0x3fff));
@@ -485,4 +492,5 @@ int main() {
     Require(abs_nid_postfix(std::numeric_limits<int>::max()) == std::numeric_limits<int>::max());
     Require(abs_nid_postfix(std::numeric_limits<int>::min()) == std::numeric_limits<int>::min());
     CheckHyperbolic();
+    CheckHypotSpecialValue();
 }

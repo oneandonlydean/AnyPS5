@@ -717,6 +717,9 @@ int APS5_VABI ioctl_nid_postfix(int descriptor, std::uint64_t request, void* arg
     if (request == 0x4004667f) *static_cast<int*>(argument) = static_cast<int>(value);
     return 0;
 }
+int APS5_VABI _ioctl_nid_postfix(int descriptor, std::uint64_t request, void* argument) {
+    return ioctl_nid_postfix(descriptor, request, argument);
+}
 std::int64_t APS5_VABI sendto_nid_postfix(int descriptor, const void* buffer, std::uint64_t length,
     int flags, const void* address, std::uint32_t addressLength) {
     const auto socket = Lookup(descriptor);

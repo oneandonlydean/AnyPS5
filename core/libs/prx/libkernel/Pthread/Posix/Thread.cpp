@@ -154,6 +154,12 @@ Pthread APS5_VABI pthread_self_nid_postfix(void) {
     return scePthreadSelf();
 }
 
+int APS5_VABI scePthreadGetthreadid(void);
+
+int APS5_VABI pthread_getthreadid_np_nid_postfix(void) {
+    return scePthreadGetthreadid();
+}
+
 int APS5_VABI pthread_equal_nid_postfix(Pthread first, Pthread second) {
     return first == second;
 }

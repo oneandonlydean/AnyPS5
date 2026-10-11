@@ -347,6 +347,28 @@ void Run(AgcDriver::VulkanDevice& device, std::uint8_t* block) {
     RequireKeys(keys, 0x40, "a write marked after a 0001 key fill over a cleared image, before a refresh saw the fill");
 }
 
+void RunReusedKeys(AgcDriver::VulkanDevice& device, std::uint8_t* block) {
+    auto* texels = block;
+    auto* keys = block + KeysOffset;
+    const auto surface = AddressOf(texels);
+    std::memset(texels, 0x55, SurfaceBytes);
+    std::memset(keys, 0x00, KeyBytes);
+    AgcDriver::GuestMemory::BumpCollectEpoch();
+    const auto texture = TextureDescriptor(texels, keys);
+    std::vector<std::uint32_t> writeData(16, 0u);
+    std::copy(texture.begin(), texture.end(), writeData.begin() + 4);
+    std::lock_guard gpu(AgcDriver::GuestMemory::GpuMutex());
+    Dispatch(device, WriteCode, writeData);
+    const auto image = StorageTexture::FindPending(surface, SurfaceBytes);
+    Require(image != nullptr && image->UploadedKeys() == DccKeys::Uncompressed, "reused keys: the first write did not store the keys uncompressed");
+    RequireKeys(keys, 0xff, "reused keys: the keys after the first write");
+    std::memset(keys, 0x5a, KeyBytes);
+    StorageTexture::FlushPending(surface, SurfaceBytes, nullptr, "test reused keys");
+    device.WaitIdle();
+    RequireKeys(keys, 0x5a, "the key bytes the title reused after the first write, after the image's write-back");
+    Require(Count(texels, SurfaceBytes, 0xff) == Threads * 4u, "reused keys: the write-back lost the image's results");
+}
+
 void RunUntrackedReuse(AgcDriver::VulkanDevice& device, std::uint8_t* block) {
     const auto address = AddressOf(block);
     std::memset(block, 0x55, BlockBytes);
@@ -485,6 +507,9 @@ int main() {
         Run(*device, block->Data());
         untracked.emplace(false);
         RunUntrackedReuse(*device, untracked->Data());
+        std::optional<GuestBlock> reused;
+        reused.emplace(false);
+        RunReusedKeys(*device, reused->Data());
 #ifdef _WIN32
         shared.emplace(true, true);
         RunSharedImport(*device, shared->Data());

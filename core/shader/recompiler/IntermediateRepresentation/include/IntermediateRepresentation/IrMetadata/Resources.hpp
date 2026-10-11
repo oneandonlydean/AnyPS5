@@ -50,6 +50,7 @@ inline constexpr std::uint32_t AddressBorder = 2u;
 inline constexpr std::uint32_t ReferenceFloat = 0u;
 inline constexpr std::uint32_t ReferenceUnorm = 1u;
 inline constexpr std::uint32_t ReferenceSnorm = 2u;
+inline constexpr std::uint32_t ReferenceZero = 3u;
 [[nodiscard]] inline std::uint32_t Function(std::uint32_t state) { return (state >> FunctionShift) & 0x7u; }
 [[nodiscard]] inline std::uint32_t AddressX(std::uint32_t state) { return (state >> ClampXShift) & 0x3u; }
 [[nodiscard]] inline std::uint32_t AddressY(std::uint32_t state) { return (state >> ClampYShift) & 0x3u; }

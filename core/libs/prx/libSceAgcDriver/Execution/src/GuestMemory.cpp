@@ -37,35 +37,7 @@
 #include <sstream>
 #include <sys/ioctl.h>
 #include <unistd.h>
-#if __has_include(<linux/fs.h>)
-#include <linux/fs.h>
-#endif
-#if !defined(PROCMAP_QUERY)
-struct procmap_query {
-    std::uint64_t size;
-    std::uint64_t query_flags;
-    std::uint64_t query_addr;
-    std::uint64_t vma_start;
-    std::uint64_t vma_end;
-    std::uint64_t vma_flags;
-    std::uint64_t vma_page_size;
-    std::uint64_t vma_offset;
-    std::uint64_t inode;
-    std::uint32_t dev_major;
-    std::uint32_t dev_minor;
-    std::uint32_t vma_name_size;
-    std::uint32_t build_id_size;
-    std::uint64_t vma_name_addr;
-    std::uint64_t build_id_addr;
-};
-static_assert(sizeof(procmap_query) == 104);
-enum : std::uint64_t {
-    PROCMAP_QUERY_VMA_READABLE = 0x01,
-    PROCMAP_QUERY_VMA_WRITABLE = 0x02,
-    PROCMAP_QUERY_COVERING_OR_NEXT_VMA = 0x10,
-};
-#define PROCMAP_QUERY _IOWR('f', 17, struct procmap_query)
-#endif
+#include "prx/libc/include/specifics/linux/HostMapping.hpp"
 #endif
 
 namespace AgcDriver::GuestMemory {
@@ -515,22 +487,6 @@ struct PageRun {
     bool writable;
 };
 
-#if !defined(_WIN32)
-int ProcMapsQueryFd() {
-    static const int fd = [] {
-        if (std::getenv("APS5_NO_PROCMAP_QUERY") != nullptr) return -1;
-        const int opened = open("/proc/self/maps", O_RDONLY | O_CLOEXEC);
-        if (opened < 0) return -1;
-        procmap_query probe{};
-        probe.size = sizeof(probe);
-        probe.query_flags = PROCMAP_QUERY_COVERING_OR_NEXT_VMA;
-        if (ioctl(opened, PROCMAP_QUERY, &probe) == 0 || errno == ENOENT) return opened;
-        close(opened);
-        return -1;
-    }();
-    return fd;
-}
-#endif
 
 // Calls `emit` with consecutive runs of uniform accessibility covering [address, address + bytes) in
 // order, stopping early when it returns false. Returns false when the address space cannot be queried.
@@ -589,7 +545,7 @@ bool describePages(std::uintptr_t address, std::size_t bytes, Emit&& emit) {
         if (!emit(PageRun{cursor, next, readable, writable})) return true;
         cursor = next;
 #else
-        if (const int fd = ProcMapsQueryFd(); fd >= 0) {
+        if (const int fd = HostMapping::QueryFd(); fd >= 0) {
             procmap_query query{};
             query.size = sizeof(query);
             query.query_flags = PROCMAP_QUERY_COVERING_OR_NEXT_VMA;

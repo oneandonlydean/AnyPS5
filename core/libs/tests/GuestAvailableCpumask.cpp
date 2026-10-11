@@ -15,6 +15,7 @@ int APS5_VABI scePthreadSetaffinity(Pthread thread, KernelCpumask mask);
 int APS5_VABI scePthreadAttrInit(PthreadAttr* attr);
 int APS5_VABI scePthreadAttrDestroy(PthreadAttr* attr);
 int APS5_VABI scePthreadAttrGetaffinity(const PthreadAttr* attr, KernelCpumask* mask);
+int APS5_VABI scePthreadAttrSetaffinity(PthreadAttr* attr, KernelCpumask mask);
 int APS5_VABI cpuset_getaffinity_nid_postfix(int level, int which, std::int64_t id, std::size_t size, void* mask);
 int APS5_VABI cpuset_setaffinity_nid_postfix(int level, int which, std::int64_t id, std::size_t size, const void* mask);
 int APS5_VABI getpid_nid_postfix(void);
@@ -27,6 +28,16 @@ static constexpr int SCE_OK = 0;
 static constexpr int PS5_LOGICAL_CPUS = 16;
 
 static void Require(bool value) { if (!value) std::abort(); }
+
+struct RestoreProcessMask {
+    KernelCpumask mask;
+    bool* restored;
+
+    ~RestoreProcessMask() {
+        const std::uint64_t requested[1] = {mask};
+        *restored = cpuset_setaffinity_nid_postfix(3, 2, -1, 8, requested) == 0;
+    }
+};
 
 static constexpr std::size_t GUEST_CPUSET_BYTES = 32;
 static constexpr int GUEST_EINVAL = 22;
@@ -162,6 +173,31 @@ int main() {
     Require(bystanderAffinity == available);
     hold.set_value();
     Require(scePthreadJoin(bystander, nullptr) == SCE_OK);
+
+    if (first != available) {
+        const std::uint64_t single[1] = {last};
+        const bool changed = cpuset_setaffinity_nid_postfix(3, 2, -1, 8, single) == 0;
+        bool restored = false;
+        bool created = false;
+        bool joined = false;
+        bool explicitSet = false;
+        bool explicitCreated = false;
+        bool explicitJoined = false;
+        std::uint64_t inherited[8]{};
+        std::uint64_t explicitAffinity[8]{};
+        if (changed) {
+            RestoreProcessMask restore{available, &restored};
+            Pthread child = nullptr;
+            created = scePthreadCreate(&child, &attr, ReportCpuset, inherited, nullptr) == SCE_OK;
+            joined = created && scePthreadJoin(child, nullptr) == SCE_OK;
+            explicitSet = scePthreadAttrSetaffinity(&attr, available) == SCE_OK;
+            child = nullptr;
+            explicitCreated = explicitSet && scePthreadCreate(&child, &attr, ReportCpuset, explicitAffinity, nullptr) == SCE_OK;
+            explicitJoined = explicitCreated && scePthreadJoin(child, nullptr) == SCE_OK;
+        }
+        Require(changed && restored && created && joined && inherited[0] == 0 && inherited[1] == last);
+        Require(explicitSet && explicitCreated && explicitJoined && explicitAffinity[0] == 0 && explicitAffinity[1] == available);
+    }
     Require(scePthreadAttrDestroy(&attr) == SCE_OK);
 
     Require(ReadCpuset(pthread_self_nid_postfix()) == available);

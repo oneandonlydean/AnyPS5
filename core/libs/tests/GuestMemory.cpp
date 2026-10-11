@@ -335,6 +335,26 @@ static void CheckFixedMappingReplacesPartialOverlap() {
     Require(sceKernelReleaseDirectMemory(phys, page * 3) == 0);
 }
 
+static void CheckFixedMappingOverHoleInsideAllocation() {
+    constexpr std::size_t page = 0x4000;
+    std::int64_t phys = 0;
+    Require(sceKernelAllocateDirectMemory(0, 0x7fffffffffll, page * 4, 0, 0, &phys) == 0);
+    void* mapped = nullptr;
+    Require(sceKernelMapDirectMemory(&mapped, page * 4, 3, 0, phys, 0) == 0);
+    auto* bytes = static_cast<unsigned char*>(mapped);
+    bytes[7] = 0x11;
+    bytes[page * 3 + 7] = 0x44;
+    Require(sceKernelMunmap(bytes + page, page) == 0);
+    void* fixed = bytes + page;
+    Require(sceKernelMapDirectMemory(&fixed, page * 2, 3, 0x10, phys + static_cast<std::int64_t>(page), 0) == 0);
+    Require(fixed == bytes + page);
+    bytes[page * 2 + 7] = 0x33;
+    Require(bytes[7] == 0x11 && bytes[page * 2 + 7] == 0x33 && bytes[page * 3 + 7] == 0x44);
+    Require(sceKernelMunmap(bytes + page * 2, page * 2) == 0);
+    Require(sceKernelMunmap(mapped, page * 4) == 0);
+    Require(sceKernelReleaseDirectMemory(phys, page * 4) == 0);
+}
+
 static void CheckGetDirectMemoryType() {
     constexpr std::size_t page = 0x4000;
     std::int64_t first = 0;
@@ -1670,6 +1690,7 @@ int main() {
     CheckReleaseDirectMemoryClearsMappings();
     CheckReleaseDirectMemoryRejectsInvalidRanges();
     CheckFixedMappingReplacesPartialOverlap();
+    CheckFixedMappingOverHoleInsideAllocation();
     CheckDirectMemoryGpuProtBits();
     CheckGpuAccessFollowsProtection();
     CheckGpuMapsAreObserved();

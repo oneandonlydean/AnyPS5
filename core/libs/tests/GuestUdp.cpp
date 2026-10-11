@@ -14,6 +14,7 @@ int APS5_VABI getsockopt_nid_postfix(int, int, int, void*, std::uint32_t*);
 int APS5_VABI bind_nid_postfix(int, const void*, std::uint32_t);
 int APS5_VABI getsockname_nid_postfix(int, void*, std::uint32_t*);
 int APS5_VABI ioctl_nid_postfix(int, std::uint64_t, void*);
+int APS5_VABI _ioctl_nid_postfix(int, std::uint64_t, void*);
 std::int64_t APS5_VABI sendto_nid_postfix(int, const void*, std::uint64_t, int, const void*, std::uint32_t);
 std::int64_t APS5_VABI recvfrom_nid_postfix(int, void*, std::uint64_t, int, void*, std::uint32_t*);
 int APS5_VABI close_nid_postfix(int);
@@ -99,6 +100,9 @@ int main() {
     Require(std::strcmp(buffer, message) == 0 && source[1] == 2 && source[4] == 127);
     Require(ioctl_nid_postfix(receiver, 0x4004667f, &queued) == 0 && queued == 0);
     Require(ioctl_nid_postfix(receiver, 123, &queued) == -1 && *__error_nid_postfix() == 25);
+    queued = -1;
+    Require(_ioctl_nid_postfix(receiver, 0x4004667f, &queued) == 0 && queued == 0);
+    Require(_ioctl_nid_postfix(receiver, 123, &queued) == -1 && *__error_nid_postfix() == 25);
     char head[] = "scatter ";
     char tail[] = "gather";
     Iovec parts[2]{{head, 8}, {tail, 6}};
@@ -135,6 +139,7 @@ int main() {
     Require(close_nid_postfix(receiver) == 0);
     Require(close_nid_postfix(receiver) == -1 && *__error_nid_postfix() == 9);
     Require(ioctl_nid_postfix(receiver, 0x4004667f, &queued) == -1);
+    Require(_ioctl_nid_postfix(receiver, 0x4004667f, &queued) == -1 && *__error_nid_postfix() == 9);
     Require(close_nid_postfix(sender) == 0);
     unsigned char parsed[16]{};
     Require(inet_pton_nid_postfix(2, "127.0.0.1", parsed) == 1);

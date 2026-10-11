@@ -386,7 +386,7 @@ std::vector<GuestArtifact> GuestModuleBuilder::Build(const std::filesystem::path
             }
         }
         dynamic.GuestModules.push_back(std::move(runtime));
-        artifacts.push_back({target, std::move(output), std::move(imports)});
+        artifacts.push_back({target, std::move(output), std::move(imports), image.SourcePath});
         std::cout << " [DONE]" << std::endl;
     }
     return artifacts;

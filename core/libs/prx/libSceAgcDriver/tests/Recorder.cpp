@@ -1,3 +1,4 @@
+#include "prx/libSceAgcDriver/Execution/include/PipelineLinkOptimization.hpp"
 #include "Triangle_frag_spv.h"
 #include "Triangle_vert_spv.h"
 #include "prx/libSceAgcDriver/Graphics/include/VertexInput.hpp"
@@ -211,6 +212,12 @@ public:
                 VkPhysicalDeviceProperties2 properties{VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_PROPERTIES_2, &libraryProperties};
                 function<PFN_vkGetPhysicalDeviceProperties2>("vkGetPhysicalDeviceProperties2")(context.physical, &properties);
                 context.graphicsPipelineLibrary = library.graphicsPipelineLibrary == VK_TRUE && dynamicState.extendedDynamicState == VK_TRUE && rendering.dynamicRendering == VK_TRUE && libraryProperties.graphicsPipelineLibraryFastLinking == VK_TRUE && properties.properties.limits.maxPushConstantsSize >= PipelinePushConstantBytes;
+                if (context.graphicsPipelineLibrary && hasExtension(VK_KHR_DRIVER_PROPERTIES_EXTENSION_NAME)) {
+                    VkPhysicalDeviceDriverProperties driver{VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_DRIVER_PROPERTIES};
+                    VkPhysicalDeviceProperties2 driverProperties{VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_PROPERTIES_2, &driver};
+                    function<PFN_vkGetPhysicalDeviceProperties2>("vkGetPhysicalDeviceProperties2")(context.physical, &driverProperties);
+                    context.pipelineLinkTimeOptimization = AgcDriver::PipelineLinkTimeOptimizationUsable(driver.driverID);
+                }
             }
             rendering = {VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_DYNAMIC_RENDERING_FEATURES_KHR, address.pNext, VK_TRUE};
             library = {VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_GRAPHICS_PIPELINE_LIBRARY_FEATURES_EXT, &dynamicState, VK_TRUE};
@@ -4890,7 +4897,7 @@ void pipelineLibraryTests(const Device& device) {
     static_cast<void>(lookup());
     Require(counters().built == std::array<std::uint64_t, 4>{2, 2, 3, 3}, "another target format rebuilt more than the fragment output library");
     WaitForOptimizedPipelines(context.device);
-    const auto lto = std::getenv("APS5_NO_PIPELINE_LTO") == nullptr;
+    const auto lto = std::getenv("APS5_NO_PIPELINE_LTO") == nullptr && context.pipelineLinkTimeOptimization;
     Require(counters().optimized == (lto ? counters().linked : 0u), "a linked pipeline was not optimized in the background");
     Require(first->Optimized() == lto && culled->Optimized() == lto, "a pipeline did not switch to its optimized link");
     ClearCachedPipelines(context.device);

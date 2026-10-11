@@ -50,7 +50,7 @@ def open_prs(base):
 
 
 def fetch(base, prs):
-    refspecs = [f"+refs/heads/{base}:refs/pr/base"] + [f"+refs/pull/{n}/head:{pr['ref']}" for n, pr in prs.items()]
+    refspecs = [f"+refs/heads/{base}:refs/pr/base"] + [f"+{pr['sha']}:{pr['ref']}" for pr in prs.values()]
     git("fetch", "--no-tags", "-q", f"https://github.com/{REPO}.git", *refspecs)
 
 

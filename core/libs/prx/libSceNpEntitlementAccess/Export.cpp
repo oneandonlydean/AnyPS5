@@ -159,6 +159,11 @@ int APS5_VABI sceNpEntitlementAccessGetPftFlag(void) {
     return 0;
 }
 
+int APS5_VABI sceNpEntitlementAccessGetGameTrialsFlag(void) {
+    NotImplemented_nid_no_patch(__func__);
+    return 0;
+}
+
 int APS5_VABI sceNpEntitlementAccessPollServiceEntitlementInfoList() {
     return SCE_NP_ERROR_SIGNED_OUT;
 }

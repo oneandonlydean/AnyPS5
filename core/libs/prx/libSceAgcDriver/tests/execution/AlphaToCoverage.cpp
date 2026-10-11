@@ -49,6 +49,8 @@ constexpr std::uint32_t Float16x4Info = 0x0730u;
 constexpr std::uint32_t TiledAttrib3 = 0x4dc6c000u;
 constexpr std::uint32_t Float32Export = 9;
 constexpr std::uint32_t Float16Export = 4;
+constexpr std::uint32_t Unorm16Export = 5;
+constexpr std::uint32_t Snorm16Export = 6;
 
 alignas(256) constexpr std::array<std::uint32_t, 6> VertexCode{
     0xe0382000, 0x80000005, 0xbf8c3f70, 0xf80008cf, 0x03020100, 0xbf810000,
@@ -80,7 +82,17 @@ float FromHalf(std::uint16_t half) {
     return exponent == 0 ? std::ldexp(static_cast<float>(mantissa), -24) : std::ldexp(1.0f + static_cast<float>(mantissa) / 1024.0f, static_cast<int>(exponent) - 15);
 }
 
-std::span<const std::uint32_t> Program(const Color& color, bool compressed) {
+std::uint32_t Packed16(float value, std::uint32_t exportFormat) {
+    if (exportFormat == Float16Export) return Half(value);
+    if (exportFormat == Unorm16Export) {
+        Require(value >= 0.0f && value <= 1.0f, "the test's UNORM16 values are in [0, 1]");
+        return static_cast<std::uint32_t>(std::lround(value * 65535.0f));
+    }
+    Require(exportFormat == Snorm16Export && value >= -1.0f && value <= 1.0f, "the test's SNORM16 values are in [-1, 1]");
+    return static_cast<std::uint16_t>(static_cast<std::int16_t>(std::lround(value * 32767.0f)));
+}
+
+std::span<const std::uint32_t> Program(const Color& color, std::uint32_t exportFormat) {
     Require(programCount < Programs.size(), "too many test programs");
     auto& code = Programs[programCount++];
     std::size_t at = 0;
@@ -88,9 +100,9 @@ std::span<const std::uint32_t> Program(const Color& color, bool compressed) {
         code[at++] = 0x7e0002ffu | (vgpr << 17u);
         code[at++] = value;
     };
-    if (compressed) {
-        move(4, Half(color[0]) | (Half(color[1]) << 16u));
-        move(5, Half(color[2]) | (Half(color[3]) << 16u));
+    if (exportFormat != Float32Export) {
+        move(4, Packed16(color[0], exportFormat) | (Packed16(color[1], exportFormat) << 16u));
+        move(5, Packed16(color[2], exportFormat) | (Packed16(color[3], exportFormat) << 16u));
         code[at++] = 0xf8001c0fu;
         code[at++] = 0x00000504u;
     } else {
@@ -305,17 +317,30 @@ int main() {
         for (const auto& test : cases) {
             const Color source{0.25f, 0.5f, 0.125f, std::bit_cast<float>(test.alpha)};
             const auto before = Fill(block, layout);
-            Draw(*device, DecodeTarget(block), test.alphaToCoverage, Float32Export, Program(source, false));
+            Draw(*device, DecodeTarget(block), test.alphaToCoverage, Float32Export, Program(source, Float32Export));
             char name[96];
             std::snprintf(name, sizeof(name), "alpha 0x%08x with alpha-to-coverage %s", test.alpha, test.alphaToCoverage ? "on" : "off");
             Check(*device, block, layout, before, [&](const Color& destination) { return test.written ? source : destination; }, name);
             programCount = 0;
         }
-        for (const Case test : {Case{0x3f400000u, true, true}, Case{0x3e800000u, true, false}}) {
-            const Color source{0.25f, 0.5f, 0.125f, std::bit_cast<float>(test.alpha)};
+        struct PackedCase {
+            std::uint32_t exportFormat;
+            const char* name;
+            float alpha;
+            bool written;
+        };
+        constexpr std::array<PackedCase, 7> packedCases{{
+            {Float16Export, "FP16_ABGR", 0.75f, true}, {Float16Export, "FP16_ABGR", 0.25f, false},
+            {Unorm16Export, "UNORM16_ABGR", 0.75f, true}, {Unorm16Export, "UNORM16_ABGR", 0.25f, false},
+            {Snorm16Export, "SNORM16_ABGR", 0.75f, true}, {Snorm16Export, "SNORM16_ABGR", 0.25f, false}, {Snorm16Export, "SNORM16_ABGR", -0.5f, false},
+        }};
+        for (const auto& test : packedCases) {
+            const Color source{0.25f, 0.5f, 0.125f, test.alpha};
             const auto before = Fill(block, layout);
-            Draw(*device, DecodeTarget(block), true, Float16Export, Program(source, true));
-            Check(*device, block, layout, before, [&](const Color& destination) { return test.written ? source : destination; }, test.written ? "alpha 0.75 with FP16_ABGR exports" : "alpha 0.25 with FP16_ABGR exports");
+            Draw(*device, DecodeTarget(block), true, test.exportFormat, Program(source, test.exportFormat));
+            char name[96];
+            std::snprintf(name, sizeof(name), "alpha %.2f with %s exports", test.alpha, test.name);
+            Check(*device, block, layout, before, [&](const Color& destination) { return test.written ? source : destination; }, name);
             programCount = 0;
         }
         std::puts("alpha-to-coverage tests passed");

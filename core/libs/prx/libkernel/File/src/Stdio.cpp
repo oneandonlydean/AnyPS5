@@ -120,6 +120,13 @@ static int NativeFchmod(int descriptor, int mode) {
 static int NativeFtruncate(int descriptor, std::int64_t length) {
     return static_cast<int>(::_chsize_s(descriptor, length));
 }
+static int NativeTruncate(const std::filesystem::path& path, std::int64_t length) {
+    const int descriptor = ::_wopen(path.c_str(), _O_WRONLY | _O_BINARY);
+    if (descriptor < 0) return errno;
+    const int error = NativeFtruncate(descriptor, length);
+    ::_close(descriptor);
+    return error;
+}
 static int SetTimes(HANDLE handle, const KernelTimeval* times) {
     FILETIME access{}, modified{};
     if (times == nullptr) {
@@ -231,6 +238,9 @@ static int NativeFchmod(int descriptor, int mode) {
 static int NativeFtruncate(int descriptor, std::int64_t length) {
     return ::ftruncate(descriptor, static_cast<off_t>(length));
 }
+static int NativeTruncate(const std::filesystem::path& path, std::int64_t length) {
+    return ::truncate(path.c_str(), static_cast<off_t>(length)) == 0 ? 0 : errno;
+}
 static int NativeUtimes(const std::filesystem::path& path, const KernelTimeval* times) {
     if (times == nullptr) return ::utimes(path.c_str(), nullptr);
     struct timeval values[2]{{static_cast<time_t>(times[0].tv_sec), static_cast<suseconds_t>(times[0].tv_usec)},
@@ -269,6 +279,7 @@ static constexpr int GUEST_EINVAL = 22;
 static constexpr int GUEST_ESPIPE = 29;
 static constexpr int GUEST_ENAMETOOLONG = 63;
 static constexpr int GUEST_ENOTDIR = 20;
+static constexpr int GUEST_EISDIR = 21;
 static constexpr int GUEST_EWOULDBLOCK = 35;
 static constexpr int GUEST_ENOTEMPTY = 66;
 
@@ -685,6 +696,7 @@ int APS5_VABI unlink_nid_postfix(const char* path) {
 
 int APS5_VABI sceKernelCheckReachability(const char* path) {
     if (path == nullptr) return SCE_KERNEL_ERROR_EINVAL;
+    if (*path == '\0') return SCE_KERNEL_ERROR_ENOENT;
     if (std::strlen(path) > 255) return SCE_KERNEL_ERROR_ENAMETOOLONG;
     std::error_code error;
     return std::filesystem::exists(ResolvePath_nid_no_patch(path), error) ? 0 : SCE_KERNEL_ERROR_ENOENT;
@@ -988,6 +1000,7 @@ int64_t APS5_VABI pwritev_nid_postfix(int d, const KernelIovec* iov, int iovcnt,
 
 int APS5_VABI sceKernelRename(const char* from, const char* to) {
     if (from == nullptr || to == nullptr) throw std::invalid_argument("sceKernelRename: path is null");
+    if (*from == '\0' || *to == '\0') return SceErrorFromErrno(GUEST_ENOENT);
     const auto source = ResolvePath_nid_no_patch(from);
     std::error_code error;
     if (!std::filesystem::exists(source, error)) return SceErrorFromErrno(GUEST_ENOENT);
@@ -1001,12 +1014,14 @@ int APS5_VABI sceKernelRename(const char* from, const char* to) {
 
 int APS5_VABI sceKernelRmdir(const char* path) {
     if (path == nullptr) throw std::invalid_argument("sceKernelRmdir: path is null");
+    if (*path == '\0') return SceErrorFromErrno(GUEST_ENOENT);
     const auto native = ResolvePath_nid_no_patch(path);
     std::error_code error;
     if (!std::filesystem::is_directory(native, error)) {
         const bool blockedByFile = HasNonDirectoryPrefix(native) || std::filesystem::exists(WithoutTrailingSeparator(native), error);
         return SceErrorFromErrno(blockedByFile ? GUEST_ENOTDIR : GUEST_ENOENT);
     }
+    if (FinalPathComponentIsDot_nid_no_patch(path)) return SceErrorFromErrno(GUEST_EINVAL);
     if (!std::filesystem::is_empty(native, error)) return SceErrorFromErrno(GUEST_ENOTEMPTY);
     if (!RemoveEmptyDirectory(native)) return SceErrorFromErrno(GUEST_EIO);
     RecordWrittenPath_nid_no_patch(native);
@@ -1024,6 +1039,7 @@ extern "C" {
 
 int APS5_VABI sceKernelChmod_nid_postfix(const char* path, std::uint16_t mode) {
     if (!path) return SceErrorFromErrno(GUEST_EFAULT);
+    if (!*path) return SceErrorFromErrno(GUEST_ENOENT);
     const auto native = ResolvePath_nid_no_patch(path);
     if (NativeChmod(native, mode & 07777) != 0) return SceErrorFromErrno(errno);
     return 0;
@@ -1041,18 +1057,26 @@ int APS5_VABI fchmod_nid_postfix(int d, int mode) {
 
 int APS5_VABI sceKernelTruncate_nid_postfix(const char* path, std::int64_t length) {
     if (path == nullptr) throw std::invalid_argument("sceKernelTruncate: path is null");
+    if (*path == '\0') return SceErrorFromErrno(GUEST_ENOENT);
     if (length < 0) return SceErrorFromErrno(GUEST_EINVAL);
     const auto native = ResolvePath_nid_no_patch(path);
     std::error_code error;
-    if (!std::filesystem::exists(native, error)) return SceErrorFromErrno(GUEST_ENOENT);
-    std::filesystem::resize_file(native, static_cast<std::uintmax_t>(length), error);
-    if (error) return SceErrorFromErrno(GUEST_EIO);
+    const auto status = std::filesystem::status(native, error);
+    if (!std::filesystem::exists(status)) return SceErrorFromErrno(GUEST_ENOENT);
+    if (std::filesystem::is_directory(status)) return SceErrorFromErrno(GUEST_EISDIR);
+    if (const int failure = NativeTruncate(native, length)) return SceErrorFromErrno(failure);
     RecordWrittenPath_nid_no_patch(native);
     return 0;
 }
 
+int APS5_VABI truncate_nid_postfix(const char* path, std::int64_t length) {
+    if (const int error = PathError(path)) return PosixFailure(error);
+    return PosixResult(sceKernelTruncate_nid_postfix(path, length));
+}
+
 int APS5_VABI sceKernelUtimes_nid_postfix(const char* path, const KernelTimeval* times) {
     if (path == nullptr) throw std::invalid_argument("sceKernelUtimes: path is null");
+    if (*path == '\0') return SceErrorFromErrno(GUEST_ENOENT);
     if (times != nullptr) {
         for (int i = 0; i < 2; ++i) {
             if (times[i].tv_usec < 0 || times[i].tv_usec >= 1000000) return SCE_KERNEL_ERROR_EINVAL;
