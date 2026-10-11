@@ -419,7 +419,11 @@ void testCopies() {
     std::size_t flexibleBefore = 0;
     check(sceKernelAvailableFlexibleMemorySize(&flexibleBefore) == 0, "cannot query flexible memory");
     const auto toGds = makePacket(0x50, {0x60100000 | cachePolicies, low(source.data()), high(source.data()), 0x100, 0, 16});
-    check(!AgcDriver::Pm4::ResolveStore(toGds, state, 64).has_value(), "DMA_DATA to GDS resolved as a memory store");
+    const auto gdsStore = AgcDriver::Pm4::ResolveStore(toGds, state, 64);
+    check(gdsStore.has_value() && gdsStore->address == AgcDriver::Pm4::GdsAddress() + 0x100 && gdsStore->Bytes().size() == 16 && std::memcmp(gdsStore->Bytes().data(), source.data(), 16) == 0, "DMA_DATA to GDS did not resolve as a store into the GDS range");
+    const auto gdsFill = AgcDriver::Pm4::ResolveStore(makePacket(0x50, {0x40100000, 0x44332211, 0, 0x200, 0, 4}), state, 64);
+    check(gdsFill.has_value() && gdsFill->address == AgcDriver::Pm4::GdsAddress() + 0x200 && gdsFill->Bytes().size() == 4 && std::memcmp(gdsFill->Bytes().data(), "\x11\x22\x33\x44", 4) == 0, "an immediate DMA_DATA to GDS did not resolve as a store into the GDS range");
+    check(!AgcDriver::Pm4::ResolveStore(makePacket(0x50, {0x40100000, 0x44332211, 0, 0x202, 0, 4}), state, 64).has_value(), "a DMA_DATA to a misaligned GDS offset resolved as a store");
     execute(state, toGds);
     std::size_t flexibleAfter = 0;
     check(sceKernelAvailableFlexibleMemorySize(&flexibleAfter) == 0 && flexibleAfter == flexibleBefore, "the GDS was charged to the flexible memory budget");
