@@ -1,5 +1,6 @@
 #include "SceTypes.hpp"
 #include "prx/libc/include/general/VabiMacros.hpp"
+#include "prx/libc/include/GuestArena.hpp"
 #include "prx/libkernel/Apr/include/AprCommandBuffer.hpp"
 #include <array>
 #include <chrono>
@@ -93,6 +94,9 @@ std::uint64_t APS5_VABI sceAmprMeasureCommandSizeMapBegin(std::uint64_t, std::ui
 std::uint64_t APS5_VABI sceAmprMeasureCommandSizeMapDirectBegin(std::uint64_t, std::uint64_t, std::uint64_t, std::uint32_t, std::uint32_t);
 std::uint64_t APS5_VABI sceAmprMeasureCommandSizeMapEnd();
 int APS5_VABI sceKernelQueryMemoryProtection(void*, void**, void**, int*);
+int APS5_VABI sceKernelReserveVirtualRange(void**, std::size_t, int, std::size_t);
+int APS5_VABI sceKernelMapFlexibleMemory(void**, std::size_t, int, int);
+int APS5_VABI sceKernelMunmap(void*, std::size_t);
 int APS5_VABI sceAmprAmmCommandBufferMapAsPrt(Apr::CommandBufferObject*, std::uint64_t, std::uint64_t);
 int APS5_VABI sceAmprAmmCommandBufferAllocatePaForPrt(Apr::CommandBufferObject*, std::uint64_t, std::uint64_t, std::int32_t, std::int32_t);
 int APS5_VABI sceAmprAmmCommandBufferRemapIntoPrt(Apr::CommandBufferObject*, std::uint64_t, std::uint64_t, std::uint64_t, std::int32_t, std::uint32_t);
@@ -637,6 +641,35 @@ volatile std::uint64_t& At(std::uint64_t address) {
     return *reinterpret_cast<volatile std::uint64_t*>(address);
 }
 
+void TestAmmRangesAboveHintedMaps() {
+    constexpr std::uint64_t step = 0x400000;
+    void* span = nullptr;
+    Require(sceKernelReserveVirtualRange(&span, 4 * step, 0, 0) == 0);
+    Require(sceKernelMunmap(span, 4 * step) == 0);
+    const auto heap = reinterpret_cast<std::uint64_t>(span);
+    void* placed = span;
+    Require(sceKernelMapFlexibleMemory(&placed, page, 3, 0) == 0 && placed == span);
+
+    std::uint64_t start = 0;
+    std::uint64_t end = 0;
+    std::uint64_t multimapStart = 0;
+    std::uint64_t multimapEnd = 0;
+    Require(sceAmprAmmGetVirtualAddressRanges(&start, &end, &multimapStart, &multimapEnd) == 0);
+    std::uintptr_t arenaBase = 0;
+    std::size_t arenaBytes = 0;
+    GuestArena::GuestArenaRange_nid_postfix(&arenaBase, &arenaBytes);
+    Require(multimapEnd == arenaBase + arenaBytes);
+
+    for (std::uint64_t hint = heap + step; hint < heap + 4 * step; hint += step) {
+        void* mapped = reinterpret_cast<void*>(hint);
+        Require(sceKernelMapFlexibleMemory(&mapped, page, 3, 0) == 0);
+        Require(reinterpret_cast<std::uint64_t>(mapped) == hint);
+        Require(hint + page <= start || hint >= multimapEnd);
+        Require(sceKernelMunmap(mapped, page) == 0);
+    }
+    Require(sceKernelMunmap(span, page) == 0);
+}
+
 void TestAmm() {
     std::uint64_t start = 0;
     std::uint64_t end = 0;
@@ -989,6 +1022,7 @@ int main() {
     TestConstructed();
     TestZeroFilledBuffer();
     TestGatherScatter();
+    TestAmmRangesAboveHintedMaps();
     TestAmm();
     TestAmmRemapAndProtect();
     TestAmmPrt();

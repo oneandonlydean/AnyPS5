@@ -245,6 +245,7 @@ TCommand _read(const Apr::CommandBufferObject& buffer, std::uint32_t cursor) {
 
 constexpr std::uint64_t AmmRangeBytes = 32ull << 30;
 constexpr int GuestMapFixed = 0x10;
+constexpr int GuestMapNoOverwrite = 0x80;
 
 struct AmmPage {
     std::uint64_t physical;
@@ -270,8 +271,12 @@ AmmState& _amm() {
 
 std::uintptr_t _ammBase(AmmState& state) {
     if (state.base == 0) {
-        void* address = nullptr;
-        if (DoReserveVirtual(&address, 2 * AmmRangeBytes, 0, 0x200000) != 0) throw std::runtime_error("AMM: cannot reserve the virtual address range");
+        std::uintptr_t arenaBase = 0;
+        std::size_t arenaBytes = 0;
+        GuestArena::GuestArenaRange_nid_postfix(&arenaBase, &arenaBytes);
+        if (arenaBase == 0 || arenaBytes < 2 * AmmRangeBytes) throw std::runtime_error("AMM: the guest address space arena cannot hold the virtual address range");
+        void* address = reinterpret_cast<void*>(arenaBase + arenaBytes - 2 * AmmRangeBytes);
+        if (DoReserveVirtual(&address, 2 * AmmRangeBytes, GuestMapFixed | GuestMapNoOverwrite, 0) != 0) throw std::runtime_error("AMM: cannot reserve the virtual address range");
         state.base = reinterpret_cast<std::uintptr_t>(address);
     }
     return state.base;
