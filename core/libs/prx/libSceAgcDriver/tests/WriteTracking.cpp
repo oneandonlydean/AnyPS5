@@ -301,6 +301,33 @@ void CheckCollectBoundaries() {
 }
 }
 
+void CheckImportWindow() {
+    void* memory = AllocateWatched(3 * Block);
+    const auto base = reinterpret_cast<std::uint64_t>(memory);
+    auto* bytes = static_cast<volatile std::uint8_t*>(memory);
+    std::memset(memory, 0x11, 3 * Block);
+    const auto synced = CollectWritesUncached(base, 3 * Block);
+    Require(synced != 0, "the import window block is not collected");
+    Require(ImportWatched(base, 3 * Block, [&] {
+        bytes[0x100] = 0x11;
+        bytes[Block + 0x2000] = 0x22;
+        return true;
+    }), "the import window import failed");
+    Require(Watched(base, 3 * Block), "an import window left its range unwatched");
+    const std::array<std::uint64_t, 3> generations{synced, synced, synced};
+    std::array<std::uint8_t, 3> changed{};
+    std::array<std::uint8_t, 3> cpu{};
+    Require(ChangedBlocks(base, 3 * Block, generations, changed, cpu), "the import window block is not tracked");
+    Require(changed[0] == BlockUnchanged && UnchangedSince(base, Block, synced), "a page an import window resolved without changing its bytes reads as written");
+    Require(changed[1] == BlockWritten && WrittenSince(base + Block, Block, synced) && cpu[1] == 1, "a store of new bytes within an import window was missed");
+    Require(changed[2] == BlockUnchanged && cpu[2] == 0, "a block the import window did not touch reads as written");
+    Require(cpu[0] == 1, "a page an import window resolved no longer counts as possibly touched by the CPU");
+    const auto after = CollectWritesUncached(base, 3 * Block);
+    bytes[0x100] = 0x33;
+    static_cast<void>(CollectWritesUncached(base, 3 * Block));
+    Require(!UnchangedSince(base, Block, after), "a store after the import window was missed");
+}
+
 int main() {
     try {
         if (!WriteWatched()) {
@@ -315,6 +342,7 @@ int main() {
 #endif
         CheckVersionRanges();
         CheckCollectBoundaries();
+        CheckImportWindow();
     } catch (const std::exception& error) {
         std::cerr << "write tracking test failed: " << error.what() << "\n";
         return 1;
