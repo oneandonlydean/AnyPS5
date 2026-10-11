@@ -166,8 +166,8 @@ std::array<std::uint32_t, 4> SamplerDescriptor() {
     return {0u, 0xfffu << 12u, 1u << 26u, 0u};
 }
 
-std::array<std::uint32_t, 4> BilinearSamplerDescriptor() {
-    return {0u, 0xfffu << 12u, (1u << 20u) | (1u << 22u) | (1u << 26u), 0u};
+std::array<std::uint32_t, 4> BilinearClampSamplerDescriptor() {
+    return {2u << 3u, 0xfffu << 12u, (1u << 20u) | (1u << 22u) | (1u << 26u), 0u};
 }
 
 void Run(AgcDriver::VulkanDevice& device, std::span<const std::uint32_t> code, const std::array<std::uint32_t, 8>& texture, const std::array<std::uint32_t, 4>& sampler = SamplerDescriptor()) {
@@ -229,20 +229,20 @@ void CheckNarrow(AgcDriver::VulkanDevice& device) {
     }
 }
 
-void CheckNarrowBilinearWrap(AgcDriver::VulkanDevice& device) {
+void CheckNarrowBilinearClamp(AgcDriver::VulkanDevice& device) {
     FillInput();
     for (std::uint32_t tid = 0; tid < Threads; ++tid) {
         const auto sample = SampleOf(tid);
         Buffer[tid * Words + PlainInput] = Bits((static_cast<float>(sample.x) + 0.5f) / static_cast<float>(Size));
         Buffer[tid * Words + PlainInput + 2u] = Bits(0.0f);
     }
-    Run(device, NarrowCode, TextureDescriptor(Texels.data()), BilinearSamplerDescriptor());
+    Run(device, NarrowCode, TextureDescriptor(Texels.data()), BilinearClampSamplerDescriptor());
     for (std::uint32_t tid = 0; tid < Threads; ++tid) {
         const auto sample = SampleOf(tid);
-        const std::array<float, 3> expected{0.0f, static_cast<float>(sample.x), static_cast<float>(Size - 1u) / 2.0f};
+        const std::array<float, 3> expected{0.0f, static_cast<float>(sample.x), 0.0f};
         for (std::uint32_t component = 0; component < 3u; ++component) {
             const float value = std::bit_cast<float>(Buffer[tid * Words + PlainResult + 4u + component]) * 255.0f;
-            Require(std::fabs(value - expected[component]) < 0.25f, "image_sample_l 1d on a 2D texture, bilinear wrap: thread " + std::to_string(tid) + " component " + std::to_string(component) + " is " + std::to_string(value) + ", expected " + std::to_string(expected[component]));
+            Require(std::fabs(value - expected[component]) < 0.25f, "image_sample_l 1d on a 2D texture, bilinear clamp: thread " + std::to_string(tid) + " component " + std::to_string(component) + " is " + std::to_string(value) + ", expected " + std::to_string(expected[component]));
         }
     }
 }
@@ -261,7 +261,7 @@ int main() {
         Run(*device, VolumeCode, VolumeDescriptor());
         CheckVolume();
         CheckNarrow(*device);
-        CheckNarrowBilinearWrap(*device);
+        CheckNarrowBilinearClamp(*device);
         std::puts("image address dimension tests passed");
         return 0;
     } catch (const std::exception& error) {

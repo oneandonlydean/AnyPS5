@@ -35,6 +35,8 @@ struct procmap_query {
 };
 static_assert(sizeof(procmap_query) == 104);
 enum : std::uint64_t {
+    PROCMAP_QUERY_VMA_READABLE = 0x01,
+    PROCMAP_QUERY_VMA_WRITABLE = 0x02,
     PROCMAP_QUERY_COVERING_OR_NEXT_VMA = 0x10,
 };
 #define PROCMAP_QUERY _IOWR('f', 17, struct procmap_query)

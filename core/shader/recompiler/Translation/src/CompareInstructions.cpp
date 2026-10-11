@@ -40,6 +40,16 @@ IrOpcode mirroredFloatCompare(IrOpcode opcode) {
     }
 }
 
+bool unorderedInfinityCompareIsTrue(IrOpcode opcode, bool constantIsLhs, std::uint32_t constant) {
+    if (constant == 0x7f800000u) {
+        return constantIsLhs ? opcode == IrOpcode::FPUnordGreaterThanEqual32 : opcode == IrOpcode::FPUnordLessThanEqual32;
+    }
+    if (constant == 0xff800000u) {
+        return constantIsLhs ? opcode == IrOpcode::FPUnordLessThanEqual32 : opcode == IrOpcode::FPUnordGreaterThanEqual32;
+    }
+    return false;
+}
+
 }
 
 void TranslateCompareInstruction(IrBuilder& builder, const RdnaInstruction& instruction) {
@@ -90,6 +100,14 @@ void TranslationContext::emitFloatCompare(const RdnaInstruction& inst, IrOpcode 
         if (swap) std::swap(lhsBits, rhsBits);
         const auto lhsConstant = constantBits(*lhsBits);
         const auto rhsConstant = constantBits(*rhsBits);
+        if (lhsConstant.has_value() && !rhsConstant.has_value() && unorderedInfinityCompareIsTrue(opcode, true, *lhsConstant)) {
+            emitCompareConstant(inst, true, false, cmpx);
+            return;
+        }
+        if (!lhsConstant.has_value() && rhsConstant.has_value() && unorderedInfinityCompareIsTrue(opcode, false, *rhsConstant)) {
+            emitCompareConstant(inst, true, false, cmpx);
+            return;
+        }
         if ((f32DenormalFlush & 1u) != 0u && lhsConstant.has_value() != rhsConstant.has_value()) {
             const IrOpcode oriented = lhsConstant.has_value() ? mirroredFloatCompare(opcode) : opcode;
             emitCompareResult(inst, floatCompareWithConstant(oriented, IrU32(lhsConstant.has_value() ? *rhsBits : *lhsBits), lhsConstant.has_value() ? *lhsConstant : *rhsConstant), false, cmpx);

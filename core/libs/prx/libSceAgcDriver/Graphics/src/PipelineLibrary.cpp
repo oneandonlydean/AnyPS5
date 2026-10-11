@@ -138,7 +138,8 @@ VkPipeline LinkPipelineFromLibraries(const Context& context, const VkGraphicsPip
     const std::array<const Key*, 4> contextKeys{&none, &keys.layout, &keys.layout, &keys.renderPass};
     const VkPipelineRenderingCreateInfoKHR shaderRendering{VK_STRUCTURE_TYPE_PIPELINE_RENDERING_CREATE_INFO_KHR};
     VkPipelineDepthStencilStateCreateInfo dynamicDepth{VK_STRUCTURE_TYPE_PIPELINE_DEPTH_STENCIL_STATE_CREATE_INFO};
-    static const bool optimize = std::getenv("APS5_NO_PIPELINE_LTO") == nullptr;
+    static const bool backgroundLinking = std::getenv("APS5_NO_PIPELINE_LTO") == nullptr;
+    const bool optimize = backgroundLinking && context.pipelineLinkTimeOptimization;
     std::vector<VkPipeline> libraries;
     for (std::size_t part = 0; part < flags.size(); ++part) {
         if (part == 0 && mesh) continue;

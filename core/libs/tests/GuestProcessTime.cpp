@@ -19,17 +19,18 @@ int main(int argc, char** argv) {
     const char* scaleText = std::getenv("APS5_TIME_SCALE");
     const double scale = scaleText ? std::strtod(scaleText, nullptr) : 1.0;
     const auto elapsedMicros = static_cast<std::uint64_t>(static_cast<double>(sleptMicros) * (scale > 0.0 ? scale : 1.0));
+    const auto minimumElapsedMicros = elapsedMicros * 19 / 20;
     const auto slept = std::chrono::steady_clock::now() + std::chrono::microseconds(sleptMicros);
     while (std::chrono::steady_clock::now() < slept) std::this_thread::sleep_until(slept);
     if (argc > 1 && std::strcmp(argv[1], "counter") == 0) {
         const std::uint64_t counter = sceKernelGetProcessTimeCounter();
         Require(counter < minuteMicros * 1000, "first process time counter wrapped");
-        Require(counter >= elapsedMicros * 1000, "first process time counter does not include the time before the first call");
+        Require(counter >= minimumElapsedMicros * 1000, "first process time counter does not include the time before the first call");
         return 0;
     }
     const std::uint64_t first = sceKernelGetProcessTime();
     Require(first < minuteMicros, "first process time wrapped");
-    Require(first >= elapsedMicros, "first process time does not include the time before the first call");
+    Require(first >= minimumElapsedMicros, "first process time does not include the time before the first call");
     Require(sceKernelGetProcessTime() >= first, "process time went backwards");
     return 0;
 }

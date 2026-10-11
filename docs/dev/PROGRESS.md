@@ -18,6 +18,8 @@ Comparisons identify functions by library and name. When a head group becomes a 
 
 Real removals and transitions back to stubs remain visible. Percentages retain the original snapshot totals, so eliminating duplicate accounting can change a percentage without changing available functionality. Older JSON snapshots without `shared_sources` are accepted.
 
+Implemented definitions are also classified as behaviourally empty when their body holds only `(void)name;` discards and at most one constant return, bare `return;` or `throw`, including a return of a local `static` wrapper that is itself behaviourally empty; wrapper calls whose arguments contain calls do not qualify. Comparisons list newly implemented behaviourally empty functions without changing any count. Older JSON snapshots without `inert_names` are accepted.
+
 ## Verification
 
 ```sh

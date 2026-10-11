@@ -230,6 +230,27 @@ void ShaderPreparationTransaction::Commit() {
     committed = true;
 }
 
+bool FusedHullHeader(const ShaderSnapshot& snapshot, Shader used, const Shader& registered) {
+    if (used.type != 3u || registered.type != 7u) return false;
+    const auto* bound = used.sh_registers;
+    used.type = registered.type;
+    used.sh_registers = registered.sh_registers;
+    if (std::memcmp(&used, &registered, offsetof(Shader, num_sh_registers) + sizeof(Shader::num_sh_registers)) != 0) return false;
+    const auto address = reinterpret_cast<std::uintptr_t>(registered.sh_registers);
+    const std::size_t bytes = registered.num_sh_registers * sizeof(ShaderRegister);
+    if (bytes == 0 || bound == nullptr || address < snapshot.headerAddress || address - snapshot.headerAddress > snapshot.header.size() || snapshot.header.size() - (address - snapshot.headerAddress) < bytes) return false;
+    GuestMemory::CheckRange(bound, bytes, alignof(ShaderRegister));
+    for (std::size_t index = 0; index < registered.num_sh_registers; ++index) {
+        ShaderRegister expected;
+        std::memcpy(&expected, snapshot.header.data() + (address - snapshot.headerAddress) + index * sizeof(ShaderRegister), sizeof(ShaderRegister));
+        const auto reg = bound[index];
+        if (reg.offset != expected.offset) return false;
+        const bool fused = reg.offset == 0x100u || reg.offset == 0x10au || reg.offset == 0x10bu || reg.offset == 0x148u || reg.offset == 0x149u;
+        if (!fused && reg.value != expected.value) return false;
+    }
+    return true;
+}
+
 bool SameHeader(const ShaderSnapshot& snapshot, const Shader* shader) {
     if (snapshot.headerAddress == reinterpret_cast<std::uintptr_t>(shader)) return true;
     if (snapshot.header.size() < sizeof(Shader)) return false;
@@ -239,7 +260,7 @@ bool SameHeader(const ShaderSnapshot& snapshot, const Shader* shader) {
     std::memcpy(&used, static_cast<const void*>(shader), sizeof(Shader));
     std::memcpy(&registered, snapshot.header.data(), sizeof(Shader));
     used.user_data = registered.user_data;
-    return std::memcmp(&used, &registered, offsetof(Shader, num_sh_registers) + sizeof(Shader::num_sh_registers)) == 0;
+    return std::memcmp(&used, &registered, offsetof(Shader, num_sh_registers) + sizeof(Shader::num_sh_registers)) == 0 || FusedHullHeader(snapshot, used, registered);
 }
 
 std::shared_ptr<const ShaderSnapshot> RegisteredHeader(const ShaderRegistry& registry, const Shader* shader) {
@@ -836,6 +857,11 @@ void Driver::ResolveGraphicsStagesAbi(std::span<const Shader* const> stages, std
             registered.shader.ForEach([&](std::uint32_t offset, std::uint32_t value) { state.shader.insert_or_assign(offset, value); });
             registered.context.ForEach([&](std::uint32_t offset, std::uint32_t value) { state.context.insert_or_assign(offset, value); });
             registered.userConfig.ForEach([&](std::uint32_t offset, std::uint32_t value) { state.userConfig.insert_or_assign(offset, value); });
+            if (shader->type != snapshot.type) {
+                const std::size_t count = shader->num_sh_registers;
+                GuestMemory::CheckRange(shader->sh_registers, count * sizeof(ShaderRegister), alignof(ShaderRegister));
+                for (std::size_t index = 0; index < count; ++index) state.shader.insert_or_assign(shader->sh_registers[index].offset, shader->sh_registers[index].value);
+            }
         }
     }
     for (const auto reg : context) state.context.insert_or_assign(reg.offset, reg.value);

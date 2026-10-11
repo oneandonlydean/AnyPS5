@@ -40,9 +40,9 @@ int APS5_VABI sceNpTrophy2GetRewardIcon(void) {
     return 0;
 }
 
-int APS5_VABI sceNpTrophy2ShowTrophyList(void) {
-    NotImplemented_nid_no_patch(__func__);
-    return 0;
+int APS5_VABI sceNpTrophy2ShowTrophyList(int context) {
+    (void)context;
+    return SCE_NP_TROPHY2_OK;
 }
 
 }

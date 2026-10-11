@@ -56,6 +56,7 @@ struct GuestArtifact {
     std::filesystem::path Path;
     std::vector<std::uint8_t> Bytes;
     std::vector<Domain::CallRegistryEntry> Imports;
+    std::filesystem::path SourcePath;
 };
 
 class GuestModuleBuilder {

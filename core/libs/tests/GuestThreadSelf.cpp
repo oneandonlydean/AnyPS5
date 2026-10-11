@@ -10,6 +10,7 @@ int APS5_VABI scePthreadDetach(Pthread thread);
 void APS5_VABI scePthreadExit(void* retval);
 Pthread APS5_VABI scePthreadSelf();
 int APS5_VABI scePthreadGetthreadid(void);
+int APS5_VABI pthread_getthreadid_np_nid_postfix(void);
 void APS5_VABI scePthreadTestcancel();
 void APS5_VABI pthread_testcancel_nid_postfix(void);
 int APS5_VABI scePthreadSetcancelstate(int state, int* old_state);
@@ -63,6 +64,7 @@ struct WorkerContext {
     Pthread selfFromWorker = nullptr;
     std::int64_t workerTid = 0;
     int workerThreadId = 0;
+    int workerPosixThreadId = 0;
     bool workerStackReported = false;
     PthreadMutex* mutex = nullptr;
     int unlockResult = 0;
@@ -74,6 +76,7 @@ static void* APS5_VABI Worker(void* arg) {
     context.selfFromWorker = scePthreadSelf();
     context.workerTid = ThreadIdField(context.selfFromWorker);
     context.workerThreadId = scePthreadGetthreadid();
+    context.workerPosixThreadId = pthread_getthreadid_np_nid_postfix();
     int local = 0;
     context.workerStackReported = StackContains(context.selfFromWorker, &local);
     context.unlockResult = scePthreadMutexUnlock(context.mutex);
@@ -95,6 +98,7 @@ int main() {
     const std::int64_t mainTid = ThreadIdField(mainSelf);
     Require(mainTid != 0);
     Require(scePthreadGetthreadid() == static_cast<int>(mainTid));
+    Require(pthread_getthreadid_np_nid_postfix() == static_cast<int>(mainTid));
     int local = 0;
     Require(StackContains(mainSelf, &local));
     Require(scePthreadJoin(mainSelf, nullptr) == SCE_KERNEL_ERROR_EINVAL);
@@ -123,6 +127,7 @@ int main() {
     Require(context.selfFromWorker != mainSelf);
     Require(context.workerTid != 0 && context.workerTid != mainTid);
     Require(context.workerThreadId == static_cast<int>(context.workerTid));
+    Require(context.workerPosixThreadId == context.workerThreadId && context.workerPosixThreadId != static_cast<int>(mainTid));
     Require(context.unlockResult == SCE_KERNEL_ERROR_EPERM);
     Require(context.workerStackReported);
     Require(context.testcancelReturned);

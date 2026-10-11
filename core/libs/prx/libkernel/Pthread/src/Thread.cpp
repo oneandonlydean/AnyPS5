@@ -186,6 +186,7 @@ struct CpuClockRegistry {
     std::mutex lock;
     std::map<int, PthreadPrivate*> threads;
     int nextThread = 100000;
+    KernelCpumask processAffinity = DEFAULT_THREAD_AFFINITY;
 };
 
 static CpuClockRegistry& CpuClocks() {
@@ -193,9 +194,12 @@ static CpuClockRegistry& CpuClocks() {
     return *registry;
 }
 
-PthreadPrivate::PthreadPrivate() : _finished(false), _retval(nullptr), _detached(false), _adopted(false) {
+PthreadPrivate::PthreadPrivate(const PthreadAttrPrivate* attr) : _finished(false), _retval(nullptr), _detached(false), _adopted(false) {
     auto& registry = CpuClocks();
     std::lock_guard lock(registry.lock);
+    const auto* parent = CurrentGuestState().current;
+    const KernelCpumask inherited = parent ? parent->affinity.load(std::memory_order_relaxed) : registry.processAffinity;
+    affinity.store(attr && attr->_affinityExplicit ? attr->_affinity : inherited, std::memory_order_relaxed);
     if (registry.nextThread > static_cast<int>(CPU_CLOCK_ID_MASK))
         throw std::runtime_error("Guest thread CPU clock identifiers are exhausted");
     cpuClockThread = registry.nextThread++;
@@ -230,6 +234,7 @@ int GuestThreadCpuClockId(const PthreadPrivate* thread) {
 void SetLiveGuestThreadsAffinity(KernelCpumask mask) {
     auto& registry = CpuClocks();
     std::lock_guard lock(registry.lock);
+    registry.processAffinity = mask;
     for (const auto& [id, thread] : registry.threads) {
         if (!thread->_finished.load(std::memory_order_acquire)) thread->affinity.store(mask, std::memory_order_relaxed);
     }
@@ -517,13 +522,12 @@ extern "C" {
 int APS5_VABI scePthreadCreate(Pthread* thread, const PthreadAttr* attr, PthreadEntry entry, void* arg, const char* name) {
     if (!thread || !entry) throw std::runtime_error("scePthreadCreate: null arg");
     if (attr && !*attr) throw std::runtime_error("scePthreadCreate: null attributes");
-    auto p = std::make_unique<PthreadPrivate>();
+    auto p = std::make_unique<PthreadPrivate>(attr ? *attr : nullptr);
     bool detached = false;
     if (attr && *attr) detached = ((*attr)->_detachstate == DETACH_DETACHED);
     p->_detached = detached;
     p->stackSize = attr ? (*attr)->_stacksize : DEFAULT_STACK_SIZE;
     if (attr) {
-        p->affinity.store((*attr)->_affinity, std::memory_order_relaxed);
         p->priority.store((*attr)->_schedpriority, std::memory_order_relaxed);
     }
     if (name) p->name = name;

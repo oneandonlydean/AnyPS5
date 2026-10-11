@@ -249,6 +249,14 @@ int APS5_VABI pthread_sigmask_nid_postfix(int how, const GuestSignalSet* set, Gu
     if (set != nullptr && (how < 1 || how > 3)) return 22;
     return _sigprocmask_nid_postfix(how, set, previousSet);
 }
+
+int APS5_VABI sigtimedwait_nid_postfix(const GuestSignalSet* set, void* info, const void* timeout) {
+    (void)set;
+    (void)info;
+    (void)timeout;
+    NotImplemented_nid_no_patch("sigtimedwait: waiting for a pending signal");
+    return -1;
+}
 }
 
 extern "C" {

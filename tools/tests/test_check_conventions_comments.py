@@ -6,7 +6,7 @@ import unittest
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
-from check_conventions import STUB_BODY, Check, function_body
+from check_conventions import STUB_BODY, SYSTEM_DEPENDENCY, Check, function_body
 
 
 class FunctionBodyTests(unittest.TestCase):
@@ -256,6 +256,18 @@ class SpacedPathTests(unittest.TestCase):
             )
             self.assertEqual(result.returncode, 1, result.stdout + result.stderr)
             self.assertIn("core/a b.cpp:1: error: [comment]", result.stdout)
+
+
+class SystemDependencyTests(unittest.TestCase):
+    def test_flags_system_lookups(self):
+        for line in ("find_package( SDL2 REQUIRED)", "FIND_PACKAGE(SDL2)", "find_path(X x.h)", "find_program(P prog)"):
+            with self.subTest(line=line):
+                self.assertIsNotNone(SYSTEM_DEPENDENCY.search(line))
+
+    def test_allows_exempt_lines(self):
+        for line in ("find_package(Python3 COMPONENTS Interpreter)", "find_package( Threads REQUIRED )", "FIND_PACKAGE(Git)", "add_library(x)"):
+            with self.subTest(line=line):
+                self.assertIsNone(SYSTEM_DEPENDENCY.search(line))
 
 
 if __name__ == "__main__":

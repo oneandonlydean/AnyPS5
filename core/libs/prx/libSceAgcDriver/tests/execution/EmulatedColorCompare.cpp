@@ -24,6 +24,9 @@ using ShaderRecompiler::ShaderStage;
 constexpr std::uint32_t Threads = 32;
 constexpr std::uint32_t Side = 2;
 constexpr std::uint32_t Format8888UNorm = 56;
+constexpr std::uint32_t Format9995Float = 132;
+constexpr std::uint32_t Format8Srgb = 128;
+constexpr std::uint32_t Format8_8Srgb = 129;
 constexpr std::uint32_t Format8888Srgb = 130;
 constexpr std::uint32_t Format8888UInt = 60;
 constexpr std::uint32_t Format32Float = 22;
@@ -87,6 +90,7 @@ struct Sampler {
     std::uint32_t reduction = 0;
     std::uint32_t lodBias = 0;
     bool disableCubeWrap = false;
+    std::uint32_t function = LessEqual;
 };
 
 std::array<std::uint32_t, 4> BufferDescriptor(const void* data, std::uint32_t bytes) {
@@ -107,7 +111,7 @@ std::array<std::uint32_t, 8> TextureDescriptor(std::uint32_t format, bool cube =
 
 std::array<std::uint32_t, 4> SamplerDescriptor(const Sampler& sampler) {
     return {
-        sampler.clamp | (sampler.clamp << 3u) | (ClampEdge << 6u) | (LessEqual << 12u) | (sampler.reduction << 29u) | (sampler.disableCubeWrap ? (1u << 28u) : 0u),
+        sampler.clamp | (sampler.clamp << 3u) | (ClampEdge << 6u) | (sampler.function << 12u) | (sampler.reduction << 29u) | (sampler.disableCubeWrap ? (1u << 28u) : 0u),
         0u,
         sampler.lodBias | (sampler.filter << 20u) | (sampler.filter << 22u),
         sampler.border << 30u,
@@ -302,6 +306,17 @@ bool BindsDepthCompare(const ShaderRecompiler::RecompileResult& result) {
     });
 }
 
+void RunSrgbZero(AgcDriver::VulkanDevice& device, std::uint32_t format, const Sampler& sampler, const char* name) {
+    Output.fill(-1.0f);
+    const auto result = Compile(device, format, sampler);
+    Require(!BindsDepthCompare(result), std::string(name) + " kept a depth-compare binding");
+    device.Dispatch(result, 1, 1, 1, {}, reinterpret_cast<std::uintptr_t>(Code.data()));
+    device.WaitIdle();
+    for (std::uint32_t tid = 0; tid < Threads; ++tid) {
+        Require(Output[tid] == 0.0f, std::string(name) + ": thread " + std::to_string(tid) + " compared to " + std::to_string(Output[tid]) + ", expected 0");
+    }
+}
+
 void Reject(AgcDriver::VulkanDevice& device, std::uint32_t format, const Sampler& sampler, std::string_view reason, std::span<const std::uint32_t> code = Code, bool nativeSampleOffsets = true, bool cube = false) {
     try {
         static_cast<void>(Compile(device, format, sampler, code, false, nativeSampleOffsets, cube));
@@ -323,12 +338,22 @@ int main() {
         RunCube(*device, {ClampEdge, FilterPoint}, "point cube, clamp to edge");
         Reject(*device, Format8888UNorm, {ClampEdge, FilterBilinear}, "bilinear cube comparison requires DISABLE_CUBE_WRAP", CubeCode, true, true);
         RunCube(*device, {ClampEdge, FilterBilinear, BorderBlack, 0u, 0u, true}, "bilinear cube with DISABLE_CUBE_WRAP");
-        Reject(*device, Format8888Srgb, {ClampEdge, FilterPoint}, "implemented only for float, unorm and snorm formats");
+        Reject(*device, Format9995Float, {ClampEdge, FilterPoint}, "implemented only for float, unorm and snorm formats");
         Reject(*device, Format8888UNorm, {ClampEdge, FilterAnisoBilinear}, "point or bilinear");
         Reject(*device, Format8888UNorm, {ClampEdge, FilterAnisoPoint}, "point or bilinear");
         FillTexels();
         Require(BindsDepthCompare(Compile(*device, Format32Float, {ClampEdge, FilterBilinear})), "an R32 float texture left the native comparison path");
         Require(!BindsDepthCompare(Compile(*device, Format8888UNorm, {ClampEdge, FilterBilinear})), "a color texture kept a depth-compare binding");
+        for (std::uint32_t function = 0; function < 8u; ++function) {
+            const auto point = "point 8_8_8_8 srgb function " + std::to_string(function);
+            const auto bilinear = "bilinear 8_8_8_8 srgb function " + std::to_string(function);
+            RunSrgbZero(*device, Format8888Srgb, {ClampEdge, FilterPoint, BorderBlack, 0u, 0u, false, function}, point.c_str());
+            RunSrgbZero(*device, Format8888Srgb, {ClampEdge, FilterBilinear, BorderBlack, 0u, 0u, false, function}, bilinear.c_str());
+        }
+        RunSrgbZero(*device, Format8Srgb, {ClampEdge, FilterPoint}, "point 8 srgb");
+        RunSrgbZero(*device, Format8Srgb, {ClampEdge, FilterBilinear}, "bilinear 8 srgb");
+        RunSrgbZero(*device, Format8_8Srgb, {ClampEdge, FilterPoint}, "point 8_8 srgb");
+        RunSrgbZero(*device, Format8_8Srgb, {ClampEdge, FilterBilinear}, "bilinear 8_8 srgb");
         Run(*device, {ClampEdge, FilterPoint}, "point, clamp to edge");
         Run(*device, {ClampWrap, FilterPoint}, "point, wrap");
         Run(*device, {ClampWrap, FilterPoint}, "point, wrap with negative offsets", true);
