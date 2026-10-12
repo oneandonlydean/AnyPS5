@@ -4326,9 +4326,6 @@ void metadataPassTests(const Device& device, Recorder& recorder) {
     const auto keyed = StorageTexture::FindPending(address, surfaceBytes);
     Require(keyed != nullptr && keyed != unkeyed && keyed->Descriptor().dccAddress == color.dccAddress, "a pass over a resident image under other keys did not remake it under the target's keys");
     Require(keysUncompressed() && memoryHolds({0xff, 0xff, 0xff, 0xff}), "a pass over a remade resident image did not store the 1111 value");
-    // A register clear over keys that a noted key store still writes (materializeRegisterClear with
-    // the keys known): the image clear is recorded behind the store without waiting for it, and the
-    // uncompressed store recorded after both leaves the clear word in memory and uncompressed keys.
     {
         const auto* import = HostImportFor(base, address, bytes);
         Require(import != nullptr, "the metadata pass block lost its import");
@@ -5464,6 +5461,16 @@ int main(int argc, char** argv) {
                 return 77;
             }
             unitShadowTests(device, recorder);
+            return 0;
+        }
+        if (argc == 2 && std::string_view(argv[1]) == "--pending-dcc-keys-only") {
+            if (device.GetContext().hostImportAlignment == 0) {
+                std::cout << "skipped, host imports are unavailable\n";
+                return 77;
+            }
+            metadataPassTests(device, recorder);
+            pendingKeyStoreTests(device, recorder);
+            std::cout << "Color metadata pass and pending DCC key store tests passed\n";
             return 0;
         }
         if (argc == 2 && std::string_view(argv[1]) == "--cmask-only") {

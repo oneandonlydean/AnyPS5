@@ -3497,7 +3497,7 @@ bool StorageTexture::FillClear(std::span<const std::uint32_t, 4> pattern, std::u
     if (descriptor.dccAddress != 0) {
         // Under a clear code reads see that value whatever the texels hold, and keys a recorded
         // kernel still writes are not in the bytes yet: only keys that read as uncompressed now let
-        // the image stand for the texels (unless the caller proved what those keys will be).
+        // the image stand for the texels.
         if (!pendingKeysKnown && Recorder::SnapshotWriteOverlaps(descriptor.dccAddress, static_cast<std::size_t>(guestBytes / 256))) {
             refusal = "keys pending";
             return false;
