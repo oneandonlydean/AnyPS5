@@ -252,9 +252,11 @@ public:
     // the image dirty like a shader write: the guest bytes follow through the deferred write-back,
     // the range is stamped written so every other reader of it (other images over the memory,
     // captures, snapshots) takes the bytes through the flush hook, and this image alone is current.
-    // False, naming why in `refusal`, when the fill must be stored as before.
+    // False, naming why in `refusal`, when the fill must be stored as before. `pendingKeysKnown`: the
+    // caller proved what the recorded work still writing the keys leaves (KnownPendingDccKeys), and
+    // that it lets the image stand for the texels, so a pending key writer alone does not refuse.
     static constexpr std::uint32_t WholeImage = ~0u;
-    bool FillClear(std::span<const std::uint32_t, 4> pattern, std::uint32_t layer, const char*& refusal);
+    bool FillClear(std::span<const std::uint32_t, 4> pattern, std::uint32_t layer, const char*& refusal, bool pendingKeysKnown = false);
     // The cached, live image whose surface is exactly [address, address + bytes), if any (the newest
     // of several: see ClassifyFill).
     static std::shared_ptr<StorageTexture> FindLive(std::uint64_t address, std::uint64_t bytes);

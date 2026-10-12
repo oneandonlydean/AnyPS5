@@ -468,6 +468,14 @@ DccKeys CurrentDccKeys(std::uint64_t metaAddress, std::uint64_t surfaceBytes) {
     return currentDccKeys(metaAddress, surfaceBytes, memoized);
 }
 
+std::optional<DccKeys> KnownPendingDccKeys(std::uint64_t metaAddress, std::uint64_t surfaceBytes) {
+    const auto count = static_cast<std::size_t>(surfaceBytes / KeyBytes);
+    if (metaAddress == 0 || count == 0 || !GuestMemory::GpuMutex().HeldByThisThread()) return std::nullopt;
+    auto* recorder = Recorder::Active();
+    if (recorder == nullptr || !recorder->PendingWriteOverlaps(metaAddress, count)) return std::nullopt;
+    return PendingStoreKeys(*recorder, metaAddress, count);
+}
+
 bool IsDccClear(DccKeys keys) {
     return keys == DccKeys::Clear0000 || keys == DccKeys::Clear0001 || keys == DccKeys::Clear1110 || keys == DccKeys::Clear1111 || keys == DccKeys::ClearRegister;
 }

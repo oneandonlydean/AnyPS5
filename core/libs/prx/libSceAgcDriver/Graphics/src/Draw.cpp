@@ -85,12 +85,12 @@ std::array<std::byte, 16> clearTexel(const ColorTarget& color, DccKeys keys) {
     return texel;
 }
 
-bool clearToTexel(StorageTexture& image, const std::array<std::byte, 16>& texel, std::uint32_t elementBytes, const char*& refusal) {
+bool clearToTexel(StorageTexture& image, const std::array<std::byte, 16>& texel, std::uint32_t elementBytes, const char*& refusal, bool pendingKeysKnown = false) {
     std::array<std::byte, 16> repeated{};
     for (std::size_t offset = 0; offset + elementBytes <= repeated.size(); offset += elementBytes) std::memcpy(repeated.data() + offset, texel.data(), elementBytes);
     std::array<std::uint32_t, 4> pattern{};
     std::memcpy(pattern.data(), repeated.data(), repeated.size());
-    return image.FillClear(std::span<const std::uint32_t, 4>(pattern), StorageTexture::WholeImage, refusal);
+    return image.FillClear(std::span<const std::uint32_t, 4>(pattern), StorageTexture::WholeImage, refusal, pendingKeysKnown);
 }
 
 void storeClearTexels(const Context& context, const ColorTarget& color, const std::array<std::byte, 16>& texel) {
@@ -110,7 +110,18 @@ void materializeRegisterClear(const Context& context, const ColorTarget& color, 
     if (ProvedCurrentDccKeys(color.dccAddress, color.bytes, resident.TargetKeyProof()) != DccKeys::ClearRegister) return;
     const auto texel = clearTexel(color, DccKeys::ClearRegister);
     const char* refusal = nullptr;
-    bool cleared = clearToTexel(resident, texel, color.elementBytes, refusal);
+    // Keys still written by recorded work make FillClear refuse, and the fallback below waits for that
+    // work. The wait buys nothing when the newest recorded writer of the keys is a key store the
+    // driver noted with the register clear code (the memo ProvedCurrentDccKeys just answered from):
+    // the keys the GPU will hold are then known, and they are the code this clear stands for. The
+    // image clear and the "uncompressed" key store that follows are recorded into the same queue
+    // behind that store, so they land after it, the order the wait gave. Any other pending writer
+    // (a title kernel, a partial or wider write, a shadowed range) leaves the keys unknown and keeps
+    // the wait, and so do keys in memory (still from before the store) that FillClear's own scan
+    // refuses. APS5_NO_REGISTER_CLEAR_KNOWN_KEYS=1 always waits.
+    static const bool knownKeys = std::getenv("APS5_NO_REGISTER_CLEAR_KNOWN_KEYS") == nullptr;
+    const bool pendingKeysKnown = knownKeys && KnownPendingDccKeys(color.dccAddress, color.bytes) == DccKeys::ClearRegister;
+    bool cleared = clearToTexel(resident, texel, color.elementBytes, refusal, pendingKeysKnown);
     static const bool syncKeys = std::getenv("APS5_NO_REGISTER_CLEAR_SYNC") == nullptr;
     const auto keyBytes = static_cast<std::size_t>(color.bytes / 256);
     if (!cleared && syncKeys && keyBytes != 0) {
