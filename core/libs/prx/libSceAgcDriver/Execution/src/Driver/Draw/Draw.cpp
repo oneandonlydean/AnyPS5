@@ -385,8 +385,6 @@ DrawVerdict Driver::draw(QueueState& queue, std::span<const std::uint32_t> packe
     }
     lockForDraw();
     noteDrawWriters(stages, submission.queue);
-    // APS5_PROFILE_GPU_DRAWS: the code address behind each variant id the per-draw [gputime] ranges
-    // are keyed by, printed once per variant.
     if (static const bool nameVariants = std::getenv("APS5_PROFILE_GPU_DRAWS") != nullptr; nameVariants && stages.size() == programs.size()) {
         static std::mutex namedMutex;
         static std::set<std::uint64_t> named;
