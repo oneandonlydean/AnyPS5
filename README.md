@@ -1,25 +1,34 @@
 # AnyPS5: Astro Bot (PPSA21564) fork
 
-This fork's `main` mirrors `astrobot`, my integration branch for running Astro Bot (PPSA21564) on Linux with AnyPS5: upstream `main` plus fixes that are still on their way upstream or specific to this setup. Pull requests to upstream are always cut from upstream `main`.
+This fork is where I work on running Astro Bot (PPSA21564) on Linux with AnyPS5.
+
+## Where the work is now (12 October 2026)
+
+- **`astrobot` is frozen as a reference build.** It is upstream `main` from early October plus fixes that were specific to this setup or still on their way upstream. This fork's `main` mirrors it. The "reference build" column below describes it.
+- **Development has moved to upstream `main`.** The aim is for the game to run there with everything going in as ordinary pull requests, one topic at a time.
+- **On upstream `main` today** the game reaches the title screen, the NEW GAME menu, the first level and Space Station with four open pull requests applied (#425, #454, #2490, #2491). It runs at roughly half the reference build's frame rate there; the last measurements are in the "upstream `main`" column below.
+- **What is left on `main`:** most of the gap is the queue worker doing all the per-draw preparation on one thread, where the reference build does it ahead on a second one. Next are #290 (host import windows) with #4221, and the depth surface work in #425 and #454.
+
+Pull requests to upstream are always cut from upstream `main`.
 
 ## Astro Bot status
 
-Linux, measured on my machine (8 October 2026: CachyOS, i9-14900KF, RTX 4090). Frame rates are the game's own, with no frame generation.
+Linux, measured on my machine (CachyOS, i9-14900KF, RTX 4090). Frame rates are the game's own, with no frame generation. The reference build is `astrobot`, measured on 8 October 2026. The upstream `main` column is `main` of 11 October with #425, #454, #2490, #2491 and the other open pull requests named above, measured on 12 October while the machine was also running builds and tests, so those numbers are on the low side.
 
-| Part | State | Frame rate |
-| --- | --- | --- |
-| Boot, PlayStation Studios video, logos | Renders | video at about 57 fps |
-| Title screen | Renders, including the copyright line (console fonts or the Noto substitutes) | about 60 fps |
-| NEW GAME menu | Renders | about 60 fps |
-| Intro cinematic and space scene | Renders | about 50 fps, robot crowd about 23 fps |
-| Tutorial (Crash Site hub) | Playable with a DualSense | about 16 fps on foot |
-| World map, controller ship flight | Renders | about 32 fps |
-| Sky Garden | Reached and flown | about 4.4 fps |
-| Snowy Canyon | Reached | about 5.5 fps |
-| Space Station | Reached (ship fly-in) | about 7.4 fps |
-| Dirty Bath | Reached, hot spring water renders | about 4.2 fps |
-| Other levels | 24 levels booted with `-lvl`: all load, no GPU hangs | 3 to 53 fps (see below) |
-| Windows | In game up to the first Gorilla Nebula level ([report](https://github.com/boykopovar/AnyPS5/discussions/357)) | |
+| Part | State | Reference build (`astrobot`) | Upstream `main` (12 October) |
+| --- | --- | --- | --- |
+| Boot, PlayStation Studios video, logos | Renders | video at about 57 fps | not measured |
+| Title screen | Renders, including the copyright line (console fonts or the Noto substitutes) | about 60 fps | about 25 fps |
+| NEW GAME menu | Renders | about 60 fps | about 23 fps |
+| Intro cinematic and space scene | Renders | about 50 fps, robot crowd about 23 fps | about 28 fps, robot crowd about 13 fps |
+| Tutorial (Crash Site hub) | Playable with a DualSense | about 16 fps on foot | not measured |
+| World map, controller ship flight | Renders | about 32 fps | not measured |
+| Sky Garden | Reached and flown | about 4.4 fps | not measured |
+| Snowy Canyon | Reached | about 5.5 fps | not measured |
+| Space Station | Reached (ship fly-in) | about 7.4 fps | about 3 fps |
+| Dirty Bath | Reached, hot spring water renders | about 4.2 fps | not measured |
+| Other levels | 24 levels booted with `-lvl`: all load, no GPU hangs | 3 to 53 fps (see below) | not measured |
+| Windows | In game up to the first Gorilla Nebula level ([report](https://github.com/boykopovar/AnyPS5/discussions/357)) | | |
 
 Level sweep (7 October, 150 s per level from a `-lvl` start, mostly the arrival fly-in and first platform): main levels run at about 3 to 14 fps (Pirate Island about 3, Clock Tower 4, Cymbal Party 4.6, Sky Aztec and Construction 5, Gulliver 8, Penguin Atlantis 8.7, Casino 9.3, Day and Night 14), bosses, heroes and minis at 10 to 40 fps, the hub dioramas at 20 to 53 fps. The two levels that hung the GPU on 4 October (Astro skin diorama, Cymbal Party) run clean now.
 
@@ -32,7 +41,7 @@ New on this branch (7 and 8 October):
 - **Texture cache size:** the sampled-texture cache may now use half of the device budget instead of 3/8, and cached textures are charged the bytes their image actually holds (accounting by ThisIsAkill). Cache evictions on Space Station dropped from about 2000 to a handful per 10 s; frame time went from about 224 to 135 ms (about 4.5 to 7.4 fps, +66%) and Pirate Island from about 306 to 257 ms (+19%). Peak VRAM use is about 2.5 GiB higher; on 8 and 12 GB cards the hard limit already applies, so nothing changes there.
 - **CMASK fast clears:** fast clears on colour targets without DCC are now applied (a GPU pass in stream order). This fixes the stale lavender rectangles and the opaque tan water in Dirty Bath; the hot spring is translucent again (before and after below).
 - **Level sweep:** 24 levels from all six galaxies, the hub dioramas, bosses, heroes and minis load with 0 crashes and 0 GPU hangs. The slowest are Pirate Island, Space Station and Dirty Bath at about 3 to 5 fps.
-- **Next:** the per-draw CPU cost on the queue worker (indirect draws at 50 to 90 us each, the occlusion box-draw sequence), then the iceberg shards.
+- **Next:** see "Where the work is now" above. This branch gets no further changes.
 
 <img src="https://raw.githubusercontent.com/oneandonlydean/AnyPS5/3869aaca7562c8c5ac818544078edc083a9a3552/readme/2026-10-08/title.jpg" width="400" alt="Title screen"> <img src="https://raw.githubusercontent.com/oneandonlydean/AnyPS5/3869aaca7562c8c5ac818544078edc083a9a3552/readme/2026-10-08/menu.jpg" width="400" alt="NEW GAME menu">
 <img src="https://raw.githubusercontent.com/oneandonlydean/AnyPS5/3869aaca7562c8c5ac818544078edc083a9a3552/readme/2026-10-08/intro-space.jpg" width="400" alt="Intro space scene"> <img src="https://raw.githubusercontent.com/oneandonlydean/AnyPS5/3869aaca7562c8c5ac818544078edc083a9a3552/readme/2026-10-08/crowd.jpg" width="400" alt="Robot crowd in the intro">
@@ -70,7 +79,9 @@ Caveats: sublevels such as `enemy_final` start standalone. `diorama_zoo` loads b
 
 ## Upstream contributions
 
-110 pull requests from this work are merged into [boykopovar/AnyPS5](https://github.com/boykopovar/AnyPS5), among them Linux write tracking (#120, #121), the shader disk and pipeline cache (#129), NGG geometry as mesh shaders (#133), resident 10-bit scanout (#278), the Linux argv fix behind `-lvl` (#418), flips that complete after the frame's GPU work (#417), large DMA copies on the GPU in queue order (#439), triangle fan geometry input (#440), occlusion counter dumps on the GPU (#463), cross-queue submission order (#465), exact reciprocals for `--to-intel` (#464) and DualSense output and audio (#179, #180). Open: #626.
+Pull requests from this work merged into [boykopovar/AnyPS5](https://github.com/boykopovar/AnyPS5) include Linux write tracking (#120, #121), the shader disk and pipeline cache (#129), NGG geometry as mesh shaders (#133), resident 10-bit scanout (#278), the Linux argv fix behind `-lvl` (#418), flips that complete after the frame's GPU work (#417), large DMA copies on the GPU in queue order (#439), triangle fan geometry input (#440), occlusion counter dumps on the GPU (#463), cross-queue submission order (#465), exact reciprocals for `--to-intel` (#464) and DualSense output and audio (#179, #180). Recent: host-import spans joined only over whole windows (#3425), a device-loss fix for NVIDIA 610 drivers (#3472) and a render-extent fix for stencil tests without a stencil plane (#3702).
+
+Open: #2490 and #2491 (depth plane copies), #3874 (import window compare), #4221 (in-place index ranges).
 
 ---
 
