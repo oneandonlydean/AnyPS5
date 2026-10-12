@@ -2273,6 +2273,106 @@ void unitShadowTests(const Device& device, Recorder& recorder) {
     Require(words[127 * unit] == 0x66 && words[128 * unit] == 0x77, "the retire did not publish the second slab's units covered by the old registration");
 }
 
+void unitShadowJoinTests(const Device& device, Recorder& recorder) {
+    using namespace AgcDriver::GuestMemory;
+    const auto& context = device.GetContext();
+    if (!UnitShadowEnabled() || context.hostImportAlignment == 0) {
+        std::cout << "unit shadows or host imports unavailable: the join of shadowed imports not tested\n";
+        return;
+    }
+    constexpr std::uint64_t unit = 65536;
+    constexpr std::size_t lowBytes = 9u << 20u;
+    constexpr std::size_t highBytes = 8u << 20u;
+    constexpr std::size_t bytes = lowBytes + highBytes;
+    void* block = AllocateWatched(bytes, 65536);
+    Require(block != nullptr, "unit shadows are on without write watching");
+    struct Release {
+        void* block;
+        ~Release() { ReleaseWatched(block, bytes); }
+    } release{block};
+    std::memset(block, 0x11, bytes);
+    const auto address = reinterpret_cast<std::uint64_t>(block);
+    const auto high = address + lowBytes;
+    SetHostImportWindow(8ull << 20u);
+    struct Window {
+        ~Window() { SetHostImportWindow(0); }
+    } window;
+    {
+        GuestAllocations::Mutation mutation;
+        mutation.Add(block, lowBytes, true, true, true);
+    }
+    struct Unregister {
+        const Context& context;
+        void* block;
+        std::uint64_t address;
+        bool both = false;
+        ~Unregister() {
+            {
+                GuestAllocations::Mutation mutation;
+                mutation.Remove(block);
+                if (both) mutation.Remove(static_cast<std::uint8_t*>(block) + lowBytes);
+            }
+            HostImportFor(context, address, 16);
+        }
+    } unregister{context, block, address};
+    const auto* low = HostImportFor(context, address, lowBytes);
+    if (low == nullptr) {
+        std::cout << "host import of the shadow join test block refused: the join of shadowed imports not tested\n";
+        return;
+    }
+    if (!Watched(address, lowBytes)) {
+        std::cout << "host imports are compared, not watched: the join of shadowed imports not tested\n";
+        return;
+    }
+    Require(low->base == address && low->bytes == lowBytes, "the import does not cover the low range");
+    CollectWritesUncached(address, bytes);
+    const auto* words = static_cast<const std::uint8_t*>(block);
+    const auto copyBuffer = context.Function<PFN_vkCmdCopyBuffer>("vkCmdCopyBuffer");
+    const auto retile = [&](const HostImport& import, const ShadowDestination& destination, std::uint64_t begin, std::uint8_t value) {
+        auto pattern = std::make_shared<Buffer>(context, static_cast<std::size_t>(unit), VK_BUFFER_USAGE_TRANSFER_SRC_BIT);
+        std::memset(pattern->Bytes().data(), value, pattern->Bytes().size());
+        const auto commands = recorder.Commands();
+        recorder.Keep(pattern);
+        recorder.Keep(destination.slab);
+        RecordMemoryBarrier(context, commands, VK_PIPELINE_STAGE_ALL_COMMANDS_BIT, VK_PIPELINE_STAGE_TRANSFER_BIT, VK_ACCESS_HOST_WRITE_BIT | VK_ACCESS_TRANSFER_WRITE_BIT, VK_ACCESS_TRANSFER_READ_BIT | VK_ACCESS_TRANSFER_WRITE_BIT);
+        const VkBufferCopy piece{0, SlabOffset(import, *destination.slab, begin), unit};
+        copyBuffer(commands, pattern->Handle(), destination.buffer, 1, &piece);
+        RecordMemoryBarrier(context, commands, VK_PIPELINE_STAGE_TRANSFER_BIT, VK_PIPELINE_STAGE_ALL_COMMANDS_BIT, VK_ACCESS_TRANSFER_WRITE_BIT, VK_ACCESS_TRANSFER_READ_BIT | VK_ACCESS_TRANSFER_WRITE_BIT);
+        recorder.MarkCovered(VK_ACCESS_TRANSFER_READ_BIT | VK_ACCESS_TRANSFER_WRITE_BIT);
+        const ShadowedRange range{begin, begin + unit, destination.slab};
+        MarkShadowed(import, std::span(&range, 1), TrackerGeneration());
+    };
+    const auto unit3 = address + 3 * unit;
+    {
+        auto destination = ShadowDestinationFor(context, *low, unit3, unit3 + unit);
+        Require(destination.has_value() && destination->seedUnits.empty(), "a whole-unit retile piece has no destination in the low import");
+        retile(*low, *destination, unit3, 0x22);
+    }
+    Require(AnyShadowedOverlaps(unit3, unit), "the unit is not shadowed before the join");
+    {
+        GuestAllocations::Mutation mutation;
+        mutation.Add(static_cast<std::uint8_t*>(block) + lowBytes, highBytes, true, true, true);
+    }
+    unregister.both = true;
+    const auto* beside = HostImportFor(context, high, highBytes);
+    Require(beside != nullptr && beside->base == high && beside->bytes == highBytes, "the range registered beside the import was not imported alone");
+    Require(AnyShadowedOverlaps(unit3, unit), "registering a range beside the import dropped its shadow");
+    const auto* joined = HostImportFor(context, high - 16, 32);
+    Require(joined != nullptr && joined->base == address && joined->bytes == bytes, "a bind over the two imports did not join them");
+    Require(!AnyShadowedOverlaps(address, bytes), "the shadow of an import the join replaced survived");
+    recorder.Sync();
+    Require(words[3 * unit] == 0x22 && words[4 * unit - 1] == 0x22 && words[3 * unit - 1] == 0x11 && words[4 * unit] == 0x11, "the join did not publish the fresh unit of the import it replaced");
+    {
+        auto destination = ShadowDestinationFor(context, *joined, high - unit, high);
+        Require(destination.has_value(), "the joined import takes no retile piece");
+        retile(*joined, *destination, high - unit, 0x33);
+    }
+    Require(AnyShadowedOverlaps(high - unit, unit) && !AnyShadowedOverlaps(high, unit), "the joined import's unit is not shadowed");
+    Require(PublishShadow(high - unit, unit, PublishScope::Whole, PublishReason::Hook) == 1, "the joined import's unit was not published");
+    recorder.Sync();
+    Require(words[lowBytes - unit] == 0x33 && words[lowBytes - 1] == 0x33 && words[lowBytes] == 0x11 && words[lowBytes - unit - 1] == 0x11, "the joined import's published bytes are wrong");
+}
+
 void storageRefreshTests(const Device& device, Recorder& recorder, bool watched) {
     const auto& base = device.GetContext();
     if (base.hostImportAlignment == 0) {
@@ -5367,6 +5467,7 @@ int main(int argc, char** argv) {
                 return 77;
             }
             unitShadowTests(device, recorder);
+            unitShadowJoinTests(device, recorder);
             return 0;
         }
         if (argc == 2 && std::string_view(argv[1]) == "--cmask-only") {
@@ -5424,6 +5525,7 @@ int main(int argc, char** argv) {
         keysFillTests(device, recorder);
         denormalClearTests(device, recorder);
         unitShadowTests(device, recorder);
+        unitShadowJoinTests(device, recorder);
         storageRefreshTests(device, recorder, false);
         storageRefreshTests(device, recorder, true);
         writeBackPaddingTests(device, recorder, false);

@@ -151,6 +151,101 @@ void importWindowTests(const Context& context) {
     ::operator delete(block, std::align_val_t{window});
 }
 
+void importBindJoinTests(const Context& context) {
+    constexpr std::size_t piece = 65536;
+    constexpr std::size_t window = 2 * piece;
+    constexpr std::size_t pieces = 16;
+    void* block = ::operator new(pieces * piece, std::align_val_t{window});
+    auto* guest = static_cast<std::uint8_t*>(block);
+    const auto first = reinterpret_cast<std::uintptr_t>(block);
+    auto importing = context;
+    importing.hostImportAlignment = piece;
+    SetHostImportWindow(window);
+    const auto at = [&](std::size_t index) { return first + index * piece; };
+    const auto change = [&](std::size_t index, std::size_t count, bool add, bool writable = false) {
+        auto* mutation = GuestAllocations::GuestAllocationsBegin_nid_postfix();
+        if (add) GuestAllocations::GuestAllocationsAdd_nid_postfix(mutation, guest + index * piece, count * piece, true, writable, true);
+        else GuestAllocations::GuestAllocationsRemove_nid_postfix(mutation, guest + index * piece);
+        GuestAllocations::GuestAllocationsEnd_nid_postfix(mutation);
+    };
+    const auto serialAt = [&](std::size_t index) { return HostImportSerial(importing, at(index), 16, false); };
+    const auto epoch = [&] { return HostImportsIdentity(importing).epoch; };
+    change(0, 3, true);
+    const auto* early = HostImportFor(importing, at(0), 3 * piece);
+    Require(early != nullptr && early->base == at(0) && early->bytes == 3 * piece, "a range larger than the window was not imported");
+    change(3, 3, true);
+    const auto* beside = HostImportFor(importing, at(3), 16);
+    Require(beside != nullptr && beside->base == at(3) && beside->bytes == 3 * piece, "a range registered beside an import was not imported alone");
+    {
+        GuestBufferMemory memory(importing);
+        memory.AddReadable(at(3) - 16, 32);
+        memory.Upload(false);
+        std::uint32_t adjustment = 0;
+        const auto view = memory.Descriptor(at(3) - 16, 32, adjustment);
+        const auto* joined = HostImportFor(importing, at(0), 6 * piece);
+        Require(joined != nullptr && joined->base == at(0) && joined->bytes == 6 * piece, "a buffer bound over two imported ranges did not join them");
+        Require(memory.CopiedBytes() == 0 && view.buffer == joined->buffer && view.offset + adjustment == 3 * piece - 16, "the buffer over two imported ranges was not bound in place in the joined import");
+        memory.WriteBack();
+    }
+    const auto* low = HostImportFor(importing, at(0), 16);
+    const auto* high = HostImportFor(importing, at(5), 16);
+    Require(low != nullptr && low == high && low->bytes == 6 * piece, "the joined ranges kept imports of their own");
+    const auto joinedSerial = serialAt(0);
+    change(6, 1, true);
+    const auto* partial = HostImportFor(importing, at(6), piece);
+    Require(partial != nullptr && partial->base == at(6) && partial->bytes == piece, "a range in a partly registered window was not imported alone");
+    Require(HostImportFor(importing, at(6) - 16, 32) == nullptr, "a buffer crossing into a partly registered window was joined");
+    Require(serialAt(0) == joinedSerial, "a bind that could not join retired the joined import");
+    change(7, 1, true);
+    const auto* filled = HostImportFor(importing, at(6), 16);
+    Require(filled != nullptr && filled->base == at(6) && filled->bytes == window, "a window filled beside a joined import was not imported as a span");
+    Require(serialAt(0) == joinedSerial, "a window filled beside a joined import re-imported it");
+    const auto* wider = HostImportFor(importing, at(5), 2 * piece);
+    Require(wider != nullptr && wider->base == at(0) && wider->bytes == 8 * piece, "a buffer over a joined import and the window beside it did not join them");
+    const auto widerSerial = serialAt(0);
+    Require(widerSerial != joinedSerial && serialAt(7) == widerSerial, "the wider join kept the imports it replaced");
+    change(9, 2, true);
+    const auto* heap = HostImportFor(importing, at(9), 2 * piece);
+    Require(heap != nullptr && heap->base == at(9) && heap->bytes == 2 * piece, "a range crossing a window edge was not imported alone");
+    const auto heapSerial = serialAt(9);
+    const auto settled = epoch();
+    change(11, 1, true);
+    const auto* grown = HostImportFor(importing, at(11), piece);
+    Require(grown != nullptr && grown->base == at(11) && grown->bytes == piece, "a range registered in the window an import ends in was not imported alone");
+    Require(serialAt(9) == heapSerial && epoch() == settled, "growth beside a live import retired it");
+    const auto* tail = HostImportFor(importing, at(11) - 16, 32);
+    Require(tail != nullptr && tail->base == at(9) && tail->bytes == 3 * piece, "a buffer over an import and the range completing its last window did not join them");
+    Require(epoch() == settled + 2, "the join retired more than the two imports it replaced");
+    const auto tailSerial = serialAt(9);
+    change(12, 1, true);
+    const auto* next = HostImportFor(importing, at(12), piece);
+    Require(next != nullptr && next->base == at(12) && next->bytes == piece, "a range in a partly registered window beside a joined import was not imported alone");
+    Require(HostImportFor(importing, at(12) - 16, 32) == nullptr, "a buffer crossing from a joined import into a partly registered window was joined");
+    Require(serialAt(9) == tailSerial && epoch() == settled + 2, "growth into a partly registered window beside a joined import retired it");
+    change(13, 1, true);
+    const auto* span = HostImportFor(importing, at(13), 16);
+    Require(span != nullptr && span->base == at(12) && span->bytes == window, "the window completed beside a joined import was not imported as a span");
+    Require(serialAt(9) == tailSerial && epoch() == settled + 3, "completing the window beside a joined import retired it");
+    const auto* whole = HostImportFor(importing, at(12) - 16, 32);
+    Require(whole != nullptr && whole->base == at(9) && whole->bytes == 5 * piece && epoch() == settled + 5, "a buffer over a joined import and the window completed beside it did not join them");
+    const auto wholeSerial = serialAt(9);
+    Require(serialAt(8) == 0 && HostImportFor(importing, at(8) + piece / 2, 16) == nullptr, "an unregistered piece between two imports was imported");
+    change(14, 2, true, true);
+    Require(HostImportFor(importing, at(14) - 16, 32) == nullptr, "a buffer over ranges of different access was joined");
+    const auto* written = HostImportFor(importing, at(14), 16);
+    Require(written != nullptr && written->base == at(14) && written->bytes == window && serialAt(9) == wholeSerial, "a bind over ranges of different access retired the joined import");
+    change(12, 1, false);
+    const auto* kept = HostImportFor(importing, at(9), 16);
+    Require(kept != nullptr && kept->base == at(9) && kept->bytes == 2 * piece, "removing a range of a joined import did not leave the rest imported alone");
+    const auto* rest = HostImportFor(importing, at(13), 16);
+    Require(rest != nullptr && rest->base == at(13) && rest->bytes == piece, "removing a range of a joined import did not leave the range beside it imported alone");
+    Require(HostImportFor(importing, at(13) - 16, 32) == nullptr, "a buffer crossing an unregistered piece was imported");
+    for (const auto index : {0, 3, 6, 7, 9, 11, 13, 14}) change(static_cast<std::size_t>(index), 1, false);
+    Require(HostImportFor(importing, at(0), piece) == nullptr && HostImportFor(importing, at(9), piece) == nullptr, "the host imports outlived their ranges");
+    SetHostImportWindow(0);
+    ::operator delete(block, std::align_val_t{window});
+}
+
 ShaderRecompiler::DescriptorBinding binding(Role role, std::uint32_t slot) {
     return {ShaderRecompiler::DescriptorKind::StorageBuffer, role, 0, slot, 1, {}, false};
 }
@@ -1106,6 +1201,7 @@ void RunBdaResourceTests(const Context& context, const BdaTestAccess& access) {
     importCrossingTests(context, access);
     importSpanTests(context);
     importWindowTests(context);
+    importBindJoinTests(context);
     heapMirrorTests(context, access);
     importedHeapMirrorTests(context, access);
     importWatchTests();
