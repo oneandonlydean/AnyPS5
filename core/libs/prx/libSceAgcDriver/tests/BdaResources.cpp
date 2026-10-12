@@ -318,6 +318,155 @@ void importJoinTests(const Context& context) {
     ::operator delete(block, std::align_val_t{window});
 }
 
+// One registered range of `cells` import windows of `window` bytes, with the window and the import budget set for the
+// test and reset after it.
+class WindowedRange {
+public:
+    WindowedRange(const Context& context, std::size_t window, std::size_t cells, std::uint64_t budget = 0) : window(window), bytes(window * cells), importing(context) {
+        block = ::operator new(bytes, std::align_val_t{piece});
+        std::memset(block, 0x33, bytes);
+        importing.hostImportAlignment = piece;
+        SetHostImportRangeWindow(window);
+        SetHostImportBudget(budget);
+        change(true);
+    }
+    ~WindowedRange() {
+        change(false);
+        SetHostImportBudget(0);
+        SetHostImportRangeWindow(std::uint64_t{64} << 20u);
+        ::operator delete(block, std::align_val_t{piece});
+    }
+    WindowedRange(const WindowedRange&) = delete;
+    WindowedRange& operator=(const WindowedRange&) = delete;
+
+    std::uintptr_t First() const { return reinterpret_cast<std::uintptr_t>(block); }
+
+    static constexpr std::size_t piece = 65536;
+    const std::size_t window;
+    const std::size_t bytes;
+    Context importing;
+
+private:
+    void change(bool add) {
+        auto* mutation = GuestAllocations::GuestAllocationsBegin_nid_postfix();
+        if (add) GuestAllocations::GuestAllocationsAdd_nid_postfix(mutation, block, bytes, true, false, true);
+        else GuestAllocations::GuestAllocationsRemove_nid_postfix(mutation, block);
+        GuestAllocations::GuestAllocationsEnd_nid_postfix(mutation);
+    }
+
+    void* block = nullptr;
+};
+
+// A registered range larger than the import window, its first window imported by an earlier access: an address-based
+// build (AcquireRegistered) must import the whole range, so a view in its last window binds (Demon's Souls threw
+// "guest buffer view ... exceeds its GPU owner" with the 64 MiB windows).
+void importWholeRangeOverWindowTests(const Context& context) {
+    WindowedRange range(context, 2 * WindowedRange::piece, 2);
+    const auto first = range.First();
+    const auto* windowed = HostImportFor(range.importing, first + 16, 32);
+    Require(windowed != nullptr && windowed->base == first && windowed->bytes == range.window, "an access to the first window of a large range was not imported as that window");
+    GuestBufferMemory leased(range.importing);
+    leased.AcquireRegistered();
+    leased.Upload(true);
+    std::uint32_t adjustment = 0;
+    const auto view = leased.Descriptor(first + range.bytes - WindowedRange::piece + 16, 32, adjustment);
+    Require(view.range == 32 + adjustment, "a view in the last window of a large registered range has no descriptor");
+    const auto* whole = HostImportFor(range.importing, first, range.bytes);
+    Require(whole != nullptr && whole->base == first && whole->bytes == range.bytes && view.buffer == whole->buffer, "an address-based build was served by the range's first window, not an import of the whole range");
+    leased.WriteBack();
+}
+
+// An address-based build whose whole-range import does not fit the budget leaves the range's window alone: before,
+// every such build retired the window and the next access imported it again.
+void importRefusedWholeRangeTests(const Context& context) {
+    WindowedRange range(context, 2 * WindowedRange::piece, 4, 3 * 2 * WindowedRange::piece);
+    const auto first = range.First();
+    const auto* windowed = HostImportFor(range.importing, first + 16, 32);
+    Require(windowed != nullptr && windowed->bytes == range.window, "the first window of a range over the budget was not imported");
+    const auto buffer = windowed->buffer;
+    for (int build = 0; build < 3; ++build) {
+        GuestBufferMemory leased(range.importing);
+        leased.AcquireRegistered();
+        leased.Upload(true);
+        leased.WriteBack();
+        Require(HostImportCovers(range.importing, first + 16, 32), "an address-based build refused its whole-range import and retired the range's window (build " + std::to_string(build) + ")");
+    }
+    const auto* kept = HostImportFor(range.importing, first + 16, 32);
+    Require(kept != nullptr && kept->buffer == buffer, "the range's window was imported again after a refused whole-range import");
+}
+
+// Two uses across neighbouring cell edges of one range, each in a build of its own, share one import: the second grows
+// the first's window to their union, and later rounds of both keep it. Before, each replaced the other's window at
+// every use.
+void importNeighbouringEdgesTests(const Context& context) {
+    WindowedRange range(context, 2 * WindowedRange::piece, 3);
+    const auto first = range.First();
+    const auto use = [&](std::uintptr_t address) {
+        GuestBufferMemory leased(range.importing);
+        leased.AddReadable(address, 32);
+        leased.Upload(false);
+        leased.WriteBack();
+    };
+    const auto acrossFirst = first + range.window - 16;
+    const auto acrossSecond = first + 2 * range.window - 16;
+    use(acrossFirst);
+    Require(HostImportCovers(range.importing, acrossFirst, 32), "a use across the first cell edge was not imported");
+    use(acrossSecond);
+    Require(HostImportCovers(range.importing, first, range.bytes), "a use across the second cell edge did not grow the first use's window to their union");
+    const auto serial = HostImportSerial(range.importing, first, range.bytes, false);
+    for (int round = 0; round < 10; ++round) {
+        use(acrossFirst);
+        use(acrossSecond);
+        Require(HostImportSerial(range.importing, first, range.bytes, false) == serial, "a use across a cell edge replaced the shared window (round " + std::to_string(round) + ")");
+    }
+}
+
+// A range mapped while the imports are at the budget is refused at map time without retiring an import: the map
+// observer holds no GPU lock, so it must not evict (before, it evicted the least recently used import to fit).
+void importAtMapOverBudgetTests(const Context& context) {
+    constexpr std::size_t bytes = 65536;
+    auto importing = context;
+    importing.hostImportAlignment = bytes;
+    void* kept = ::operator new(bytes, std::align_val_t{bytes});
+    void* used = ::operator new(bytes, std::align_val_t{bytes});
+    void* mapped = ::operator new(bytes, std::align_val_t{bytes});
+    const auto change = [&](void* block, bool add) {
+        auto* mutation = GuestAllocations::GuestAllocationsBegin_nid_postfix();
+        if (add) GuestAllocations::GuestAllocationsAdd_nid_postfix(mutation, block, bytes, true, false, true);
+        else GuestAllocations::GuestAllocationsRemove_nid_postfix(mutation, block);
+        GuestAllocations::GuestAllocationsEnd_nid_postfix(mutation);
+    };
+    change(kept, true);
+    change(used, true);
+    const auto keptAddress = reinterpret_cast<std::uintptr_t>(kept);
+    const auto usedAddress = reinterpret_cast<std::uintptr_t>(used);
+    Require(HostImportFor(importing, keptAddress, 16) != nullptr, "the import to keep was not made");
+    for (int use = 0; use < 300; ++use) Require(HostImportFor(importing, usedAddress, 16) != nullptr, "the import in use was not made");
+    {
+        GuestBufferMemory leased(importing);
+        leased.AddReadable(usedAddress, 16);
+        leased.Upload(false);
+        leased.WriteBack();
+    }
+    const auto live = HostImportLiveBytes();
+    SetHostImportBudget(live + bytes - 1);
+    change(mapped, true);
+    GuestAllocations::Mapped ranges;
+    {
+        const auto lease = GuestAllocations::GuestAllocationsAcquire_nid_postfix();
+        for (const auto& range : lease) {
+            if (range->address == reinterpret_cast<std::uintptr_t>(mapped)) ranges.push_back(range);
+        }
+    }
+    Require(ranges.size() == 1, "the mapped range is not registered");
+    static_cast<void>(ImportMappedRanges(importing, ranges, GuestAllocations::GuestAllocationsGeneration_nid_postfix(), true));
+    SetHostImportBudget(0);
+    Require(HostImportLiveBytes() == live, "a range mapped at the budget retired an import at map time (an eviction without the GPU lock)");
+    Require(HostImportCovers(importing, keptAddress, 16) && !HostImportCovers(importing, reinterpret_cast<std::uintptr_t>(mapped), 16), "a range mapped at the budget was imported, or the import to keep was retired");
+    for (auto* block : {kept, used, mapped}) change(block, false);
+    for (auto* block : {kept, used, mapped}) ::operator delete(block, std::align_val_t{bytes});
+}
+
 ShaderRecompiler::DescriptorBinding binding(Role role, std::uint32_t slot) {
     return {ShaderRecompiler::DescriptorKind::StorageBuffer, role, 0, slot, 1, {}, false};
 }
@@ -1316,6 +1465,10 @@ void RunBdaResourceTests(const Context& context, const BdaTestAccess& access) {
     spaceImportRunTests(context);
     importWindowTests(context);
     importJoinTests(context);
+    importWholeRangeOverWindowTests(context);
+    importRefusedWholeRangeTests(context);
+    importNeighbouringEdgesTests(context);
+    importAtMapOverBudgetTests(context);
     heapMirrorTests(context, access);
     importedHeapMirrorTests(context, access);
     importWatchTests();
