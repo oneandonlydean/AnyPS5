@@ -841,8 +841,12 @@ const HostImport* importRunAt(const Context& context, HostImports& state, Import
     auto first = state.imports.lower_bound(base);
     if (first != state.imports.begin() && std::prev(first)->second.base + std::prev(first)->second.bytes > base) --first;
     std::uint64_t replaced = 0;
+    // A join may replace imports this build already looked up: it runs before any region confirms an import
+    // (UploadFinish's pre-pass re-resolves every pointer after it), and a retired import stays alive through the
+    // hold (KeepThroughHold). Refusing it there would keep the run copied for good.
+    const auto held = [&](const HostImport& entry) { return !joined && pointerHeld(state, entry); };
     for (auto it = first; it != state.imports.end() && it->first < base + bytes; ++it) {
-        if (pointerHeld(state, it->second)) return nullptr;
+        if (held(it->second)) return nullptr;
         replaced += it->second.bytes;
     }
     const auto budget = importBudget(context);
