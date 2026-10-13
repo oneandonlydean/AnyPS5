@@ -174,6 +174,8 @@ struct HostImports {
     bool unwatchDmaBufImports = false;
     std::uint64_t useCounter = 0;
     std::uint64_t buildFloor = 0;
+    std::uint64_t frameFloor = 0;
+    std::uint64_t previousFrameFloor = 0;
 };
 
 HostImports& Imports() {
@@ -697,8 +699,7 @@ bool pointerHeld(const HostImports& state, const HostImport& entry) {
 }
 
 bool evictable(const HostImports& state, const HostImport& entry) {
-    constexpr std::uint64_t protectedUses = 256;
-    return !pointerHeld(state, entry) && entry.lastUse + protectedUses < state.useCounter;
+    return !pointerHeld(state, entry) && entry.lastUse < state.previousFrameFloor;
 }
 
 std::uint64_t retireLeastRecent(const Context& context, HostImports& state, const GuestAllocations::Lease& lease, std::uint64_t wanted) {
@@ -2183,6 +2184,13 @@ void SetHostImportRangeWindow(std::uint64_t bytes) {
 
 void SetHostImportBudget(std::uint64_t bytes) {
     budgetOverride.store(bytes, std::memory_order_relaxed);
+}
+
+void NoteHostImportFrame() {
+    auto& state = Imports();
+    std::lock_guard lock(state.mutex);
+    state.previousFrameFloor = state.frameFloor;
+    state.frameFloor = state.useCounter + 1;
 }
 
 std::uint64_t HostImportLiveBytes() {
