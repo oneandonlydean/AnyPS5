@@ -183,6 +183,10 @@ float APS5_VABI asinf_nid_postfix(float x) {
     return result;
 }
 float APS5_VABI acosf_nid_postfix(float x) {
+    // FreeBSD returns (x-x)/(x-x), the x86 default NaN; the host's NaN sign depends on its libm version.
+    if (std::fabs(x) > 1.0f) {
+        return std::bit_cast<float>(0xffc00000u);
+    }
     const int saved_errno = errno;
     const float result = std::acos(x);
     errno = saved_errno;
