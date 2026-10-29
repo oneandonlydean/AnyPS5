@@ -1047,6 +1047,35 @@ void DeferredWorkerTest() {
     Require(written, "no worker was started to write the checkpoint of an early milestone");
 }
 
+void CommitWithHexNameTest() {
+    // A user whose name is made of hex digits ("dead", "abc") would match inside any commit; the commit is never compared with names.
+    RunReport::HostIdentifiers host;
+    host.words = {"abc", "dead"};
+    auto report = SampleReport();
+    report.build.commit = std::string("0123456789abcdef0123456789abcdef01234567");
+    const auto text = RunReport::Serialize(report, host);
+    Require(Contains(text, "\"commit\": \"0123456789abcdef0123456789abcdef01234567\""), "a commit was dropped because a hex-looking name occurs inside it: " + text);
+    report.build.release = "vdead1";
+    Require(Contains(RunReport::Serialize(report, host), "\"release\": null"), "a release that names the host was kept");
+}
+
+void SearchOnlyAncestorTest() {
+#ifdef _WIN32
+    throw NotRun("POSIX permissions");
+#else
+    // A folder above the destination that can be searched but not read must not stop a write (O_PATH walk).
+    Directory directory;
+    const auto closed = directory.path / "closed";
+    fs::create_directories(closed / "inner");
+    fs::permissions(closed, fs::perms::owner_exec | fs::perms::owner_write, fs::perm_options::replace);
+    std::string error;
+    const bool wrote = RunReport::WriteAtomically(closed / "inner" / "anyps5-report.json", "x\n", "aaaaaaaa", error);
+    fs::permissions(closed, fs::perms::owner_all, fs::perm_options::replace);
+    Require(wrote, "a write through a search-only ancestor failed: " + error);
+    Require(Read(closed / "inner" / "anyps5-report.json") == "x\n", "the file was not written");
+#endif
+}
+
 void SourceBoundaryTest() {
     Require(!RunReport::SourceOf("/x/notcore/a.cpp", 3) && !RunReport::SourceOf("/x/mycore/a.cpp", 3), "a path that only ends in core/ was taken for the source tree");
     Require(RunReport::SourceOf("/x/core/a.cpp", 3) == std::optional<std::string>("core/a.cpp:3") && RunReport::SourceOf("core/a.cpp", 3) == std::optional<std::string>("core/a.cpp:3"), "a source path was refused");
@@ -1434,6 +1463,8 @@ int main(int argc, char** argv) {
         Run("lost-observation", LostObservationTest);
         Run("checkpoint-does-not-block-hooks", CheckpointDoesNotBlockHooksTest);
         Run("source-boundary", SourceBoundaryTest);
+        Run("commit-with-hex-name", CommitWithHexNameTest);
+        Run("search-only-ancestor", SearchOnlyAncestorTest);
         Run("format-stop-key", FormatStopKeyTest);
         Run("suffix-names", SuffixNamesTest);
         Run("soft-stop-dedup", SoftStopDedupTest);

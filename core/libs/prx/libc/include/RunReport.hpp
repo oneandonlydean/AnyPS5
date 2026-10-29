@@ -243,6 +243,8 @@ public:
     bool IsCurrent() const;
     // Deletes the lock file while the lock is still held, then releases it.
     void RemoveAndRelease();
+    // The OS handle of the lock file (Windows: HANDLE; elsewhere null), for the process-exit cleanup.
+    void* NativeHandle() const;
 private:
     FileLock() = default;
     struct Handle;

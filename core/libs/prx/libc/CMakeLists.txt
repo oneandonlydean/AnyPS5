@@ -129,7 +129,7 @@ target_include_directories(libc PRIVATE ${runReportRevisionRoot})
 
 # The libraries that register themselves with the run report are built against the same revision header.
 function(run_report_stamp_components root)
-    foreach(component libkernel libSceVideoOut libSceSystemService)
+    foreach(component libkernel libSceVideoOut libSceSystemService libSceAgcDriver)
         if(TARGET ${component})
             target_include_directories(${component} PRIVATE ${root})
             add_dependencies(${component} run_report_revision)

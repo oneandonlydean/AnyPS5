@@ -54,6 +54,7 @@
 #include "prx/libSceAgcDriver/Execution/include/GuestMemory.hpp"
 #include "prx/libc/include/General.hpp"
 #include "prx/libc/include/RunReport.hpp"
+#include "prx/libc/include/RunReportComponent.hpp"
 #include "RdnaDecoder/DiagnosticSink.hpp"
 #ifdef _WIN32
 #include <windows.h>
@@ -132,6 +133,8 @@ DeviceQueuePlan PlanDeviceQueues(std::span<const VkQueueFamilyProperties> famili
     }
     return plan;
 }
+
+APS5_RUN_REPORT_COMPONENT("libSceAgcDriver")
 
 namespace {
 

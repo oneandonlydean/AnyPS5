@@ -418,7 +418,9 @@ Report Sanitized(Report report, const HostIdentifiers& host) {
     if (!matches(report.game.titleId, "[A-Z]{4}[0-9]{5}")) report.game.titleId.reset();
     if (!matches(report.game.contentVersion, "[0-9A-Za-z._-]{1,32}")) report.game.contentVersion.reset();
     // A value that fits its pattern can still be a host identifier (a version or release tag that is a user name).
-    for (auto* value : {&report.build.commit, &report.build.release, &report.game.titleId, &report.game.contentVersion, &report.os}) {
+    // The commit is forty hex digits and cannot carry a name, but a short hex-looking name ("dead", "face") would match inside it, so it is
+    // not compared with the host's names.
+    for (auto* value : {&report.build.release, &report.game.titleId, &report.game.contentVersion, &report.os}) {
         if (*value && NamesHost(**value, host)) value->reset();
     }
     if (report.game.name) report.game.name = SafeText(*report.game.name, host);
@@ -694,11 +696,25 @@ bool FolderChainIsReal(const fs::path& folder) {
 // Opens `folder` one component at a time with O_NOFOLLOW, so a link anywhere in the chain (not only in the last name) fails the open.
 int OpenFolderNoFollow(const fs::path& folder) {
     const auto absolute = fs::absolute(folder).lexically_normal();
-    int current = ::open("/", O_RDONLY | O_DIRECTORY | O_CLOEXEC);
+    std::vector<fs::path> parts;
     for (const auto& part : absolute.relative_path()) {
+        if (!part.empty() && part != ".") parts.push_back(part);
+    }
+#ifdef O_PATH
+    // A folder on the way only has to be passed through: O_PATH needs search permission and no read permission.
+    constexpr int passThrough = O_PATH;
+#else
+    constexpr int passThrough = O_RDONLY;
+#endif
+    int current = ::open("/", O_RDONLY | O_DIRECTORY | O_CLOEXEC);
+    for (std::size_t index = 0; index < parts.size(); ++index) {
         if (current < 0) return -1;
-        if (part.empty() || part == ".") continue;
-        const int next = ::openat(current, part.c_str(), O_RDONLY | O_DIRECTORY | O_NOFOLLOW | O_CLOEXEC);
+        const bool last = index + 1u == parts.size();
+        // The last folder is the one the files are made in, and it is flushed, so it is opened for reading when it may be.
+        int next = ::openat(current, parts[index].c_str(), (last ? O_RDONLY : passThrough) | O_DIRECTORY | O_NOFOLLOW | O_CLOEXEC);
+#ifdef O_PATH
+        if (next < 0 && last && errno == EACCES) next = ::openat(current, parts[index].c_str(), O_PATH | O_DIRECTORY | O_NOFOLLOW | O_CLOEXEC);
+#endif
         ::close(current);
         current = next;
     }
@@ -794,7 +810,7 @@ bool WriteAtomically(const fs::path& target, std::string_view bytes, std::string
         return false;
     }
     // Without this flush the rename can be lost on a power cut; a file system that cannot flush a folder says EINVAL or ENOTSUP.
-    const bool flushed = ::fsync(folder) == 0 || errno == EINVAL || errno == ENOTSUP;
+    const bool flushed = ::fsync(folder) == 0 || errno == EINVAL || errno == ENOTSUP || errno == EBADF;
     ::close(folder);
     if (!flushed) error = "flushing the destination folder failed";
     return flushed;
@@ -868,6 +884,14 @@ std::unique_ptr<FileLock> FileLock::TryAcquire(const fs::path& path, bool& busy)
     }
 #endif
     return lock;
+}
+
+void* FileLock::NativeHandle() const {
+#ifdef _WIN32
+    return handle ? handle->file : nullptr;
+#else
+    return nullptr;
+#endif
 }
 
 bool FileLock::IsCurrent() const {
@@ -1371,6 +1395,31 @@ BuildInfo Collector::Provenance() const {
     return build;
 }
 
+#ifdef _WIN32
+namespace {
+
+// What the process-exit cleanup needs, kept in plain storage so that it needs no lock, no allocation and no library call beyond Win32.
+wchar_t g_exitCheckpoint[1024];
+std::atomic<HANDLE> g_exitLock{INVALID_HANDLE_VALUE};
+
+void RememberForExit(const fs::path& checkpoint, void* lock) {
+    const auto text = checkpoint.native();
+    g_exitCheckpoint[0] = L'\0';
+    if (text.size() < std::size(g_exitCheckpoint)) {
+        std::copy(text.begin(), text.end(), g_exitCheckpoint);
+        g_exitCheckpoint[text.size()] = L'\0';
+    }
+    g_exitLock = lock != nullptr ? static_cast<HANDLE>(lock) : INVALID_HANDLE_VALUE;
+}
+
+void ForgetForExit() {
+    g_exitLock = INVALID_HANDLE_VALUE;
+    g_exitCheckpoint[0] = L'\0';
+}
+
+}
+#endif
+
 struct Collector::GameState {
     std::mutex mutex;
     std::condition_variable done;
@@ -1472,6 +1521,9 @@ bool Collector::Start() {
             directory.clear();
             continue;
         }
+#ifdef _WIN32
+        RememberForExit(checkpointPath, lock->NativeHandle());
+#endif
         break;
     }
     if (directory.empty()) {
@@ -1527,6 +1579,9 @@ bool Collector::Resume() {
             finalized = false;
         }
         if (!WriteCheckpoint()) return false;
+#ifdef _WIN32
+        RememberForExit(checkpointPath, lock->NativeHandle());
+#endif
         if (reportPublished) {
             // Only the report this run wrote is taken back: a newer report from another run in the same folder is not ours to delete.
             std::string current;
@@ -1979,6 +2034,9 @@ void Collector::Finish(Exit exit, Stop stop, std::optional<std::int64_t> exitCod
                 std::error_code ignored;
                 fs::remove(checkpointPath, ignored);
                 lock->RemoveAndRelease();
+#ifdef _WIN32
+                ForgetForExit();
+#endif
                 finalized = true;
                 std::fprintf(stderr, "[run-report] wrote %s\n", reportPath.filename().string().c_str());
             } else {
@@ -2006,7 +2064,7 @@ std::atomic<bool (*)(RunReportGame*)> gameProvider{nullptr};
 RunReport::Collector* collector = nullptr;
 const char* relaunchChoice = nullptr;
 
-void FinishAtExit() {
+[[maybe_unused]] void FinishAtExit() {
     // Returning from the guest entry reaches exit() or ExitProcess without any of the hooks; the exit status is not known here.
     if (collector != nullptr && !collector->Finished()) collector->Finish(RunReport::Exit::Clean, RunReport::Stop{RunReport::Kind::None, RunReport::Reason::GuestExit, std::nullopt}, std::nullopt);
 }
@@ -2058,7 +2116,7 @@ bool StartRunReport() noexcept {
         if (*APS5_REPORT_RELEASE != '\0') settings.build.release = APS5_REPORT_RELEASE;
         if (APS5_REPORT_MODIFIED >= 0) settings.build.modified = APS5_REPORT_MODIFIED != 0;
         settings.game = ProvideGame;
-        settings.requiredComponents = {"libkernel", "libSceVideoOut", "libSceSystemService"};
+        settings.requiredComponents = {"libkernel", "libSceVideoOut", "libSceSystemService", "libSceAgcDriver"};
         // Every section is collected by this build's runtime. The loaded and started milestones come from the entry bridge of the
         // converted executable (macOS has it); where it is missing those two are left out, as unreached milestones are.
         settings.coverage = {true, true, true, true, true, true};
@@ -2071,7 +2129,10 @@ bool StartRunReport() noexcept {
             return false;
         }
         collector = created;
+#ifndef _WIN32
+        // On Windows exit handlers of a DLL run inside the loader lock; the process-exit cleanup below is used instead.
         std::atexit(FinishAtExit);
+#endif
         return true;
     } catch (...) {
         return false;
@@ -2238,10 +2299,19 @@ extern "C" const char* LibcRunReportRelaunchEnvironment_nid_no_patch() noexcept 
 
 #ifdef _WIN32
 // ExitProcess, which the generated entry stub calls when the guest returns from its entry, detaches this library with a non-null
-// reserved argument. That is the one place every Windows exit passes through, so the report is finished here; the exit status is
-// not known at this point. Only file I/O runs: no thread is waited for and no library is loaded.
+// reserved argument, after the other threads have been ended, inside the loader lock. Nothing of the ordinary report pipeline may run
+// here: it takes locks, allocates, filters text and calls the game's metadata. So no report is written for that exit; the checkpoint
+// and the lock file are removed instead, so that a run that returned cleanly is not recovered later as a killed one.
 extern "C" BOOL WINAPI DllMain(HINSTANCE, DWORD reason, LPVOID reserved) {
-    if (reason == DLL_PROCESS_DETACH && reserved != nullptr) FinishAtExit();
+    if (reason == DLL_PROCESS_DETACH && reserved != nullptr) {
+        const HANDLE lock = RunReport::g_exitLock.exchange(INVALID_HANDLE_VALUE);
+        if (lock != INVALID_HANDLE_VALUE) {
+            FILE_DISPOSITION_INFO disposition{};
+            disposition.DeleteFile = TRUE;
+            SetFileInformationByHandle(lock, FileDispositionInfo, &disposition, sizeof(disposition));
+        }
+        if (RunReport::g_exitCheckpoint[0] != L'\0') DeleteFileW(RunReport::g_exitCheckpoint);
+    }
     return TRUE;
 }
 #endif
