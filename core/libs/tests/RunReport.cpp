@@ -1142,14 +1142,27 @@ void RootLinkTest() {
     throw NotRun("no root-owned links under the root here");
 #else
     // A link directly under "/" that root owns (macOS /var, a usr-merged /lib) is followed; the links below it that a user makes are not (AncestorLinkTest).
+    // Only a link whose target is made of plain folders qualifies: a target that goes through another link (or past the hop limit) is refused on purpose.
     std::error_code error;
     for (const auto& entry : fs::directory_iterator("/", error)) {
         struct stat named {};
-        if (::lstat(entry.path().c_str(), &named) != 0 || !S_ISLNK(named.st_mode) || named.st_uid != 0 || !fs::is_directory(entry.path(), error)) continue;
+        if (::lstat(entry.path().c_str(), &named) != 0 || !S_ISLNK(named.st_mode) || named.st_uid != 0) continue;
+        const fs::path target = fs::read_symlink(entry.path(), error);
+        if (error || target.empty()) continue;
+        const fs::path resolved = (fs::path("/") / target).lexically_normal();
+        bool plain = !resolved.empty() && resolved != "/";
+        fs::path prefix = "/";
+        for (const auto& part : resolved.relative_path()) {
+            if (part.empty()) continue;
+            prefix /= part;
+            struct stat step {};
+            if (::lstat(prefix.c_str(), &step) != 0 || !S_ISDIR(step.st_mode)) { plain = false; break; }
+        }
+        if (!plain) continue;
         Require(RunReport::FolderIsReachable(entry.path()), "a root-owned link under / was refused: " + entry.path().string());
         return;
     }
-    throw NotRun("no root-owned link to a folder under /");
+    throw NotRun("no root-owned link under / whose target is made of plain folders");
 #endif
 }
 
