@@ -940,30 +940,71 @@ void OsIdentityOnlyForTheOsVersionTest() {
 }
 
 void OsReleaseIdentityTest() {
-    // Only the ID value is the identity of the OS; NAME and ID_LIKE are text anyone can edit.
+    // Only an ID that is on the fixed list of public distribution IDs is an identity; NAME and ID_LIKE are text anyone can edit.
     std::istringstream codex("NAME=\"Ubuntu Bob Remix\"\nID=ubuntu\nID_LIKE=\"debian bob\"\nPRETTY_NAME=\"Ubuntu Bob Remix 24.04\"\n");
     const auto ids = RunReport::OsIdentityFromOsRelease(codex);
-    Require(ids.size() == 1 && ids[0] == "ubuntu", "the OS identity is not the single ID value");
+    Require(ids.size() == 1 && ids[0] == "ubuntu", "the OS identity is not the single listed ID value");
     std::istringstream quoted("ID=\"cachyos\"\n");
-    Require(RunReport::OsIdentityFromOsRelease(quoted) == std::vector<std::string>{"cachyos"}, "a quoted ID was not read");
-    std::istringstream edited("ID=\"ubuntu bob\"\n");
-    Require(RunReport::OsIdentityFromOsRelease(edited).empty(), "an ID that is not one token was trusted");
-    std::istringstream none("NAME=Something\nID_LIKE=bob\n");
-    Require(RunReport::OsIdentityFromOsRelease(none).empty(), "an os-release without an ID gave an identity");
+    Require(RunReport::OsIdentityFromOsRelease(quoted) == std::vector<std::string>{"cachyos"}, "a quoted public ID was not read");
+    std::istringstream singleQuoted("ID='arch'\n");
+    Require(RunReport::OsIdentityFromOsRelease(singleQuoted) == std::vector<std::string>{"arch"}, "a single-quoted public ID was not read");
+    // Codex's six malformed or personal cases (row 886): none gives an identity.
+    for (const char* text : {"ID=bob\n", "ID=BOB\n", "ID=\"bob\"\n", "ID= bob\n", "NAME=Bob Linux\n", "ID=\"bobX\n", "ID=Ubuntu\n", "ID=\"ubuntu\n", "ID='ubuntu\"\n", "ID=ubuntu bob\n", "ID=\"ubuntu bob\"\n"}) {
+        std::istringstream in(text);
+        Require(RunReport::OsIdentityFromOsRelease(in).empty(), std::string("a personal or malformed ID gave an identity: ") + text);
+    }
     // The whole chain with Codex's host: bob is gone from every machine field.
     RunReport::HostIdentifiers host;
     host.words = {"bob", "alice"};
     host.hosts = {"bob"};
     host.users = {"alice"};
-    std::istringstream again("NAME=\"Ubuntu Bob Remix\"\nID=ubuntu\nID_LIKE=\"debian bob\"\n");
-    host.osIdentity = RunReport::OsIdentityFromOsRelease(again);
+    for (const char* text : {"ID=bob\n", "ID=BOB\n", "ID=\"bob\"\n", "ID=\"bobX\n", "ID= bob\n", "NAME=\"Ubuntu Bob Remix\"\nID=ubuntu\nID_LIKE=\"debian bob\"\n"}) {
+        std::istringstream in(text);
+        host.osIdentity = RunReport::OsIdentityFromOsRelease(in);
+        auto machine = CleanMachine();
+        machine.osVersion = "Bob 24.04 (kernel 6.8.0)";
+        machine.cpu = "Bob CPU";
+        machine.gpu->name = "Bob GPU";
+        machine.gpu->driver = "Bob driver";
+        const auto out = RunReport::Serialize(MachineReport(machine), host);
+        Require(!Contains(out, "Bob") && !Contains(out, "bob"), std::string("bob survived in a machine field with os-release ") + text + ": " + out);
+    }
+    // The unit-level contract holds the same without a parsed file: a host name equal to a list entry that is not public is not exempt.
+    host.osIdentity = {"bob"};
     auto machine = CleanMachine();
-    machine.osVersion = "Ubuntu Bob Remix 24.04 (kernel 6.8.0)";
-    machine.cpu = "Bob CPU";
-    machine.gpu->name = "Bob GPU";
-    machine.gpu->driver = "Bob driver";
-    const auto text = RunReport::Serialize(MachineReport(machine), host);
-    Require(!Contains(text, "Bob") && !Contains(text, "bob"), "bob survived in a machine field: " + text);
+    machine.osVersion = "Bob 24.04 (kernel 6.8.0)";
+    Require(Contains(RunReport::Serialize(MachineReport(machine), host), "\"osVersion\": null"), "an identity that is not on the public list exempted a host name");
+}
+
+void PublicHostNameTest() {
+    // A host named after the public distribution it runs keeps the name in the OS version (and in no other machine field).
+    for (const char* distro : {"cachyos", "ubuntu"}) {
+        RunReport::HostIdentifiers host;
+        host.words = {distro};
+        host.hosts = {distro};
+        std::istringstream in(std::string("ID=") + distro + "\n");
+        host.osIdentity = RunReport::OsIdentityFromOsRelease(in);
+        auto machine = CleanMachine();
+        machine.osVersion = std::string(distro == std::string("cachyos") ? "CachyOS Linux" : "Ubuntu 24.04") + " (kernel 6.8.0)";
+        machine.cpu = std::string("CPU of ") + distro;
+        const auto out = RunReport::Serialize(MachineReport(machine), host);
+        Require(Contains(out, distro == std::string("cachyos") ? "\"osVersion\": \"CachyOS Linux (kernel 6.8.0)\"" : "\"osVersion\": \"Ubuntu 24.04 (kernel 6.8.0)\""), std::string("a host named ") + distro + " on " + distro + " lost its OS version: " + out);
+        Require(Contains(out, "\"cpu\": null"), std::string("the allowance reached the CPU for ") + distro + ": " + out);
+    }
+    // A host called ubuntu on a machine whose os-release ID is something else (here edited to bob) gets no allowance.
+    RunReport::HostIdentifiers host;
+    host.words = {"ubuntu"};
+    host.hosts = {"ubuntu"};
+    std::istringstream in("ID=bob\n");
+    host.osIdentity = RunReport::OsIdentityFromOsRelease(in);
+    auto machine = CleanMachine();
+    machine.osVersion = "Ubuntu 24.04 (kernel 6.8.0)";
+    Require(Contains(RunReport::Serialize(MachineReport(machine), host), "\"osVersion\": null"), "a host named ubuntu kept 'Ubuntu' while the os-release ID said bob");
+    // os-release values are read as the specification says.
+    Require(RunReport::OsReleaseValue("\"CachyOS Linux\"") == std::optional<std::string>("CachyOS Linux"), "a quoted value was not read");
+    Require(RunReport::OsReleaseValue("'Arch'") == std::optional<std::string>("Arch"), "a single-quoted value was not read");
+    Require(RunReport::OsReleaseValue("rolling") == std::optional<std::string>("rolling"), "an unquoted value was not read");
+    Require(!RunReport::OsReleaseValue("\"unmatched").has_value() && !RunReport::OsReleaseValue("'mixed\"").has_value() && !RunReport::OsReleaseValue(" leading").has_value() && !RunReport::OsReleaseValue("two words").has_value(), "a malformed value was accepted");
 }
 
 void OsVersionFormatTest() {
@@ -2040,6 +2081,7 @@ int main(int argc, char** argv) {
         Run("os-version-format", OsVersionFormatTest);
         Run("os-identity-only-for-the-os-version", OsIdentityOnlyForTheOsVersionTest);
         Run("os-release-identity", OsReleaseIdentityTest);
+        Run("public-host-name", PublicHostNameTest);
         Run("machine-live-and-recovered", MachineLiveAndRecoveredTest);
         Run("commit-with-hex-name", CommitWithHexNameTest);
         Run("search-only-ancestor", SearchOnlyAncestorTest);

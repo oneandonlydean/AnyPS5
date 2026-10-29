@@ -282,13 +282,10 @@ SystemInfo ProbeHost() {
 #if defined(__linux__)
     std::string name, versionId;
     std::ifstream release("/etc/os-release");
-    const auto unquote = [](std::string value) {
-        if (value.size() >= 2u && (value.front() == '"' || value.front() == '\'')) value = value.substr(1u, value.size() - 2u);
-        return value;
-    };
+    // A value that does not parse (an unmatched quote) is not used: the OS version then falls back to what is left.
     for (std::string line; std::getline(release, line);) {
-        if (line.rfind("NAME=", 0) == 0) name = unquote(line.substr(5u));
-        else if (line.rfind("VERSION_ID=", 0) == 0) versionId = unquote(line.substr(11u));
+        if (line.rfind("NAME=", 0) == 0) name = OsReleaseValue(line.substr(5u)).value_or("");
+        else if (line.rfind("VERSION_ID=", 0) == 0) versionId = OsReleaseValue(line.substr(11u)).value_or("");
     }
     utsname kernel{};
     const std::string release_ = uname(&kernel) == 0 ? std::string(kernel.release) : std::string();
@@ -406,15 +403,48 @@ std::vector<std::string> OsIdentityWords() {
 
 }
 
+std::optional<std::string> OsReleaseValue(std::string_view raw) {
+    while (!raw.empty() && (raw.back() == '\r' || raw.back() == ' ' || raw.back() == '\t')) raw.remove_suffix(1u);
+    if (raw.empty()) return std::string();
+    const char quote = raw.front();
+    if (quote == '"' || quote == '\'') {
+        if (raw.size() < 2u || raw.back() != quote) return std::nullopt;
+        std::string value;
+        for (std::size_t index = 1; index + 1u < raw.size(); ++index) {
+            const char c = raw[index];
+            if (c == quote) return std::nullopt;
+            if (c == '\\' && quote == '"' && index + 2u < raw.size() && std::string_view("\\\"$`").find(raw[index + 1u]) != std::string_view::npos) {
+                value += raw[++index];
+                continue;
+            }
+            value += c;
+        }
+        return value;
+    }
+    if (std::isspace(static_cast<unsigned char>(quote))) return std::nullopt;
+    if (raw.find_first_of(" \t\"';") != std::string_view::npos) return std::nullopt;
+    return std::string(raw);
+}
+
+bool PublicDistroId(std::string_view id) {
+    // IDs as the distributions publish them in /etc/os-release (systemd's os-release(5) examples and each project's own file), plus the
+    // platform words. A fixed list on purpose: the ID of a machine is text its owner can edit, so only an ID that is already public is
+    // allowed to stand for a public product name. A distribution that is not listed loses its name when the host is called after it.
+    static constexpr std::string_view known[] = {
+        "alpine", "almalinux", "altlinux", "amzn", "antergos", "arch", "archarm", "artix", "bazzite", "bodhi", "centos", "chimera", "clear-linux-os",
+        "cachyos", "debian", "deepin", "devuan", "elementary", "endeavouros", "fedora", "garuda", "gentoo", "guix", "kali", "kaos", "kdeneon",
+        "linuxmint", "mageia", "manjaro", "mx", "neon", "nixos", "nobara", "ol", "opensuse", "opensuse-leap", "opensuse-tumbleweed", "parrot",
+        "photon", "pop", "pureos", "raspbian", "rhel", "rocky", "slackware", "solus", "steamos", "tails", "ubuntu", "void", "zorin",
+        "windows", "macos",
+    };
+    return std::ranges::find(known, id) != std::end(known);
+}
+
 std::vector<std::string> OsIdentityFromOsRelease(std::istream& stream) {
     std::vector<std::string> words;
     for (std::string line; std::getline(stream, line);) {
         if (line.rfind("ID=", 0) != 0) continue;
-        auto value = line.substr(3u);
-        if (value.size() >= 2u && (value.front() == '"' || value.front() == '\'')) value = value.substr(1u, value.size() - 2u);
-        value = LowerAscii(value);
-        const bool token = !value.empty() && std::ranges::all_of(value, [](char c) { return (c >= 'a' && c <= 'z') || (c >= '0' && c <= '9') || c == '-' || c == '_' || c == '.'; });
-        if (token) words.push_back(std::move(value));
+        if (const auto value = OsReleaseValue(line.substr(3u)); value && PublicDistroId(*value)) words.push_back(*value);
         break;
     }
     return words;
@@ -486,7 +516,7 @@ HostIdentifiers MachineNames(const HostIdentifiers& host, bool forOsVersion) {
             return std::ranges::any_of(list, [&](const std::string& other) { return LowerAscii(other) == lowered; });
         };
         // For the OS version, a host name that is the OS identifier and is not also a user name names a public product: it stays allowed.
-        if (forOsVersion && in(host.hosts) && !in(host.users) && in(host.osIdentity)) continue;
+        if (forOsVersion && in(host.hosts) && !in(host.users) && std::ranges::any_of(host.osIdentity, [&](const std::string& id) { return PublicDistroId(id) && LowerAscii(id) == lowered; })) continue;
         names.words.push_back(word);
     }
     return names;

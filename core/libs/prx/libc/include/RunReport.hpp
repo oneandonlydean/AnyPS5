@@ -208,11 +208,17 @@ struct HostIdentifiers {
     std::vector<std::string> osIdentity;
 };
 
-// The OS identifier in the text of an os-release file: the ID value when it is one lowercase token, nothing otherwise. NAME, ID_LIKE
-// and every other line are ignored.
+// The value of one os-release assignment, read as the specification says: unquoted without spaces or quotes, or enclosed in matching single
+// or double quotes. A value with an unmatched quote, a leading space or an unquoted space is invalid and gives nothing.
+std::optional<std::string> OsReleaseValue(std::string_view raw);
+// Whether `id` is on the fixed list of public distribution identifiers (and the platform words "windows" and "macos"). Exact, lowercase.
+bool PublicDistroId(std::string_view id);
+// The OS identifier in the text of an os-release file: the ID value when it parses and is on the fixed list of public distribution IDs,
+// nothing otherwise (an ID is text anyone can edit). NAME, ID_LIKE and every other line are ignored.
 std::vector<std::string> OsIdentityFromOsRelease(std::istream& stream);
 // The words that a machine field (system.*) is compared with: all the names. For the OS version only (`forOsVersion`) a host name that
-// equals the OS identifier is left out of them; the CPU, GPU name and GPU driver are compared with every name.
+// equals the identifier of a public distribution (a listed ID that is also the os-release ID of this machine) is left out of them; the CPU,
+// GPU name and GPU driver are compared with every name.
 HostIdentifiers MachineNames(const HostIdentifiers& host, bool forOsVersion);
 // "NAME VERSION_ID (kernel major.minor.patch)": structured, with the vendor suffix and the fourth number of the kernel release left out.
 std::string FormatOsVersion(std::string_view name, std::string_view versionId, std::string_view kernelRelease);
