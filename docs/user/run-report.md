@@ -60,6 +60,16 @@ The pairs the schema enforces: `kind: none`, a clean exit and a reason of `guest
 
 `stop.message` is built from a fixed template, never a raw error string, and is at most 300 characters. `stop.source` is a source-tree path with a line number, or null when unknown (native crashes, for example).
 
+## Which milestones a system records
+
+| System | `loaded`, `started` | `firstDraw`, `firstPresent` | `stage`, `framesPresented`, frame rate |
+|---|---|---|---|
+| Linux | never recorded | recorded | recorded |
+| Windows | never recorded | recorded | recorded |
+| macOS | recorded | recorded | recorded |
+
+`coverage.milestones` is true on every system; it means the stage, the milestones the system records and the frame counts were collected. Read a missing `loaded` or `started` on Linux or Windows as "this system does not record it", never as "not reached": a report with `stage: first-draw` and no `loaded` is a run that drew. Only a stage lower than the one a milestone belongs to says it was not reached.
+
 ## What the runtime counts
 
 - `milestones.firstDraw` is set when a batch that carries a recorded guest draw or dispatch has been accepted by the GPU queue. `firstPresent` and `framesPresented` count guest display buffers that the swapchain queue accepted (a suboptimal one too); internal clears, test pixels and rejected presents are not counted. `loaded` and `started` come from the entry bridge of the converted executable; only the macOS bridge reports them so far, so on other systems those two are left out.

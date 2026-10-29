@@ -75,6 +75,12 @@ body:
       label: Current blocker
       description: The line where it stops, the issue that tracks it, and the open pull requests and local changes the title still needs.
   - type: textarea
+    id: report
+    attributes:
+      label: Run report
+      description: The contents of `anyps5-report.json`, which the runtime writes next to the executable at the end of a run (see the usage guide). Read it first; it holds no user name, home folder or address. Leave it empty if the report was turned off.
+      render: json
+  - type: textarea
     id: steps
     attributes:
       label: How it was run

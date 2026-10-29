@@ -381,6 +381,26 @@ A title's own CPU reads of that memory are not seen, so a title that waits for a
 
 To measure how a title runs on a machine, start it with `APS5_TRACE_SUMMARY_EVERY=30 APS5_TRACE_BENCH=1`, play the scene for a few minutes and quit. Every 30 seconds the runtime rewrites `aps5-bench-<commit>-<pid>.json.gz` in `APS5_TRACE_DIR` or the working directory and appends a line to `aps5-summary.jsonl`. The file holds the time between every two presents, the commit, GPU, driver, OS, CPU name, thread count and physical memory, and, when `app0/sce_sys/param.json` is present, the title ID, name and content version. It holds no game data. The first interval includes shader compilation; compare later intervals. The interval still open when the title exits is not written. The fields are described under [summaries for a long session](../dev/BUILD.md#summaries-for-a-long-session).
 
+### Run report
+
+Every run of a converted game writes `anyps5-report.json` when it ends: what the game was, which build ran it, how far it got, how many frames were presented, shader and missing-function counts, and why it stopped. It stays on your machine; nothing is uploaded. The fields are described in [the run report](run-report.md); `docs/run-report.schema.json` is the exact format.
+
+The report is on by default. `--aps5-report=off` on the launch command line or `APS5_REPORT=0` in the environment turns it off, and `--aps5-report=on` or `APS5_REPORT=1` turns it on for a process that is not a converted game; the flag wins over the variable. The game sees the flag in its own arguments. With the report off nothing is collected and nothing is written.
+
+The report is written next to the game's executable. If that folder cannot be written it goes to the AnyPS5 data folder under `reports/<run id>/`. While a run is going, `anyps5-report.<run id>.ckpt` and `.lock` files are kept in the same folder; a run that is killed from outside leaves them there, and the next start turns them into a report marked `recovered` and `incomplete` (`exit: killed`, which means the run ended without writing a report, not that anything killed it).
+
+Which milestones a run records depends on the system:
+
+| System | `loaded`, `started` | `firstDraw`, `firstPresent` | `stage`, frames, frame rate |
+|---|---|---|---|
+| Linux | not recorded | recorded | recorded |
+| Windows | not recorded | recorded | recorded |
+| macOS | recorded | recorded | recorded |
+
+A milestone that is missing from the report is not one the game failed to reach: on Linux and Windows `loaded` and `started` are never recorded, and `stage` and `framesPresented` say how far the run got. On Windows a run that returns from its entry without calling `exit` leaves no report (its checkpoint is removed so it is not recovered as killed).
+
+To share a run, attach `anyps5-report.json` to the title's discussion. The report holds no user name, home folder, host name, address or save data; read it before you share it.
+
 ### Tracing system library calls
 
 Windows, Linux and macOS. An executable converted with `--trace-imports` records the calls it makes to the libraries named in `APS5_TRACE_CALLS`, a comma-separated list such as `libkernel,libSceSaveData`, or `all`. Without the variable nothing is recorded. The crash and abort reports then end with the last 64 calls (on Linux and macOS, which have no crash report, only an abort prints them): sequence number, thread, library, import name as the executable imports it (a NID) and the caller's address. The last 32 of these calls made by the reporting thread follow, taken from the 65536 most recent calls, so a thread whose calls were pushed out of the last 64 by a busier one still shows them. Then come the 32 most called imports since start-up, with their number of calls.
