@@ -1149,11 +1149,12 @@ void RootLinkTest() {
         if (::lstat(entry.path().c_str(), &named) != 0 || !S_ISLNK(named.st_mode) || named.st_uid != 0) continue;
         const fs::path target = fs::read_symlink(entry.path(), error);
         if (error || target.empty()) continue;
-        const fs::path resolved = (fs::path("/") / target).lexically_normal();
-        bool plain = !resolved.empty() && resolved != "/";
+        // The raw components are walked, as the writer does: ".." or "." in the target would be collapsed here but not there.
+        bool plain = !target.relative_path().empty();
         fs::path prefix = "/";
-        for (const auto& part : resolved.relative_path()) {
+        for (const auto& part : target.relative_path()) {
             if (part.empty()) continue;
+            if (part == "." || part == "..") { plain = false; break; }
             prefix /= part;
             struct stat step {};
             if (::lstat(prefix.c_str(), &step) != 0 || !S_ISDIR(step.st_mode)) { plain = false; break; }
