@@ -36,6 +36,8 @@ int passed = 0, failed = 0, notRun = 0;
 
 // Every case is counted on its own, so one failure does not hide the others and a run that executed nothing is an error.
 void Run(const char* name, void (*test)()) {
+    // RR_ONLY=<case> runs a single case, so a case that hangs can be timed out on its own.
+    if (const char* only = std::getenv("RR_ONLY"); only != nullptr && std::string(only) != name) return;
     try {
         test();
         ++passed;
@@ -341,6 +343,7 @@ void FinishWhileProviderBlockedTest() {
     const bool returned = done.wait_for(std::chrono::seconds(8)) == std::future_status::ready;
     held.unlock();
     done.wait();
+    std::this_thread::sleep_for(std::chrono::milliseconds(200));
     Require(returned, "Finish blocked while the game metadata lock was held");
     Require(Contains(Read(collector.ReportPath()), "\"kind\": \"assert\""), "the report of the assertion was not written");
     Require(!fs::exists(collector.CheckpointPath()), "the checkpoint survived the finish");
@@ -713,9 +716,85 @@ void ComponentProvenanceTest() {
     RunReport::RegisterComponent("same-lib", commit, 0);
     Require(modifiedOf("same-lib") == "false", "a matching clean component changed modified");
     RunReport::RegisterComponent("other-lib", std::string(40, 'b'), 0);
-    Require(modifiedOf("other-lib") == "null", "a component from another commit did not make modified unknown");
+    Require(modifiedOf("other-lib") == "true", "a component from another commit did not make modified true");
+    // A mismatching library counts even when it is not one the run requires.
+    Require(modifiedOf("same-lib") == "true", "a registered library from another commit was ignored because it is not required");
     RunReport::RegisterComponent("dirty-lib", commit, 1);
     Require(modifiedOf("dirty-lib") == "true", "a modified component did not make modified true");
+}
+
+void ResumeBlockedWorkerTest() {
+    Directory executable, user;
+    std::mutex metadata;
+    auto settings = SettingsFor(executable.path, user.path, IdA);
+    settings.worker = true;
+    settings.checkpointInterval = std::chrono::milliseconds(10);
+    settings.game = [&metadata] {
+        std::lock_guard guard(metadata);
+        return RunReport::GameInfo{};
+    };
+    RunReport::Collector collector(std::move(settings));
+    std::unique_lock held(metadata);
+    Require(collector.Start(), "the collector did not start");
+    std::this_thread::sleep_for(std::chrono::milliseconds(100));
+    collector.Finish(RunReport::Exit::Abort, {RunReport::Kind::Other, RunReport::Reason::Crash, std::nullopt}, std::nullopt);
+    // The checkpoint worker is stuck behind the metadata lock: reopening the run must not wait for it.
+    auto resumed = std::async(std::launch::async, [&collector] { return collector.Resume(); });
+    const bool returned = resumed.wait_for(std::chrono::seconds(8)) == std::future_status::ready;
+    held.unlock();
+    const bool ok = resumed.get();
+    std::this_thread::sleep_for(std::chrono::milliseconds(300));
+    Require(returned, "Resume waited for a worker that was blocked behind the metadata lock");
+    Require(ok && !collector.Finished(), "the run was not reopened");
+    collector.Finish(RunReport::Exit::Clean, {}, 0);
+    Require(fs::exists(collector.ReportPath()), "the reopened run did not finish");
+}
+
+void ResumeRetractsReportTest() {
+    Directory executable, user;
+    {
+        RunReport::Collector collector(SettingsFor(executable.path, user.path, IdA));
+        Require(collector.Start(), "the collector did not start");
+        collector.Finish(RunReport::Exit::Clean, {}, 0);
+        Require(fs::exists(collector.ReportPath()), "the handoff wrote no report");
+        Require(collector.Resume(), "the run was not reopened");
+        Require(!fs::exists(executable.path / "anyps5-report.json"), "the clean report of the failed handoff stayed visible after the run resumed");
+    }
+    // The resumed run is killed: only the recovered report may describe it.
+    RunReport::Collector next(SettingsFor(executable.path, user.path, IdB));
+    Require(next.Start(), "the next collector did not start");
+    Require(!fs::exists(executable.path / "anyps5-report.json") && Contains(Read(executable.path / "reports" / IdA / "anyps5-report.json"), "\"exit\": \"killed\""), "a killed resumed run is not reported as killed");
+    next.Finish(RunReport::Exit::Clean, {}, 0);
+}
+
+void HandoffOutcomeTest() {
+    {
+        Directory executable, user;
+        RunReport::Collector collector(SettingsFor(executable.path, user.path, IdA));
+        Require(collector.Start(), "the collector did not start");
+        collector.Finish(RunReport::Exit::Clean, {}, 0);
+        Require(collector.Finalized(), "a finished handoff was not reported as finalized");
+    }
+    Directory executable, user;
+    std::atomic<bool> armed{false}, stuck{false}, release{false};
+    auto settings = SettingsFor(executable.path, user.path, IdB);
+    settings.worker = true;
+    settings.checkpointInterval = std::chrono::milliseconds(10);
+    settings.lockWait = std::chrono::milliseconds(150);
+    settings.duringCheckpointWrite = [&] {
+        if (!armed) return;
+        stuck = true;
+        while (!release) std::this_thread::sleep_for(std::chrono::milliseconds(5));
+    };
+    RunReport::Collector collector(std::move(settings));
+    Require(collector.Start(), "the collector did not start");
+    armed = true;
+    for (int attempt = 0; attempt < 400 && !stuck; ++attempt) std::this_thread::sleep_for(std::chrono::milliseconds(5));
+    Require(stuck, "the checkpoint worker never reached the write");
+    collector.Finish(RunReport::Exit::Clean, {}, 0);
+    const bool finalized = collector.Finalized();
+    release = true;
+    Require(!finalized, "a handoff that left a checkpoint write in progress was reported as finalized, so a relaunch would close its descriptors");
 }
 
 #ifndef _WIN32
@@ -920,6 +999,9 @@ int main(int argc, char** argv) {
         Run("strict-checkpoint", StrictCheckpointTest);
         Run("early-identity", EarlyIdentityTest);
         Run("component-provenance", ComponentProvenanceTest);
+        Run("resume-blocked-worker", ResumeBlockedWorkerTest);
+        Run("resume-retracts-report", ResumeRetractsReportTest);
+        Run("handoff-outcome", HandoffOutcomeTest);
 #ifndef _WIN32
         Run("child-exit", ChildExitTest);
         Run("child-quit", ChildQuitTest);

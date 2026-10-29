@@ -31,6 +31,9 @@ extern "C" void LibcRunReportFinishAbort_nid_no_patch(int kind) noexcept;
 extern "C" const char* LibcRunReportRelaunchEnvironment_nid_no_patch() noexcept;
 // A relaunch finishes the report before it replaces the process; when the replacement fails this reopens the run.
 extern "C" void LibcRunReportResume_nid_no_patch() noexcept;
+// Finishes the report before a relaunch. False means the report was not finalized (a checkpoint write is stuck): the files and
+// descriptors of the run are still in use and must not be closed.
+extern "C" bool LibcRunReportHandoff_nid_no_patch(int exitCode) noexcept;
 // Starts the checkpoint worker where it could not be started during loading (Windows); a no-op elsewhere.
 extern "C" void LibcRunReportBeginWorker_nid_no_patch() noexcept;
 // Every runtime library built from the same checkout registers itself; a library from another build makes `modified` unknown.
@@ -160,6 +163,8 @@ public:
     bool WriteCheckpoint();
     // Reopens a run that Finish has already finished (a relaunch whose replacement failed).
     bool Resume();
+    // True when the last Finish wrote the report and released the run's files.
+    bool Finalized() const noexcept { return finalized; }
     void BeginWorker();
     // Reads the game metadata now; a run that fails early still names its game.
     void NoteGame();
@@ -178,7 +183,6 @@ private:
     std::chrono::steady_clock::time_point started;
     std::mutex mutex;
     std::timed_mutex writeMutex;
-    mutable std::mutex gameMutex;
     std::condition_variable changed;
     std::thread worker;
     bool stopWorker = false;
@@ -186,9 +190,12 @@ private:
     std::atomic<int> state{0};
     bool quitRequested = false;
     bool started_ = false;
-    GameInfo gameCache;
-    bool gameKnown = false;
-    int gameAttempts = 0;
+    struct GameState;
+    std::shared_ptr<GameState> game;
+    bool workerRunning = false;
+    bool workerWanted = false;
+    bool reportPublished = false;
+    std::atomic<bool> finalized{false};
     HostIdentifiers host;
 };
 

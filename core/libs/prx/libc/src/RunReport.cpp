@@ -1041,25 +1041,38 @@ void RegisterComponent(std::string_view name, std::string_view commit, int modif
     components.push_back({std::string(name), std::string(commit), modified});
 }
 
-// `modified` is only known when every required library was built from the same commit as libc; otherwise it is unknown.
+// `modified` is false only when every required library registered the commit libc was built from, and none registered another one.
+// A library from another commit makes the build a mix, so modified is true; a missing or unstamped library leaves it unknown.
 BuildInfo Collector::Provenance() const {
     BuildInfo build = settings.build;
     if (settings.requiredComponents.empty() || !build.modified) return build;
     std::lock_guard guard(componentsMutex);
     bool modified = *build.modified;
-    for (const auto& name : settings.requiredComponents) {
-        const auto found = std::ranges::find(Components(), name, &Component::name);
-        if (found == Components().end() || !build.commit || found->commit != *build.commit || found->modified < 0) {
-            build.modified.reset();
-            return build;
-        }
-        modified = modified || found->modified != 0;
+    bool unknown = false;
+    for (const auto& component : Components()) {
+        if (!build.commit || component.commit != *build.commit) modified = true;
+        else if (component.modified < 0) unknown = true;
+        else modified = modified || component.modified != 0;
     }
-    build.modified = modified;
+    for (const auto& name : settings.requiredComponents) {
+        if (std::ranges::find(Components(), name, &Component::name) == Components().end()) unknown = true;
+    }
+    if (modified) build.modified = true;
+    else if (unknown) build.modified.reset();
+    else build.modified = false;
     return build;
 }
 
-Collector::Collector(Settings value) : settings(std::move(value)) {
+struct Collector::GameState {
+    std::mutex mutex;
+    std::condition_variable done;
+    GameInfo cache;
+    bool known = false;
+    int attempts = 0;
+    int pending = 0;
+};
+
+Collector::Collector(Settings value) : settings(std::move(value)), game(std::make_shared<GameState>()) {
     if (!Hex32(settings.runId)) settings.runId = GenerateRunId();
     host = CurrentHostIdentifiers();
 }
@@ -1121,7 +1134,10 @@ bool Collector::Start() {
         return false;
     }
     started_ = true;
-    if (settings.worker) worker = std::thread([this] { Work(); });
+    if (settings.worker) {
+        workerWanted = workerRunning = true;
+        worker = std::thread([this] { Work(); });
+    }
     NoteGame();
     return true;
 }
@@ -1137,35 +1153,47 @@ void Collector::NoteGame() {
 void Collector::BeginWorker() {
     try {
         std::lock_guard guard(mutex);
-        if (!started_ || state != 0 || stopWorker || worker.joinable()) return;
+        if (!started_ || state != 0 || stopWorker || workerRunning) return;
+        if (worker.joinable()) worker.join();
+        workerWanted = workerRunning = true;
         worker = std::thread([this] { Work(); });
     } catch (...) {
     }
 }
 
+// Reopens a run whose relaunch failed. The clean report written for the handoff is taken back, so a run that goes on (and may be
+// killed) is not left with a clean result next to it. A worker that is still blocked is not joined: it carries on by itself.
 bool Collector::Resume() {
     try {
-        std::thread old;
         {
             std::lock_guard guard(mutex);
             if (!started_ || state != 2) return false;
-            old = std::move(worker);
         }
-        if (old.joinable()) old.join();
-        bool busy = false;
-        auto acquired = FileLock::TryAcquire(lockPath, busy);
-        if (!acquired) return false;
-        lock = std::move(acquired);
+        if (finalized) {
+            bool busy = false;
+            auto acquired = FileLock::TryAcquire(lockPath, busy);
+            if (!acquired) return false;
+            lock = std::move(acquired);
+        }
         {
             std::lock_guard guard(mutex);
             state = 0;
             stopWorker = false;
-            workerBusy = false;
+            finalized = false;
         }
         if (!WriteCheckpoint()) return false;
-        if (settings.worker) {
-            std::lock_guard guard(mutex);
-            worker = std::thread([this] { Work(); });
+        if (reportPublished) {
+            std::error_code error;
+            if (fs::symlink_status(reportPath, error).type() == fs::file_type::regular) fs::remove(reportPath, error);
+            reportPublished = false;
+        }
+        std::lock_guard guard(mutex);
+        if (!workerRunning) {
+            if (worker.joinable()) worker.join();
+            if (workerWanted) {
+                workerRunning = true;
+                worker = std::thread([this] { Work(); });
+            }
         }
         return true;
     } catch (...) {
@@ -1174,19 +1202,32 @@ bool Collector::Resume() {
 }
 
 void Collector::RefreshGame(bool force) {
-    {
-        std::lock_guard guard(gameMutex);
+    const auto state = game;
+    std::unique_lock guard(state->mutex);
+    if (state->known || !settings.game) return;
+    if (state->pending == 0) {
         // The worker gives up after a few failures; the end of a clean run may still try once more.
-        if (gameKnown || !settings.game || (!force && gameAttempts >= 5)) return;
-        ++gameAttempts;
+        if (!force && state->attempts >= 5) return;
+        ++state->attempts;
+        ++state->pending;
+        // The provider may take the metadata lock and parse files. It runs on its own thread and is waited for a moment at most, so
+        // neither the checkpoint worker nor a finishing thread can be held by it.
+        std::thread([provider = settings.game, state] {
+            GameInfo fields;
+            try {
+                fields = provider();
+            } catch (...) {
+            }
+            std::lock_guard guard(state->mutex);
+            if (fields.titleId) {
+                state->cache = std::move(fields);
+                state->known = true;
+            }
+            --state->pending;
+            state->done.notify_all();
+        }).detach();
     }
-    // The provider may take the metadata lock and parse files, so no collector lock is held while it runs.
-    auto game = settings.game();
-    std::lock_guard guard(gameMutex);
-    if (game.titleId) {
-        gameCache = std::move(game);
-        gameKnown = true;
-    }
+    state->done.wait_for(guard, std::chrono::seconds(1), [&state] { return state->pending == 0; });
 }
 
 Report Collector::Snapshot(Exit exit, Stop stop, std::optional<std::int64_t> exitCode, bool recovered) const {
@@ -1194,8 +1235,8 @@ Report Collector::Snapshot(Exit exit, Stop stop, std::optional<std::int64_t> exi
     report.generated = FormatUtc(std::chrono::system_clock::now());
     report.build = Provenance();
     {
-        std::lock_guard guard(gameMutex);
-        report.game = gameCache;
+        std::lock_guard guard(game->mutex);
+        report.game = game->cache;
     }
     if (report.game.titleId) {
         static const std::regex titleId("^[A-Z]{4}[0-9]{5}$");
@@ -1254,6 +1295,7 @@ void Collector::Work() {
         changed.notify_all();
     }
     workerBusy = false;
+    workerRunning = false;
     changed.notify_all();
 }
 
@@ -1292,6 +1334,7 @@ void Collector::Finish(Exit exit, Stop stop, std::optional<std::int64_t> exitCod
             // A checkpoint write is stuck. Touching the same files now could race it, so leave the last checkpoint for the next start to recover.
             std::fputs("[run-report] a checkpoint write did not finish; the report of this run is left to the next start\n", stderr);
             std::lock_guard guard(mutex);
+            finalized = false;
             state = 2;
             changed.notify_all();
             return;
@@ -1300,11 +1343,13 @@ void Collector::Finish(Exit exit, Stop stop, std::optional<std::int64_t> exitCod
             const auto text = Serialize(Snapshot(exit, std::move(stop), exitCode, false), host);
             std::string error;
             if (WriteAtomically(reportPath, text, settings.runId.substr(0, 8), error)) {
+                reportPublished = true;
                 if (settings.beforeCheckpointRemoval) settings.beforeCheckpointRemoval();
                 // The checkpoint goes while the lock is still held, so no other run can find it unlocked and report this run as killed.
                 std::error_code ignored;
                 fs::remove(checkpointPath, ignored);
                 lock->RemoveAndRelease();
+                finalized = true;
                 std::fprintf(stderr, "[run-report] wrote %s\n", reportPath.filename().string().c_str());
             } else {
                 std::fprintf(stderr, "[run-report] could not write %s: %s\n", reportPath.filename().string().c_str(), error.c_str());
@@ -1429,6 +1474,12 @@ extern "C" void LibcRunReportQuitRequested_nid_no_patch() noexcept {
 extern "C" void LibcRunReportFinishExit_nid_no_patch(int exitCode) noexcept {
     if (collector == nullptr) return;
     collector->Finish(RunReport::Exit::Clean, RunReport::Stop{RunReport::Kind::None, RunReport::Reason::GuestExit, std::nullopt}, exitCode);
+}
+
+extern "C" bool LibcRunReportHandoff_nid_no_patch(int exitCode) noexcept {
+    if (collector == nullptr) return true;
+    collector->Finish(RunReport::Exit::Clean, RunReport::Stop{RunReport::Kind::None, RunReport::Reason::GuestExit, std::nullopt}, exitCode);
+    return collector->Finalized();
 }
 
 extern "C" void LibcRunReportFinishAbort_nid_no_patch(int kind) noexcept {
