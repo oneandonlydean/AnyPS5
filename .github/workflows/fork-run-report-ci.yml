@@ -1,0 +1,102 @@
+name: Fork run report CI
+
+on:
+  push:
+    branches: [run-report-v1-ci]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: fork-run-report-ci-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  WINLIBS_RELEASE: 15.2.0posix-14.0.0-ucrt-r7
+  WINLIBS_ZIP: winlibs-x86_64-posix-seh-gcc-15.2.0-mingw-w64ucrt-14.0.0-r7.zip
+  RUN_REPORT_TESTS: ^(run_report|run_report_schema|run_report_revision|agc_run_report_shader_failure|agc_command_batch_failure)$
+
+jobs:
+  windows:
+    runs-on: windows-latest
+    timeout-minutes: 90
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+      - name: Check out the submodules
+        run: git submodule update --init --recursive --depth 1 --jobs 8
+      - name: Point the WinLibs CMake at the CA bundle of Git for Windows
+        run: |
+          for prefix in ucrt64 mingw64; do
+            bundle="C:/Program Files/Git/$prefix/etc/ssl/certs/ca-bundle.crt"
+            if [ -f "$bundle" ]; then echo "SSL_CERT_FILE=$bundle" >> "$GITHUB_ENV"; exit 0; fi
+          done
+          echo "::error::No CA bundle found in Git for Windows"; exit 1
+      - id: toolchain
+        uses: actions/cache@v6
+        with:
+          path: C:\winlibs
+          key: ${{ env.WINLIBS_ZIP }}
+      - if: steps.toolchain.outputs.cache-hit != 'true'
+        run: |
+          curl -sSfL -o "$RUNNER_TEMP/winlibs.zip" "https://github.com/brechtsanders/winlibs_mingw/releases/download/$WINLIBS_RELEASE/$WINLIBS_ZIP"
+          7z x "$RUNNER_TEMP/winlibs.zip" -oC:/winlibs > /dev/null
+      - run: echo 'C:\winlibs\mingw64\bin' >> "$GITHUB_PATH"
+      - name: Install the schema validator
+        run: |
+          python -m venv "$RUNNER_TEMP/venv"
+          "$RUNNER_TEMP/venv/Scripts/python" -m pip install -r tools/requirements-run-report.txt
+          echo "$RUNNER_TEMP/venv/Scripts" >> "$GITHUB_PATH"
+      - uses: hendrikmuhs/ccache-action@v1.2.24
+        with:
+          key: fork-run-report-windows
+          evict-old-files: job
+      - name: Configure
+        shell: cmd
+        run: cmake -S . -B build -G Ninja -DCMAKE_BUILD_TYPE=Release -DBUILD_TESTING=ON -DCMAKE_C_COMPILER=gcc -DCMAKE_CXX_COMPILER=g++ -DCMAKE_C_COMPILER_LAUNCHER=ccache -DCMAKE_CXX_COMPILER_LAUNCHER=ccache
+      - name: Build the libraries and the run report tests
+        shell: cmd
+        run: cmake --build build --target libs run_report_tests agc_run_report_shader_failure_tests agc_command_batch_failure_tests
+      - name: Run the run report tests
+        run: ctest --test-dir build --output-on-failure --timeout 120 --no-tests=error -R "$RUN_REPORT_TESTS" | tee ctest.log
+      - name: Show the test counts
+        if: ${{ !cancelled() }}
+        run: grep -E "tests passed|Not Run|Skipped|Failed" ctest.log || true
+
+  macos:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [macos-15-intel, macos-15]
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 90
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+      - name: Check out the submodules
+        run: git submodule update --init --recursive --depth 1 --jobs 8
+      - if: ${{ matrix.os == 'macos-15' }}
+        run: sudo softwareupdate --install-rosetta --agree-to-license
+      - name: Install the tools
+        run: |
+          brew install ninja
+          python3 -m venv "$RUNNER_TEMP/venv"
+          "$RUNNER_TEMP/venv/bin/python" -m pip install -r tools/requirements-run-report.txt
+          echo "$RUNNER_TEMP/venv/bin" >> "$GITHUB_PATH"
+      - name: Configure
+        run: cmake -S . -B build -G Ninja -DCMAKE_BUILD_TYPE=Release -DBUILD_TESTING=ON -DCMAKE_CXX_COMPILER=clang++
+      - name: Build the libraries and the run report tests
+        run: cmake --build build --target libs run_report_tests agc_run_report_shader_failure_tests agc_command_batch_failure_tests
+      - name: Run the run report tests
+        run: ctest --test-dir build --output-on-failure --timeout 120 --no-tests=error -R "$RUN_REPORT_TESTS" | tee ctest.log
+      - name: Show the test counts
+        if: ${{ !cancelled() }}
+        run: grep -E "tests passed|Not Run|Skipped|Failed" ctest.log || true
