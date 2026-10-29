@@ -79,7 +79,7 @@ class MilestoneDocsTests(unittest.TestCase):
 
     def test_system_text_rules_are_documented(self):
         text = (ROOT / "docs/user/run-report.md").read_text(encoding="utf-8")
-        for phrase in ("a host name that is a word of the operating system's own name", "A login is never given that allowance", "first three numbers of the kernel release", "UUID"):
+        for phrase in ("the `ID` value of `os-release`", "The words of `NAME` and `ID_LIKE` do not count", "also clears `Intel Arc`", "long git hash", "A login is never given that allowance", "first three numbers of the kernel release", "UUID"):
             self.assertIn(phrase, text)
 
     def test_system_fields_are_documented(self):

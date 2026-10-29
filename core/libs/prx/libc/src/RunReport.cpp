@@ -390,38 +390,34 @@ std::string LowerAscii(std::string_view text) {
     return result;
 }
 
-// The words of the operating system's own name: os-release ID, ID_LIKE and the words of NAME on Linux.
+// The operating system's own identifier: the os-release ID value on Linux ("cachyos"), a single lowercase token.
 std::vector<std::string> OsIdentityWords() {
     std::vector<std::string> words;
-    const auto addWords = [&](std::string_view text) {
-        std::string word;
-        for (const char c : text) {
-            if (std::isalnum(static_cast<unsigned char>(c))) {
-                word += static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
-            } else if (!word.empty()) {
-                words.push_back(std::move(word));
-                word.clear();
-            }
-        }
-        if (!word.empty()) words.push_back(std::move(word));
-    };
 #if defined(__linux__)
     std::ifstream release("/etc/os-release");
-    for (std::string line; std::getline(release, line);) {
-        for (const std::string_view key : {"ID=", "ID_LIKE=", "NAME="}) {
-            if (line.rfind(key, 0) == 0) addWords(line.substr(key.size()));
-        }
-    }
-    words.push_back("linux");
+    words = OsIdentityFromOsRelease(release);
 #elif defined(__APPLE__)
     words.push_back("macos");
-    words.push_back("darwin");
 #elif defined(_WIN32)
     words.push_back("windows");
 #endif
     return words;
 }
 
+}
+
+std::vector<std::string> OsIdentityFromOsRelease(std::istream& stream) {
+    std::vector<std::string> words;
+    for (std::string line; std::getline(stream, line);) {
+        if (line.rfind("ID=", 0) != 0) continue;
+        auto value = line.substr(3u);
+        if (value.size() >= 2u && (value.front() == '"' || value.front() == '\'')) value = value.substr(1u, value.size() - 2u);
+        value = LowerAscii(value);
+        const bool token = !value.empty() && std::ranges::all_of(value, [](char c) { return (c >= 'a' && c <= 'z') || (c >= '0' && c <= '9') || c == '-' || c == '_' || c == '.'; });
+        if (token) words.push_back(std::move(value));
+        break;
+    }
+    return words;
 }
 
 HostIdentifiers CurrentHostIdentifiers() {
@@ -482,15 +478,15 @@ HostIdentifiers CurrentHostIdentifiers() {
     return host;
 }
 
-HostIdentifiers MachineNames(const HostIdentifiers& host) {
+HostIdentifiers MachineNames(const HostIdentifiers& host, bool forOsVersion) {
     HostIdentifiers names;
     for (const auto& word : host.words) {
         const auto lowered = LowerAscii(word);
         const auto in = [&](const std::vector<std::string>& list) {
             return std::ranges::any_of(list, [&](const std::string& other) { return LowerAscii(other) == lowered; });
         };
-        // A host name that is a word of the OS's identity, and is not also a user name, names a public product: it stays allowed.
-        if (in(host.hosts) && !in(host.users) && in(host.osIdentity)) continue;
+        // For the OS version, a host name that is the OS identifier and is not also a user name names a public product: it stays allowed.
+        if (forOsVersion && in(host.hosts) && !in(host.users) && in(host.osIdentity)) continue;
         names.words.push_back(word);
     }
     return names;
@@ -655,17 +651,18 @@ Report Sanitized(Report report, const HostIdentifiers& host) {
     if (report.os && *report.os != "linux" && *report.os != "windows" && *report.os != "macos") report.os.reset();
     // The machine: model strings pass the same text filter as everything else; a value outside its schema pattern is left out.
         // They are compared with the user's names always, and with the machine's name unless it is a word of the OS's own identity.
-    const auto machineNames = MachineNames(host);
-    const auto text = [&](std::optional<std::string>& value) {
-        if (value && (value->empty() || !SafeText(*value, machineNames).has_value() || SerialLike(*value))) value.reset();
+    const auto versionNames = MachineNames(host, true);
+    const auto machineNames = MachineNames(host, false);
+    const auto text = [&](std::optional<std::string>& value, const HostIdentifiers& names) {
+        if (value && (value->empty() || !SafeText(*value, names).has_value() || SerialLike(*value))) value.reset();
     };
-    text(report.machine.osVersion);
-    text(report.machine.cpu);
+    text(report.machine.osVersion, versionNames);
+    text(report.machine.cpu, machineNames);
     if (report.machine.ramGiB && (*report.machine.ramGiB < 1 || *report.machine.ramGiB > 1048576)) report.machine.ramGiB.reset();
     if (report.machine.gpu) {
         auto& gpu = *report.machine.gpu;
-        text(gpu.name);
-        text(gpu.driver);
+        text(gpu.name, machineNames);
+        text(gpu.driver, machineNames);
         if (gpu.vendor && *gpu.vendor != "AMD" && *gpu.vendor != "NVIDIA" && *gpu.vendor != "Intel" && *gpu.vendor != "Apple" && *gpu.vendor != "Other") gpu.vendor.reset();
         if (gpu.vulkan && !matches(gpu.vulkan, "[0-9]{1,3}\\.[0-9]{1,3}\\.[0-9]{1,5}")) gpu.vulkan.reset();
     }

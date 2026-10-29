@@ -7,6 +7,7 @@
 #include <cstdint>
 #include <filesystem>
 #include <functional>
+#include <istream>
 #include <memory>
 #include <mutex>
 #include <optional>
@@ -201,14 +202,18 @@ struct HostIdentifiers {
     // Of those, the ones that are the user's (login, account name, home folder and its leaf) and the machine's.
     std::vector<std::string> users;
     std::vector<std::string> hosts;
-    // Words of the operating system's own identity (os-release ID, ID_LIKE and the words of NAME; "windows", "macos"), lowercase.
-    // A host name that is such a word is the name of a public product ("cachyos" on CachyOS), so the machine fields may carry it.
-    // A user name never gets this allowance.
+    // The operating system's own identifier: the os-release ID value ("cachyos", "arch", "ubuntu"; one lowercase token), or "windows" or
+    // "macos". A host name that equals it is the name of a public product, so the OS version may carry it. Only the ID counts, not the
+    // words of NAME or ID_LIKE, which anyone can edit. A user name never gets this allowance, nor does any other machine field.
     std::vector<std::string> osIdentity;
 };
 
-// The words that the machine fields (system.*) are compared with: all the names, except host names that are words of the OS identity.
-HostIdentifiers MachineNames(const HostIdentifiers& host);
+// The OS identifier in the text of an os-release file: the ID value when it is one lowercase token, nothing otherwise. NAME, ID_LIKE
+// and every other line are ignored.
+std::vector<std::string> OsIdentityFromOsRelease(std::istream& stream);
+// The words that a machine field (system.*) is compared with: all the names. For the OS version only (`forOsVersion`) a host name that
+// equals the OS identifier is left out of them; the CPU, GPU name and GPU driver are compared with every name.
+HostIdentifiers MachineNames(const HostIdentifiers& host, bool forOsVersion);
 // "NAME VERSION_ID (kernel major.minor.patch)": structured, with the vendor suffix and the fourth number of the kernel release left out.
 std::string FormatOsVersion(std::string_view name, std::string_view versionId, std::string_view kernelRelease);
 

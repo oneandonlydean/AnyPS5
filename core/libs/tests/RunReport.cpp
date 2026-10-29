@@ -11,6 +11,7 @@
 #include <iostream>
 #include <iterator>
 #include <mutex>
+#include <sstream>
 #include <stdexcept>
 #include <string>
 #include <thread>
@@ -898,6 +899,73 @@ void MachineHostNameRulesTest() {
     Require(Contains(RunReport::Serialize(MachineReport(machine), both), "\"osVersion\": null"), "a name that is both login and host name got the host-name allowance");
 }
 
+void OsIdentityOnlyForTheOsVersionTest() {
+    // Codex's case: the host is called bob, the login alice, and NAME/ID_LIKE of os-release carry "bob". Only the ID value counts as the
+    // identity of the OS, so bob is not exempt anywhere.
+    RunReport::HostIdentifiers bob;
+    bob.words = {"bob", "alice"};
+    bob.hosts = {"bob"};
+    bob.users = {"alice"};
+    bob.osIdentity = {"ubuntu"};
+    auto machine = CleanMachine();
+    machine.osVersion = "Ubuntu Bob Remix 24.04 (kernel 6.8.0)";
+    machine.cpu = "CPU of bob";
+    machine.gpu->name = "GPU of bob";
+    machine.gpu->driver = "driver of bob";
+    auto text = RunReport::Serialize(MachineReport(machine), bob);
+    Require(!Contains(text, "Bob") && !Contains(text, "bob") && Contains(text, "\"osVersion\": null") && Contains(text, "\"cpu\": null") && Contains(text, "\"name\": null") && Contains(text, "\"driver\": null"), "a host name outside the OS identifier survived in a machine field: " + text);
+    // A host called cachyos on CachyOS (ID=cachyos) keeps "CachyOS" in the OS version, and nowhere else.
+    RunReport::HostIdentifiers cachy;
+    cachy.words = {"cachyos"};
+    cachy.hosts = {"cachyos"};
+    cachy.osIdentity = {"cachyos"};
+    machine = CleanMachine();
+    machine.osVersion = "CachyOS Linux (kernel 7.2.3)";
+    text = RunReport::Serialize(MachineReport(machine), cachy);
+    Require(Contains(text, "\"osVersion\": \"CachyOS Linux (kernel 7.2.3)\""), "a host named after the OS identifier lost the OS version: " + text);
+    machine.cpu = "Virtual CPU of cachyos";
+    machine.gpu->name = "GPU cachyos";
+    machine.gpu->driver = "driver cachyos";
+    text = RunReport::Serialize(MachineReport(machine), cachy);
+    Require(!Contains(text, "of cachyos") && !Contains(text, "GPU cachyos") && !Contains(text, "driver cachyos") && Contains(text, "\"cpu\": null") && Contains(text, "\"osVersion\": \"CachyOS Linux (kernel 7.2.3)\""), "the OS-identifier allowance reached another field: " + text);
+    // A compound host name is not the identifier; the whole name is compared and the OS version without it keeps its name.
+    RunReport::HostIdentifiers compound;
+    compound.words = {"ubuntu-bob"};
+    compound.hosts = {"ubuntu-bob"};
+    compound.osIdentity = {"ubuntu"};
+    machine = CleanMachine();
+    machine.osVersion = "Ubuntu 24.04 (kernel 6.8.0-ubuntu-bob)";
+    text = RunReport::Serialize(MachineReport(machine), compound);
+    Require(Contains(text, "\"osVersion\": \"Ubuntu 24.04 (kernel 6.8.0-ubuntu-bob)\"") == false, "a compound host name stayed in the OS version: " + text);
+}
+
+void OsReleaseIdentityTest() {
+    // Only the ID value is the identity of the OS; NAME and ID_LIKE are text anyone can edit.
+    std::istringstream codex("NAME=\"Ubuntu Bob Remix\"\nID=ubuntu\nID_LIKE=\"debian bob\"\nPRETTY_NAME=\"Ubuntu Bob Remix 24.04\"\n");
+    const auto ids = RunReport::OsIdentityFromOsRelease(codex);
+    Require(ids.size() == 1 && ids[0] == "ubuntu", "the OS identity is not the single ID value");
+    std::istringstream quoted("ID=\"cachyos\"\n");
+    Require(RunReport::OsIdentityFromOsRelease(quoted) == std::vector<std::string>{"cachyos"}, "a quoted ID was not read");
+    std::istringstream edited("ID=\"ubuntu bob\"\n");
+    Require(RunReport::OsIdentityFromOsRelease(edited).empty(), "an ID that is not one token was trusted");
+    std::istringstream none("NAME=Something\nID_LIKE=bob\n");
+    Require(RunReport::OsIdentityFromOsRelease(none).empty(), "an os-release without an ID gave an identity");
+    // The whole chain with Codex's host: bob is gone from every machine field.
+    RunReport::HostIdentifiers host;
+    host.words = {"bob", "alice"};
+    host.hosts = {"bob"};
+    host.users = {"alice"};
+    std::istringstream again("NAME=\"Ubuntu Bob Remix\"\nID=ubuntu\nID_LIKE=\"debian bob\"\n");
+    host.osIdentity = RunReport::OsIdentityFromOsRelease(again);
+    auto machine = CleanMachine();
+    machine.osVersion = "Ubuntu Bob Remix 24.04 (kernel 6.8.0)";
+    machine.cpu = "Bob CPU";
+    machine.gpu->name = "Bob GPU";
+    machine.gpu->driver = "Bob driver";
+    const auto text = RunReport::Serialize(MachineReport(machine), host);
+    Require(!Contains(text, "Bob") && !Contains(text, "bob"), "bob survived in a machine field: " + text);
+}
+
 void OsVersionFormatTest() {
     Require(RunReport::FormatOsVersion("Arch Linux", "", "6.8.0-bob-custom") == "Arch Linux (kernel 6.8.0)", "the vendor suffix of the kernel release was kept: " + RunReport::FormatOsVersion("Arch Linux", "", "6.8.0-bob-custom"));
     Require(RunReport::FormatOsVersion("Ubuntu", "24.04", "5.15.153.1-microsoft-standard-WSL2") == "Ubuntu 24.04 (kernel 5.15.153)", "a WSL2 kernel release was not cut to three numbers");
@@ -980,10 +1048,11 @@ void HostProbeTest() {
     Require(host.cpu && !host.cpu->empty(), "the CPU model of this host was not read");
 #endif
     // None of it is filtered out of the report by the rules that apply to it on this host.
-    const auto names = RunReport::MachineNames(RunReport::CurrentHostIdentifiers());
-    for (const auto& value : {host.osVersion, host.cpu}) {
-        if (value) Require(RunReport::SafeText(*value, names).has_value(), "a probed value would be filtered out of the report: " + *value);
-    }
+    const auto current = RunReport::CurrentHostIdentifiers();
+    const auto versionNames = RunReport::MachineNames(current, true);
+    const auto machineNames = RunReport::MachineNames(current, false);
+    if (host.osVersion) Require(RunReport::SafeText(*host.osVersion, versionNames).has_value(), "the OS version would be filtered out of the report: " + *host.osVersion);
+    if (host.cpu) Require(RunReport::SafeText(*host.cpu, machineNames).has_value(), "the CPU model would be filtered out of the report: " + *host.cpu);
 #endif
 }
 
@@ -1969,6 +2038,8 @@ int main(int argc, char** argv) {
         Run("machine-field-canary", MachineFieldCanaryTest);
         Run("machine-host-name-rules", MachineHostNameRulesTest);
         Run("os-version-format", OsVersionFormatTest);
+        Run("os-identity-only-for-the-os-version", OsIdentityOnlyForTheOsVersionTest);
+        Run("os-release-identity", OsReleaseIdentityTest);
         Run("machine-live-and-recovered", MachineLiveAndRecoveredTest);
         Run("commit-with-hex-name", CommitWithHexNameTest);
         Run("search-only-ancestor", SearchOnlyAncestorTest);
