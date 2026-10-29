@@ -196,8 +196,21 @@ struct Report {
 };
 
 struct HostIdentifiers {
+    // Everything that must not appear in text: the user's names and paths and the machine's names.
     std::vector<std::string> words;
+    // Of those, the ones that are the user's (login, account name, home folder and its leaf) and the machine's.
+    std::vector<std::string> users;
+    std::vector<std::string> hosts;
+    // Words of the operating system's own identity (os-release ID, ID_LIKE and the words of NAME; "windows", "macos"), lowercase.
+    // A host name that is such a word is the name of a public product ("cachyos" on CachyOS), so the machine fields may carry it.
+    // A user name never gets this allowance.
+    std::vector<std::string> osIdentity;
 };
+
+// The words that the machine fields (system.*) are compared with: all the names, except host names that are words of the OS identity.
+HostIdentifiers MachineNames(const HostIdentifiers& host);
+// "NAME VERSION_ID (kernel major.minor.patch)": structured, with the vendor suffix and the fourth number of the kernel release left out.
+std::string FormatOsVersion(std::string_view name, std::string_view versionId, std::string_view kernelRelease);
 
 enum class Choice { Default, On, Off };
 

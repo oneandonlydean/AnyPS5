@@ -818,6 +818,157 @@ void SystemFieldsTest() {
     Require(Contains(text, "\"osVersion\": null") && Contains(text, "\"cpu\": null") && Contains(text, "\"driver\": \"driver 1.0\""), "a clean machine value was lost or an unsafe one kept: " + text);
 }
 
+RunReport::Report MachineReport(const RunReport::SystemInfo& machine) {
+    auto report = SampleReport();
+    report.machine = machine;
+    return report;
+}
+
+RunReport::SystemInfo CleanMachine() {
+    RunReport::SystemInfo machine;
+    machine.osVersion = "Test Linux 1 (kernel 6.1.0)";
+    machine.cpu = "Test CPU 9000 8-Core Processor";
+    machine.ramGiB = 32;
+    machine.gpu = RunReport::GpuInfo{std::string("NVIDIA"), std::string("Test GPU 4090"), std::string("NVIDIA 575.64.03"), std::string("1.3.280")};
+    return machine;
+}
+
+void MachineFieldCanaryTest() {
+    // One hostile value in one machine field at a time, the others clean: the hostile one goes, the others stay.
+    RunReport::HostIdentifiers host;
+    host.words = {"canaryuser9", "canary-host-9"};
+    host.users = {"canaryuser9"};
+    host.hosts = {"canary-host-9"};
+    host.osIdentity = {"cachyos", "linux"};
+    const char* canaries[] = {"canaryuser9", "canary-host-9", "a1b2c3d4-e5f6-4a3b-8c9d-aabbccddeeff", "/home/someone/x", "SN1234ABCD5678", "mail@example.com"};
+    struct Field {
+        const char* name;
+        void (*apply)(RunReport::SystemInfo&, const std::string&);
+        const char* kept;
+    };
+    const Field fields[] = {
+        {"osVersion", [](RunReport::SystemInfo& m, const std::string& v) { m.osVersion = "Linux " + v + " (kernel 6.1.0)"; }, "\"Test CPU 9000 8-Core Processor\""},
+        {"cpu", [](RunReport::SystemInfo& m, const std::string& v) { m.cpu = "CPU " + v; }, "\"Test Linux 1 (kernel 6.1.0)\""},
+        {"gpu name", [](RunReport::SystemInfo& m, const std::string& v) { m.gpu->name = "GPU " + v; }, "\"NVIDIA 575.64.03\""},
+        {"gpu driver", [](RunReport::SystemInfo& m, const std::string& v) { m.gpu->driver = "Driver " + v; }, "\"Test GPU 4090\""},
+    };
+    for (const std::string canary : canaries) {
+        for (const auto& field : fields) {
+            auto machine = CleanMachine();
+            field.apply(machine, canary);
+            const auto text = RunReport::Serialize(MachineReport(machine), host);
+            Require(!Contains(text, canary), std::string("the ") + field.name + " kept the canary " + canary + ": " + text);
+            Require(Contains(text, field.kept) && Contains(text, "\"ramGiB\": 32") && Contains(text, "\"vulkan\": \"1.3.280\""), std::string("a clean machine value was lost with the hostile ") + field.name + " " + canary + ": " + text);
+        }
+    }
+}
+
+void MachineHostNameRulesTest() {
+    RunReport::SystemInfo machine = CleanMachine();
+    machine.osVersion = "CachyOS Linux (kernel 7.2.3)";
+    // A host named after its own distribution keeps the name of the distribution.
+    RunReport::HostIdentifiers sameAsDistro;
+    sameAsDistro.words = {"cachyos"};
+    sameAsDistro.hosts = {"cachyos"};
+    sameAsDistro.osIdentity = {"cachyos", "linux", "arch"};
+    Require(Contains(RunReport::Serialize(MachineReport(machine), sameAsDistro), "\"osVersion\": \"CachyOS Linux (kernel 7.2.3)\""), "a host named after its distribution lost the OS version");
+    // A host name that is not a word of the OS identity is removed from a machine string.
+    RunReport::HostIdentifiers laptop;
+    laptop.words = {"bobs-laptop"};
+    laptop.hosts = {"bobs-laptop"};
+    laptop.osIdentity = {"cachyos", "linux"};
+    machine.osVersion = "CachyOS Linux (kernel 6.8.0-bobs-laptop)";
+    machine.cpu = "CPU of bobs-laptop";
+    const auto otherText = RunReport::Serialize(MachineReport(machine), laptop);
+    Require(!Contains(otherText, "bobs-laptop") && Contains(otherText, "\"osVersion\": null") && Contains(otherText, "\"cpu\": null"), "a host name outside the OS identity stayed in a machine string: " + otherText);
+    // A login equal to a distribution word is a user name and gets no allowance: the OS version is left out (documented).
+    RunReport::HostIdentifiers login;
+    login.words = {"arch"};
+    login.users = {"arch"};
+    login.osIdentity = {"arch", "linux"};
+    machine = CleanMachine();
+    machine.osVersion = "Arch Linux (kernel 6.8.0)";
+    Require(Contains(RunReport::Serialize(MachineReport(machine), login), "\"osVersion\": null"), "a login that equals a distribution word was compared with nothing");
+    // The same word as login and as host name is a user name.
+    RunReport::HostIdentifiers both;
+    both.words = {"arch"};
+    both.users = {"arch"};
+    both.hosts = {"arch"};
+    both.osIdentity = {"arch"};
+    Require(Contains(RunReport::Serialize(MachineReport(machine), both), "\"osVersion\": null"), "a name that is both login and host name got the host-name allowance");
+}
+
+void OsVersionFormatTest() {
+    Require(RunReport::FormatOsVersion("Arch Linux", "", "6.8.0-bob-custom") == "Arch Linux (kernel 6.8.0)", "the vendor suffix of the kernel release was kept: " + RunReport::FormatOsVersion("Arch Linux", "", "6.8.0-bob-custom"));
+    Require(RunReport::FormatOsVersion("Ubuntu", "24.04", "5.15.153.1-microsoft-standard-WSL2") == "Ubuntu 24.04 (kernel 5.15.153)", "a WSL2 kernel release was not cut to three numbers");
+    Require(RunReport::FormatOsVersion("", "", "6.1") == "kernel 6.1", "a two-number release without a name was wrong");
+    Require(RunReport::FormatOsVersion("Fedora Linux", "40", "") == "Fedora Linux 40", "a missing kernel release broke the name");
+    // The formatted WSL2 string passes the address filter (four numbers would have been taken for an IPv4 address).
+    const RunReport::HostIdentifiers none;
+    auto machine = CleanMachine();
+    machine.osVersion = RunReport::FormatOsVersion("Ubuntu", "24.04", "5.15.153.1-microsoft-standard-WSL2");
+    Require(Contains(RunReport::Serialize(MachineReport(machine), none), "\"osVersion\": \"Ubuntu 24.04 (kernel 5.15.153)\""), "a WSL2 host lost its OS version");
+}
+
+void MachineLiveAndRecoveredTest() {
+#ifdef _WIN32
+    throw NotRun("environment canaries are POSIX here");
+#else
+    ::setenv("USER", "canaryuser9", 1);
+    ::setenv("LOGNAME", "canaryuser9", 1);
+    ::setenv("HOME", "/home/canaryuser9", 1);
+    ::setenv("HOSTNAME", "canary-host-9", 1);
+    const char* hostile[] = {"canaryuser9", "canary-host-9", "a1b2c3d4-e5f6-4a3b-8c9d-aabbccddeeff", "/home/someone/x"};
+    for (const std::string canary : hostile) {
+        for (int field = 0; field < 4; ++field) {
+            auto machine = CleanMachine();
+            const std::string value = "x " + canary;
+            if (field == 0) machine.osVersion = value;
+            if (field == 1) machine.cpu = value;
+            if (field == 2) machine.gpu->name = value;
+            if (field == 3) machine.gpu->driver = value;
+            const auto describe = "field " + std::to_string(field) + " = " + canary;
+            const auto settingsFor = [&](Directory& executable, Directory& user, const char* id) {
+                auto settings = Covered(executable.path, user.path, id);
+                settings.worker = true;
+                settings.checkpointInterval = std::chrono::milliseconds(10);
+                settings.machine = machine;
+                return settings;
+            };
+            const auto check = [&](const std::string& text, const char* where) {
+                Require(!Contains(text, canary), std::string(where) + " kept the hostile " + describe + ": " + text);
+                Require(Contains(text, "\"ramGiB\": 32") && Contains(text, "\"vulkan\": \"1.3.280\""), std::string(where) + " lost a clean machine value next to the hostile " + describe + ": " + text);
+            };
+            Directory executable, user;
+            {
+                RunReport::Collector live(settingsFor(executable, user, IdA));
+                Require(live.Start(), "the collector did not start");
+                live.NoteGpu(*machine.gpu);
+                live.Finish(RunReport::Exit::Clean, {}, 0);
+                check(Read(live.ReportPath()), "the live report");
+            }
+            Directory other, userOther;
+            {
+                RunReport::Collector abandoned(settingsFor(other, userOther, IdB));
+                Require(abandoned.Start(), "the collector did not start");
+                abandoned.NoteGpu(*machine.gpu);
+                abandoned.NoteMilestone(2);
+                for (int attempt = 0; attempt < 300; ++attempt) {
+                    if (Contains(Read(abandoned.CheckpointPath()), "\"firstDraw\"")) break;
+                    std::this_thread::sleep_for(std::chrono::milliseconds(10));
+                }
+            }
+            RunReport::Collector next(Covered(other.path, userOther.path, "cccccccccccccccccccccccccccccccc"));
+            Require(next.Start(), "the next collector did not start");
+            const auto recovered = Read(other.path / "reports" / IdB / "anyps5-report.json");
+            Require(Contains(recovered, "\"recovered\": true"), "no recovered report for " + describe);
+            check(recovered, "the recovered report");
+            next.Finish(RunReport::Exit::Clean, {}, 0);
+        }
+    }
+#endif
+}
+
 void HostProbeTest() {
 #ifndef __linux__
     throw NotRun("the host probe is checked on Linux here");
@@ -828,8 +979,8 @@ void HostProbeTest() {
 #if defined(__x86_64__) || defined(__i386__)
     Require(host.cpu && !host.cpu->empty(), "the CPU model of this host was not read");
 #endif
-    // None of it is an address, an account number or a path.
-    const RunReport::HostIdentifiers names;
+    // None of it is filtered out of the report by the rules that apply to it on this host.
+    const auto names = RunReport::MachineNames(RunReport::CurrentHostIdentifiers());
     for (const auto& value : {host.osVersion, host.cpu}) {
         if (value) Require(RunReport::SafeText(*value, names).has_value(), "a probed value would be filtered out of the report: " + *value);
     }
@@ -1815,6 +1966,10 @@ int main(int argc, char** argv) {
         Run("junction", JunctionTest);
         Run("system-fields", SystemFieldsTest);
         Run("host-probe", HostProbeTest);
+        Run("machine-field-canary", MachineFieldCanaryTest);
+        Run("machine-host-name-rules", MachineHostNameRulesTest);
+        Run("os-version-format", OsVersionFormatTest);
+        Run("machine-live-and-recovered", MachineLiveAndRecoveredTest);
         Run("commit-with-hex-name", CommitWithHexNameTest);
         Run("search-only-ancestor", SearchOnlyAncestorTest);
         Run("format-stop-key", FormatStopKeyTest);

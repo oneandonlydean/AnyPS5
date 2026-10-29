@@ -77,6 +77,11 @@ class MilestoneDocsTests(unittest.TestCase):
         self.assertRegex(text, r"`reports/<run id>/anyps5-report.json` in the run folder, not next to the executable")
         self.assertIn("`kind: other`, `reason: unclean-unknown`", text)
 
+    def test_system_text_rules_are_documented(self):
+        text = (ROOT / "docs/user/run-report.md").read_text(encoding="utf-8")
+        for phrase in ("a host name that is a word of the operating system's own name", "A login is never given that allowance", "first three numbers of the kernel release", "UUID"):
+            self.assertIn(phrase, text)
+
     def test_system_fields_are_documented(self):
         text = (ROOT / "docs/user/run-report.md").read_text(encoding="utf-8")
         for field in ("system.osVersion", "system.cpu", "system.ramGiB", "system.gpu"):

@@ -280,18 +280,20 @@ SystemInfo ProbeHost() {
     SystemInfo info;
     info.cpu = CpuBrand();
 #if defined(__linux__)
-    std::string name;
+    std::string name, versionId;
     std::ifstream release("/etc/os-release");
+    const auto unquote = [](std::string value) {
+        if (value.size() >= 2u && (value.front() == '"' || value.front() == '\'')) value = value.substr(1u, value.size() - 2u);
+        return value;
+    };
     for (std::string line; std::getline(release, line);) {
-        if (line.rfind("PRETTY_NAME=", 0) == 0) {
-            name = line.substr(12u);
-            if (name.size() >= 2u && (name.front() == '"' || name.front() == '\'')) name = name.substr(1u, name.size() - 2u);
-            break;
-        }
+        if (line.rfind("NAME=", 0) == 0) name = unquote(line.substr(5u));
+        else if (line.rfind("VERSION_ID=", 0) == 0) versionId = unquote(line.substr(11u));
     }
     utsname kernel{};
-    const std::string version = uname(&kernel) == 0 ? std::string(kernel.release) : std::string();
-    if (!name.empty() || !version.empty()) info.osVersion = CollapseSpaces(name.empty() ? "Linux " + version : name + (version.empty() ? "" : " (kernel " + version + ")"));
+    const std::string release_ = uname(&kernel) == 0 ? std::string(kernel.release) : std::string();
+    // Name, version and the three numbers of the kernel release; the rest of the release string is a vendor's or a user's own text.
+    if (const auto version = FormatOsVersion(name.empty() ? "Linux" : name, versionId, release_); !version.empty()) info.osVersion = version;
     struct sysinfo memory{};
     if (sysinfo(&memory) == 0) info.ramGiB = WholeGiB(static_cast<std::uint64_t>(memory.totalram) * memory.mem_unit);
 #elif defined(__APPLE__)
@@ -372,7 +374,7 @@ std::optional<std::string> SafeText(std::string_view text, const HostIdentifiers
     if (std::ranges::any_of(text, [](unsigned char character) { return character < 0x20u || character == 0x7fu; })) return std::nullopt;
     if (NamesHost(text, host)) return std::nullopt;
     // The IPv4 form must not depend on word boundaries: "lib_192.0.2.123", "fn192.0.2.123" and "v192.0.2.123" have none before the number.
-    static const std::regex addresses(R"(((^|[^0-9])\d{1,3}(\.\d{1,3}){3}($|[^0-9]))|(([0-9A-Fa-f]{2}[:-]){5}[0-9A-Fa-f]{2})|((^|[^0-9A-Za-z:])(([0-9A-Fa-f]{1,4})?:){2,7}[0-9A-Fa-f]{0,4}($|[^0-9A-Za-z:]))|(\d{8,})|([0-9A-Fa-f]{16,}))");
+    static const std::regex addresses(R"(((^|[^0-9])\d{1,3}(\.\d{1,3}){3}($|[^0-9]))|(([0-9A-Fa-f]{2}[:-]){5}[0-9A-Fa-f]{2})|((^|[^0-9A-Za-z:])(([0-9A-Fa-f]{1,4})?:){2,7}[0-9A-Fa-f]{0,4}($|[^0-9A-Za-z:]))|(\d{8,})|([0-9A-Fa-f]{16,})|([0-9A-Fa-f]{8}-[0-9A-Fa-f]{4}-[0-9A-Fa-f]{4}-[0-9A-Fa-f]{4}-[0-9A-Fa-f]{12}))");
     static const std::regex paths(R"((^|[\s"'(=,;:|<>\[{])(/[^\s/]|~/|%[A-Za-z_]+%|[A-Za-z]:[\\/]|\\\\|file:))");
     const std::string owned(text);
     if (owned.find('@') != std::string::npos || owned.find("://") != std::string::npos) return std::nullopt;
@@ -380,10 +382,60 @@ std::optional<std::string> SafeText(std::string_view text, const HostIdentifiers
     return owned;
 }
 
+namespace {
+
+std::string LowerAscii(std::string_view text) {
+    std::string result(text);
+    for (auto& c : result) c = static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
+    return result;
+}
+
+// The words of the operating system's own name: os-release ID, ID_LIKE and the words of NAME on Linux.
+std::vector<std::string> OsIdentityWords() {
+    std::vector<std::string> words;
+    const auto addWords = [&](std::string_view text) {
+        std::string word;
+        for (const char c : text) {
+            if (std::isalnum(static_cast<unsigned char>(c))) {
+                word += static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
+            } else if (!word.empty()) {
+                words.push_back(std::move(word));
+                word.clear();
+            }
+        }
+        if (!word.empty()) words.push_back(std::move(word));
+    };
+#if defined(__linux__)
+    std::ifstream release("/etc/os-release");
+    for (std::string line; std::getline(release, line);) {
+        for (const std::string_view key : {"ID=", "ID_LIKE=", "NAME="}) {
+            if (line.rfind(key, 0) == 0) addWords(line.substr(key.size()));
+        }
+    }
+    words.push_back("linux");
+#elif defined(__APPLE__)
+    words.push_back("macos");
+    words.push_back("darwin");
+#elif defined(_WIN32)
+    words.push_back("windows");
+#endif
+    return words;
+}
+
+}
+
 HostIdentifiers CurrentHostIdentifiers() {
     HostIdentifiers host;
-    for (const char* name : {"USER", "USERNAME", "LOGNAME", "HOME", "USERPROFILE", "HOSTNAME", "COMPUTERNAME"}) {
-        if (const char* value = std::getenv(name); value != nullptr && *value != '\0') host.words.emplace_back(value);
+    const auto add = [&](std::vector<std::string>& category, std::string value) {
+        if (value.empty()) return;
+        host.words.push_back(value);
+        category.push_back(std::move(value));
+    };
+    for (const char* name : {"USER", "USERNAME", "LOGNAME", "HOME", "USERPROFILE"}) {
+        if (const char* value = std::getenv(name); value != nullptr && *value != '\0') add(host.users, value);
+    }
+    for (const char* name : {"HOSTNAME", "COMPUTERNAME"}) {
+        if (const char* value = std::getenv(name); value != nullptr && *value != '\0') add(host.hosts, value);
     }
 #ifdef _WIN32
     wchar_t account[257] = {};
@@ -393,7 +445,7 @@ HostIdentifiers CurrentHostIdentifiers() {
         if (bytes > 1) {
             std::string utf8(static_cast<std::size_t>(bytes - 1), '\0');
             WideCharToMultiByte(CP_UTF8, 0, account, -1, utf8.data(), bytes, nullptr, nullptr);
-            host.words.push_back(std::move(utf8));
+            add(host.users, std::move(utf8));
         }
     }
     wchar_t computer[MAX_COMPUTERNAME_LENGTH + 1] = {};
@@ -403,7 +455,7 @@ HostIdentifiers CurrentHostIdentifiers() {
         if (bytes > 1) {
             std::string utf8(static_cast<std::size_t>(bytes - 1), '\0');
             WideCharToMultiByte(CP_UTF8, 0, computer, -1, utf8.data(), bytes, nullptr, nullptr);
-            host.words.push_back(std::move(utf8));
+            add(host.hosts, std::move(utf8));
         }
     }
 #else
@@ -412,18 +464,57 @@ HostIdentifiers CurrentHostIdentifiers() {
     passwd entry{};
     passwd* found = nullptr;
     if (getpwuid_r(geteuid(), &entry, buffer, sizeof(buffer), &found) == 0 && found != nullptr) {
-        if (entry.pw_name != nullptr && *entry.pw_name != '\0') host.words.emplace_back(entry.pw_name);
-        if (entry.pw_dir != nullptr && *entry.pw_dir != '\0') host.words.emplace_back(entry.pw_dir);
+        if (entry.pw_name != nullptr && *entry.pw_name != '\0') add(host.users, entry.pw_name);
+        if (entry.pw_dir != nullptr && *entry.pw_dir != '\0') add(host.users, entry.pw_dir);
     }
     char name[256] = {};
-    if (gethostname(name, sizeof(name) - 1u) == 0 && name[0] != '\0') host.words.emplace_back(name);
+    if (gethostname(name, sizeof(name) - 1u) == 0 && name[0] != '\0') add(host.hosts, name);
 #endif
-    const auto count = host.words.size();
-    for (std::size_t index = 0; index < count; ++index) {
-        const auto leaf = fs::path(host.words[index]).filename().string();
-        if (!leaf.empty() && leaf != host.words[index]) host.words.push_back(leaf);
+    // The last folder of a path is a name of its own (the home folder's leaf is usually the login).
+    for (auto* category : {&host.users, &host.hosts}) {
+        const auto count = category->size();
+        for (std::size_t index = 0; index < count; ++index) {
+            const auto leaf = fs::path((*category)[index]).filename().string();
+            if (!leaf.empty() && leaf != (*category)[index]) add(*category, leaf);
+        }
     }
+    host.osIdentity = OsIdentityWords();
     return host;
+}
+
+HostIdentifiers MachineNames(const HostIdentifiers& host) {
+    HostIdentifiers names;
+    for (const auto& word : host.words) {
+        const auto lowered = LowerAscii(word);
+        const auto in = [&](const std::vector<std::string>& list) {
+            return std::ranges::any_of(list, [&](const std::string& other) { return LowerAscii(other) == lowered; });
+        };
+        // A host name that is a word of the OS's identity, and is not also a user name, names a public product: it stays allowed.
+        if (in(host.hosts) && !in(host.users) && in(host.osIdentity)) continue;
+        names.words.push_back(word);
+    }
+    return names;
+}
+
+std::string FormatOsVersion(std::string_view name, std::string_view versionId, std::string_view kernelRelease) {
+    // The kernel release is major.minor.patch and then whatever the vendor or the user appended ("-bob-custom", ".1-microsoft-standard-WSL2").
+    std::string kernel;
+    std::size_t groups = 0;
+    for (std::size_t at = 0; at < kernelRelease.size() && groups < 3u;) {
+        std::size_t end = at;
+        while (end < kernelRelease.size() && std::isdigit(static_cast<unsigned char>(kernelRelease[end]))) ++end;
+        if (end == at) break;
+        if (!kernel.empty()) kernel += '.';
+        kernel += kernelRelease.substr(at, end - at);
+        ++groups;
+        if (end < kernelRelease.size() && kernelRelease[end] == '.') at = end + 1u;
+        else break;
+    }
+    std::string result = CollapseSpaces(name);
+    const auto version = CollapseSpaces(versionId);
+    if (!version.empty()) result += (result.empty() ? "" : " ") + version;
+    if (!kernel.empty()) result += (result.empty() ? "kernel " : " (kernel ") + kernel + (result.empty() ? "" : ")");
+    return result;
 }
 
 Toggle ResolveToggle(std::optional<std::string_view> flag, std::optional<std::string_view> environment) {
@@ -520,6 +611,25 @@ std::string Serialize(const Report& report) {
 namespace {
 
 // Every free-form value is checked again here, so no caller can put a host identifier or a malformed value into a report.
+// A run of twelve or more letters and digits that has both: a serial number, a device or account token. Model names do not have one.
+bool SerialLike(std::string_view text) {
+    std::size_t run = 0;
+    bool digit = false, letter = false;
+    for (std::size_t index = 0; index <= text.size(); ++index) {
+        const bool alnum = index < text.size() && std::isalnum(static_cast<unsigned char>(text[index]));
+        if (alnum) {
+            ++run;
+            digit = digit || std::isdigit(static_cast<unsigned char>(text[index]));
+            letter = letter || std::isalpha(static_cast<unsigned char>(text[index]));
+        } else {
+            if (run >= 12u && digit && letter) return true;
+            run = 0;
+            digit = letter = false;
+        }
+    }
+    return false;
+}
+
 Report Sanitized(Report report, const HostIdentifiers& host) {
     const auto matches = [](const std::optional<std::string>& value, const char* pattern) {
         return value && std::regex_match(*value, std::regex(pattern));
@@ -544,11 +654,10 @@ Report Sanitized(Report report, const HostIdentifiers& host) {
     if (report.stop.message) report.stop.message = SafeText(*report.stop.message, host);
     if (report.os && *report.os != "linux" && *report.os != "windows" && *report.os != "macos") report.os.reset();
     // The machine: model strings pass the same text filter as everything else; a value outside its schema pattern is left out.
-    // Model names are public (a distribution, a CPU, a GPU) and are not compared with the host's own names: a machine named after its
-    // distribution would otherwise lose its OS version. Addresses, account numbers, paths and e-mail addresses are still filtered.
-    const HostIdentifiers publicNames;
+        // They are compared with the user's names always, and with the machine's name unless it is a word of the OS's own identity.
+    const auto machineNames = MachineNames(host);
     const auto text = [&](std::optional<std::string>& value) {
-        if (value && (value->empty() || !SafeText(*value, publicNames).has_value())) value.reset();
+        if (value && (value->empty() || !SafeText(*value, machineNames).has_value() || SerialLike(*value))) value.reset();
     };
     text(report.machine.osVersion);
     text(report.machine.cpu);
