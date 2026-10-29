@@ -1,0 +1,2973 @@
+{
+  "format": "anyps5-report",
+  "version": 1,
+  "generated": "2026-10-29T12:00:00Z",
+  "anyps5": {
+    "commit": "40f2a9c3d1b7e5864a0c9d2e7f13b5a8c6d49e01",
+    "release": "v0.1.3",
+    "modified": false
+  },
+  "game": {
+    "titleId": "PPSA12345",
+    "contentId": "UP9000-PPSA12345_00-EXAMPLE00000000A",
+    "contentVersion": "01.002.000",
+    "name": "Example Game"
+  },
+  "system": {
+    "os": "linux",
+    "osVersion": "Arch Linux (kernel 6.11)",
+    "cpu": "AMD Ryzen 7 5800X",
+    "ramGiB": 32,
+    "gpu": {
+      "vendor": "AMD",
+      "name": "Radeon RX 6800",
+      "driver": "Mesa 24.2.3 (RADV)",
+      "vulkan": "1.3.289"
+    }
+  },
+  "run": {
+    "id": "f05b9d2e4a7c4183b6e0c8a1d3f97e45",
+    "seconds": 402.6,
+    "exit": "abort",
+    "exitCode": 134,
+    "stage": "presents",
+    "milestones": {
+      "loaded": 1.2,
+      "started": 1.4,
+      "firstDraw": 8.9,
+      "firstPresent": 9.3
+    },
+    "framesPresented": 900,
+    "averageFps": 30.0,
+    "fpsWindowSeconds": 30.0,
+    "recovered": false,
+    "incomplete": false
+  },
+  "coverage": {
+    "milestones": true,
+    "missing": true,
+    "shaders": true,
+    "unsupported": true,
+    "imageFormats": true,
+    "descriptors": true
+  },
+  "truncated": {
+    "functions": 35,
+    "unsupported": 400,
+    "imageFormats": 20,
+    "descriptors": 0
+  },
+  "missing": {
+    "functions": [
+      {
+        "library": "libSceNpTrophy",
+        "name": "sceNpCall000",
+        "calls": 200
+      },
+      {
+        "library": "libSceAudioOut",
+        "name": "sceAudioCall001",
+        "calls": 199
+      },
+      {
+        "library": "libSceUserService",
+        "name": "sceUserCall002",
+        "calls": 198
+      },
+      {
+        "library": "libSceNet",
+        "name": "sceNetCall003",
+        "calls": 197
+      },
+      {
+        "library": "libSceVideodec",
+        "name": "sceVideoCall004",
+        "calls": 196
+      },
+      {
+        "library": "libSceSaveData",
+        "name": "sceSaveCall005",
+        "calls": 195
+      },
+      {
+        "library": "libSceHttp",
+        "name": "sceHttpCall006",
+        "calls": 194
+      },
+      {
+        "library": "libSceSsl",
+        "name": "sceSslCall007",
+        "calls": 193
+      },
+      {
+        "library": "libSceNpTrophy",
+        "name": "sceNpCall008",
+        "calls": 192
+      },
+      {
+        "library": "libSceAudioOut",
+        "name": "sceAudioCall009",
+        "calls": 191
+      },
+      {
+        "library": "libSceUserService",
+        "name": "sceUserCall010",
+        "calls": 190
+      },
+      {
+        "library": "libSceNet",
+        "name": "sceNetCall011",
+        "calls": 189
+      },
+      {
+        "library": "libSceVideodec",
+        "name": "sceVideoCall012",
+        "calls": 188
+      },
+      {
+        "library": "libSceSaveData",
+        "name": "sceSaveCall013",
+        "calls": 187
+      },
+      {
+        "library": "libSceHttp",
+        "name": "sceHttpCall014",
+        "calls": 186
+      },
+      {
+        "library": "libSceSsl",
+        "name": "sceSslCall015",
+        "calls": 185
+      },
+      {
+        "library": "libSceNpTrophy",
+        "name": "sceNpCall016",
+        "calls": 184
+      },
+      {
+        "library": "libSceAudioOut",
+        "name": "sceAudioCall017",
+        "calls": 183
+      },
+      {
+        "library": "libSceUserService",
+        "name": "sceUserCall018",
+        "calls": 182
+      },
+      {
+        "library": "libSceNet",
+        "name": "sceNetCall019",
+        "calls": 181
+      },
+      {
+        "library": "libSceVideodec",
+        "name": "sceVideoCall020",
+        "calls": 180
+      },
+      {
+        "library": "libSceSaveData",
+        "name": "sceSaveCall021",
+        "calls": 179
+      },
+      {
+        "library": "libSceHttp",
+        "name": "sceHttpCall022",
+        "calls": 178
+      },
+      {
+        "library": "libSceSsl",
+        "name": "sceSslCall023",
+        "calls": 177
+      },
+      {
+        "library": "libSceNpTrophy",
+        "name": "sceNpCall024",
+        "calls": 176
+      },
+      {
+        "library": "libSceAudioOut",
+        "name": "sceAudioCall025",
+        "calls": 175
+      },
+      {
+        "library": "libSceUserService",
+        "name": "sceUserCall026",
+        "calls": 174
+      },
+      {
+        "library": "libSceNet",
+        "name": "sceNetCall027",
+        "calls": 173
+      },
+      {
+        "library": "libSceVideodec",
+        "name": "sceVideoCall028",
+        "calls": 172
+      },
+      {
+        "library": "libSceSaveData",
+        "name": "sceSaveCall029",
+        "calls": 171
+      },
+      {
+        "library": "libSceHttp",
+        "name": "sceHttpCall030",
+        "calls": 170
+      },
+      {
+        "library": "libSceSsl",
+        "name": "sceSslCall031",
+        "calls": 169
+      },
+      {
+        "library": "libSceNpTrophy",
+        "name": "sceNpCall032",
+        "calls": 168
+      },
+      {
+        "library": "libSceAudioOut",
+        "name": "sceAudioCall033",
+        "calls": 167
+      },
+      {
+        "library": "libSceUserService",
+        "name": "sceUserCall034",
+        "calls": 166
+      },
+      {
+        "library": "libSceNet",
+        "name": "sceNetCall035",
+        "calls": 165
+      },
+      {
+        "library": "libSceVideodec",
+        "name": "sceVideoCall036",
+        "calls": 164
+      },
+      {
+        "library": "libSceSaveData",
+        "name": "sceSaveCall037",
+        "calls": 163
+      },
+      {
+        "library": "libSceHttp",
+        "name": "sceHttpCall038",
+        "calls": 162
+      },
+      {
+        "library": "libSceSsl",
+        "name": "sceSslCall039",
+        "calls": 161
+      },
+      {
+        "library": "libSceNpTrophy",
+        "name": "sceNpCall040",
+        "calls": 160
+      },
+      {
+        "library": "libSceAudioOut",
+        "name": "sceAudioCall041",
+        "calls": 159
+      },
+      {
+        "library": "libSceUserService",
+        "name": "sceUserCall042",
+        "calls": 158
+      },
+      {
+        "library": "libSceNet",
+        "name": "sceNetCall043",
+        "calls": 157
+      },
+      {
+        "library": "libSceVideodec",
+        "name": "sceVideoCall044",
+        "calls": 156
+      },
+      {
+        "library": "libSceSaveData",
+        "name": "sceSaveCall045",
+        "calls": 155
+      },
+      {
+        "library": "libSceHttp",
+        "name": "sceHttpCall046",
+        "calls": 154
+      },
+      {
+        "library": "libSceSsl",
+        "name": "sceSslCall047",
+        "calls": 153
+      },
+      {
+        "library": "libSceNpTrophy",
+        "name": "sceNpCall048",
+        "calls": 152
+      },
+      {
+        "library": "libSceAudioOut",
+        "name": "sceAudioCall049",
+        "calls": 151
+      },
+      {
+        "library": "libSceUserService",
+        "name": "sceUserCall050",
+        "calls": 150
+      },
+      {
+        "library": "libSceNet",
+        "name": "sceNetCall051",
+        "calls": 149
+      },
+      {
+        "library": "libSceVideodec",
+        "name": "sceVideoCall052",
+        "calls": 148
+      },
+      {
+        "library": "libSceSaveData",
+        "name": "sceSaveCall053",
+        "calls": 147
+      },
+      {
+        "library": "libSceHttp",
+        "name": "sceHttpCall054",
+        "calls": 146
+      },
+      {
+        "library": "libSceSsl",
+        "name": "sceSslCall055",
+        "calls": 145
+      },
+      {
+        "library": "libSceNpTrophy",
+        "name": "sceNpCall056",
+        "calls": 144
+      },
+      {
+        "library": "libSceAudioOut",
+        "name": "sceAudioCall057",
+        "calls": 143
+      },
+      {
+        "library": "libSceUserService",
+        "name": "sceUserCall058",
+        "calls": 142
+      },
+      {
+        "library": "libSceNet",
+        "name": "sceNetCall059",
+        "calls": 141
+      },
+      {
+        "library": "libSceVideodec",
+        "name": "sceVideoCall060",
+        "calls": 140
+      },
+      {
+        "library": "libSceSaveData",
+        "name": "sceSaveCall061",
+        "calls": 139
+      },
+      {
+        "library": "libSceHttp",
+        "name": "sceHttpCall062",
+        "calls": 138
+      },
+      {
+        "library": "libSceSsl",
+        "name": "sceSslCall063",
+        "calls": 137
+      },
+      {
+        "library": "libSceNpTrophy",
+        "name": "sceNpCall064",
+        "calls": 136
+      },
+      {
+        "library": "libSceAudioOut",
+        "name": "sceAudioCall065",
+        "calls": 135
+      },
+      {
+        "library": "libSceUserService",
+        "name": "sceUserCall066",
+        "calls": 134
+      },
+      {
+        "library": "libSceNet",
+        "name": "sceNetCall067",
+        "calls": 133
+      },
+      {
+        "library": "libSceVideodec",
+        "name": "sceVideoCall068",
+        "calls": 132
+      },
+      {
+        "library": "libSceSaveData",
+        "name": "sceSaveCall069",
+        "calls": 131
+      },
+      {
+        "library": "libSceHttp",
+        "name": "sceHttpCall070",
+        "calls": 130
+      },
+      {
+        "library": "libSceSsl",
+        "name": "sceSslCall071",
+        "calls": 129
+      },
+      {
+        "library": "libSceNpTrophy",
+        "name": "sceNpCall072",
+        "calls": 128
+      },
+      {
+        "library": "libSceAudioOut",
+        "name": "sceAudioCall073",
+        "calls": 127
+      },
+      {
+        "library": "libSceUserService",
+        "name": "sceUserCall074",
+        "calls": 126
+      },
+      {
+        "library": "libSceNet",
+        "name": "sceNetCall075",
+        "calls": 125
+      },
+      {
+        "library": "libSceVideodec",
+        "name": "sceVideoCall076",
+        "calls": 124
+      },
+      {
+        "library": "libSceSaveData",
+        "name": "sceSaveCall077",
+        "calls": 123
+      },
+      {
+        "library": "libSceHttp",
+        "name": "sceHttpCall078",
+        "calls": 122
+      },
+      {
+        "library": "libSceSsl",
+        "name": "sceSslCall079",
+        "calls": 121
+      },
+      {
+        "library": "libSceNpTrophy",
+        "name": "sceNpCall080",
+        "calls": 120
+      },
+      {
+        "library": "libSceAudioOut",
+        "name": "sceAudioCall081",
+        "calls": 119
+      },
+      {
+        "library": "libSceUserService",
+        "name": "sceUserCall082",
+        "calls": 118
+      },
+      {
+        "library": "libSceNet",
+        "name": "sceNetCall083",
+        "calls": 117
+      },
+      {
+        "library": "libSceVideodec",
+        "name": "sceVideoCall084",
+        "calls": 116
+      },
+      {
+        "library": "libSceSaveData",
+        "name": "sceSaveCall085",
+        "calls": 115
+      },
+      {
+        "library": "libSceHttp",
+        "name": "sceHttpCall086",
+        "calls": 114
+      },
+      {
+        "library": "libSceSsl",
+        "name": "sceSslCall087",
+        "calls": 113
+      },
+      {
+        "library": "libSceNpTrophy",
+        "name": "sceNpCall088",
+        "calls": 112
+      },
+      {
+        "library": "libSceAudioOut",
+        "name": "sceAudioCall089",
+        "calls": 111
+      },
+      {
+        "library": "libSceUserService",
+        "name": "sceUserCall090",
+        "calls": 110
+      },
+      {
+        "library": "libSceNet",
+        "name": "sceNetCall091",
+        "calls": 109
+      },
+      {
+        "library": "libSceVideodec",
+        "name": "sceVideoCall092",
+        "calls": 108
+      },
+      {
+        "library": "libSceSaveData",
+        "name": "sceSaveCall093",
+        "calls": 107
+      },
+      {
+        "library": "libSceHttp",
+        "name": "sceHttpCall094",
+        "calls": 106
+      },
+      {
+        "library": "libSceSsl",
+        "name": "sceSslCall095",
+        "calls": 105
+      },
+      {
+        "library": "libSceNpTrophy",
+        "name": "sceNpCall096",
+        "calls": 104
+      },
+      {
+        "library": "libSceAudioOut",
+        "name": "sceAudioCall097",
+        "calls": 103
+      },
+      {
+        "library": "libSceUserService",
+        "name": "sceUserCall098",
+        "calls": 102
+      },
+      {
+        "library": "libSceNet",
+        "name": "sceNetCall099",
+        "calls": 101
+      },
+      {
+        "library": "libSceVideodec",
+        "name": "sceVideoCall100",
+        "calls": 100
+      },
+      {
+        "library": "libSceSaveData",
+        "name": "sceSaveCall101",
+        "calls": 99
+      },
+      {
+        "library": "libSceHttp",
+        "name": "sceHttpCall102",
+        "calls": 98
+      },
+      {
+        "library": "libSceSsl",
+        "name": "sceSslCall103",
+        "calls": 97
+      },
+      {
+        "library": "libSceNpTrophy",
+        "name": "sceNpCall104",
+        "calls": 96
+      },
+      {
+        "library": "libSceAudioOut",
+        "name": "sceAudioCall105",
+        "calls": 95
+      },
+      {
+        "library": "libSceUserService",
+        "name": "sceUserCall106",
+        "calls": 94
+      },
+      {
+        "library": "libSceNet",
+        "name": "sceNetCall107",
+        "calls": 93
+      },
+      {
+        "library": "libSceVideodec",
+        "name": "sceVideoCall108",
+        "calls": 92
+      },
+      {
+        "library": "libSceSaveData",
+        "name": "sceSaveCall109",
+        "calls": 91
+      },
+      {
+        "library": "libSceHttp",
+        "name": "sceHttpCall110",
+        "calls": 90
+      },
+      {
+        "library": "libSceSsl",
+        "name": "sceSslCall111",
+        "calls": 89
+      },
+      {
+        "library": "libSceNpTrophy",
+        "name": "sceNpCall112",
+        "calls": 88
+      },
+      {
+        "library": "libSceAudioOut",
+        "name": "sceAudioCall113",
+        "calls": 87
+      },
+      {
+        "library": "libSceUserService",
+        "name": "sceUserCall114",
+        "calls": 86
+      },
+      {
+        "library": "libSceNet",
+        "name": "sceNetCall115",
+        "calls": 85
+      },
+      {
+        "library": "libSceVideodec",
+        "name": "sceVideoCall116",
+        "calls": 84
+      },
+      {
+        "library": "libSceSaveData",
+        "name": "sceSaveCall117",
+        "calls": 83
+      },
+      {
+        "library": "libSceHttp",
+        "name": "sceHttpCall118",
+        "calls": 82
+      },
+      {
+        "library": "libSceSsl",
+        "name": "sceSslCall119",
+        "calls": 81
+      },
+      {
+        "library": "libSceNpTrophy",
+        "name": "sceNpCall120",
+        "calls": 80
+      },
+      {
+        "library": "libSceAudioOut",
+        "name": "sceAudioCall121",
+        "calls": 79
+      },
+      {
+        "library": "libSceUserService",
+        "name": "sceUserCall122",
+        "calls": 78
+      },
+      {
+        "library": "libSceNet",
+        "name": "sceNetCall123",
+        "calls": 77
+      },
+      {
+        "library": "libSceVideodec",
+        "name": "sceVideoCall124",
+        "calls": 76
+      },
+      {
+        "library": "libSceSaveData",
+        "name": "sceSaveCall125",
+        "calls": 75
+      },
+      {
+        "library": "libSceHttp",
+        "name": "sceHttpCall126",
+        "calls": 74
+      },
+      {
+        "library": "libSceSsl",
+        "name": "sceSslCall127",
+        "calls": 73
+      },
+      {
+        "library": "libSceNpTrophy",
+        "name": "sceNpCall128",
+        "calls": 72
+      },
+      {
+        "library": "libSceAudioOut",
+        "name": "sceAudioCall129",
+        "calls": 71
+      },
+      {
+        "library": "libSceUserService",
+        "name": "sceUserCall130",
+        "calls": 70
+      },
+      {
+        "library": "libSceNet",
+        "name": "sceNetCall131",
+        "calls": 69
+      },
+      {
+        "library": "libSceVideodec",
+        "name": "sceVideoCall132",
+        "calls": 68
+      },
+      {
+        "library": "libSceSaveData",
+        "name": "sceSaveCall133",
+        "calls": 67
+      },
+      {
+        "library": "libSceHttp",
+        "name": "sceHttpCall134",
+        "calls": 66
+      },
+      {
+        "library": "libSceSsl",
+        "name": "sceSslCall135",
+        "calls": 65
+      },
+      {
+        "library": "libSceNpTrophy",
+        "name": "sceNpCall136",
+        "calls": 64
+      },
+      {
+        "library": "libSceAudioOut",
+        "name": "sceAudioCall137",
+        "calls": 63
+      },
+      {
+        "library": "libSceUserService",
+        "name": "sceUserCall138",
+        "calls": 62
+      },
+      {
+        "library": "libSceNet",
+        "name": "sceNetCall139",
+        "calls": 61
+      },
+      {
+        "library": "libSceVideodec",
+        "name": "sceVideoCall140",
+        "calls": 60
+      },
+      {
+        "library": "libSceSaveData",
+        "name": "sceSaveCall141",
+        "calls": 59
+      },
+      {
+        "library": "libSceHttp",
+        "name": "sceHttpCall142",
+        "calls": 58
+      },
+      {
+        "library": "libSceSsl",
+        "name": "sceSslCall143",
+        "calls": 57
+      },
+      {
+        "library": "libSceNpTrophy",
+        "name": "sceNpCall144",
+        "calls": 56
+      },
+      {
+        "library": "libSceAudioOut",
+        "name": "sceAudioCall145",
+        "calls": 55
+      },
+      {
+        "library": "libSceUserService",
+        "name": "sceUserCall146",
+        "calls": 54
+      },
+      {
+        "library": "libSceNet",
+        "name": "sceNetCall147",
+        "calls": 53
+      },
+      {
+        "library": "libSceVideodec",
+        "name": "sceVideoCall148",
+        "calls": 52
+      },
+      {
+        "library": "libSceSaveData",
+        "name": "sceSaveCall149",
+        "calls": 51
+      },
+      {
+        "library": "libSceHttp",
+        "name": "sceHttpCall150",
+        "calls": 50
+      },
+      {
+        "library": "libSceSsl",
+        "name": "sceSslCall151",
+        "calls": 49
+      },
+      {
+        "library": "libSceNpTrophy",
+        "name": "sceNpCall152",
+        "calls": 48
+      },
+      {
+        "library": "libSceAudioOut",
+        "name": "sceAudioCall153",
+        "calls": 47
+      },
+      {
+        "library": "libSceUserService",
+        "name": "sceUserCall154",
+        "calls": 46
+      },
+      {
+        "library": "libSceNet",
+        "name": "sceNetCall155",
+        "calls": 45
+      },
+      {
+        "library": "libSceVideodec",
+        "name": "sceVideoCall156",
+        "calls": 44
+      },
+      {
+        "library": "libSceSaveData",
+        "name": "sceSaveCall157",
+        "calls": 43
+      },
+      {
+        "library": "libSceHttp",
+        "name": "sceHttpCall158",
+        "calls": 42
+      },
+      {
+        "library": "libSceSsl",
+        "name": "sceSslCall159",
+        "calls": 41
+      },
+      {
+        "library": "libSceNpTrophy",
+        "name": "sceNpCall160",
+        "calls": 40
+      },
+      {
+        "library": "libSceAudioOut",
+        "name": "sceAudioCall161",
+        "calls": 39
+      },
+      {
+        "library": "libSceUserService",
+        "name": "sceUserCall162",
+        "calls": 38
+      },
+      {
+        "library": "libSceNet",
+        "name": "sceNetCall163",
+        "calls": 37
+      },
+      {
+        "library": "libSceVideodec",
+        "name": "sceVideoCall164",
+        "calls": 36
+      },
+      {
+        "library": "libSceSaveData",
+        "name": "sceSaveCall165",
+        "calls": 35
+      },
+      {
+        "library": "libSceHttp",
+        "name": "sceHttpCall166",
+        "calls": 34
+      },
+      {
+        "library": "libSceSsl",
+        "name": "sceSslCall167",
+        "calls": 33
+      },
+      {
+        "library": "libSceNpTrophy",
+        "name": "sceNpCall168",
+        "calls": 32
+      },
+      {
+        "library": "libSceAudioOut",
+        "name": "sceAudioCall169",
+        "calls": 31
+      },
+      {
+        "library": "libSceUserService",
+        "name": "sceUserCall170",
+        "calls": 30
+      },
+      {
+        "library": "libSceNet",
+        "name": "sceNetCall171",
+        "calls": 29
+      },
+      {
+        "library": "libSceVideodec",
+        "name": "sceVideoCall172",
+        "calls": 28
+      },
+      {
+        "library": "libSceSaveData",
+        "name": "sceSaveCall173",
+        "calls": 27
+      },
+      {
+        "library": "libSceHttp",
+        "name": "sceHttpCall174",
+        "calls": 26
+      },
+      {
+        "library": "libSceSsl",
+        "name": "sceSslCall175",
+        "calls": 25
+      },
+      {
+        "library": "libSceNpTrophy",
+        "name": "sceNpCall176",
+        "calls": 24
+      },
+      {
+        "library": "libSceAudioOut",
+        "name": "sceAudioCall177",
+        "calls": 23
+      },
+      {
+        "library": "libSceUserService",
+        "name": "sceUserCall178",
+        "calls": 22
+      },
+      {
+        "library": "libSceNet",
+        "name": "sceNetCall179",
+        "calls": 21
+      },
+      {
+        "library": "libSceVideodec",
+        "name": "sceVideoCall180",
+        "calls": 20
+      },
+      {
+        "library": "libSceSaveData",
+        "name": "sceSaveCall181",
+        "calls": 19
+      },
+      {
+        "library": "libSceHttp",
+        "name": "sceHttpCall182",
+        "calls": 18
+      },
+      {
+        "library": "libSceSsl",
+        "name": "sceSslCall183",
+        "calls": 17
+      },
+      {
+        "library": "libSceNpTrophy",
+        "name": "sceNpCall184",
+        "calls": 16
+      },
+      {
+        "library": "libSceAudioOut",
+        "name": "sceAudioCall185",
+        "calls": 15
+      },
+      {
+        "library": "libSceUserService",
+        "name": "sceUserCall186",
+        "calls": 14
+      },
+      {
+        "library": "libSceNet",
+        "name": "sceNetCall187",
+        "calls": 13
+      },
+      {
+        "library": "libSceVideodec",
+        "name": "sceVideoCall188",
+        "calls": 12
+      },
+      {
+        "library": "libSceSaveData",
+        "name": "sceSaveCall189",
+        "calls": 11
+      },
+      {
+        "library": "libSceHttp",
+        "name": "sceHttpCall190",
+        "calls": 10
+      },
+      {
+        "library": "libSceSsl",
+        "name": "sceSslCall191",
+        "calls": 9
+      },
+      {
+        "library": "libSceNpTrophy",
+        "name": "sceNpCall192",
+        "calls": 8
+      },
+      {
+        "library": "libSceAudioOut",
+        "name": "sceAudioCall193",
+        "calls": 7
+      },
+      {
+        "library": "libSceUserService",
+        "name": "sceUserCall194",
+        "calls": 6
+      },
+      {
+        "library": "libSceNet",
+        "name": "sceNetCall195",
+        "calls": 5
+      },
+      {
+        "library": "libSceVideodec",
+        "name": "sceVideoCall196",
+        "calls": 4
+      },
+      {
+        "library": "libSceSaveData",
+        "name": "sceSaveCall197",
+        "calls": 3
+      },
+      {
+        "library": "libSceHttp",
+        "name": "sceHttpCall198",
+        "calls": 2
+      },
+      {
+        "library": "libSceSsl",
+        "name": "sceSslCall199",
+        "calls": 1
+      }
+    ]
+  },
+  "shaders": {
+    "compiled": 4090,
+    "failed": 612,
+    "cacheHits": 5120,
+    "unsupported": [
+      {
+        "encoding": "VOP3",
+        "opcode": "V_CVT_PK_U8_F32",
+        "opcodeValue": 256,
+        "modifiers": [
+          "clamp"
+        ],
+        "count": 150
+      },
+      {
+        "encoding": "VOP3",
+        "opcode": "V_MQSAD_U32_U8",
+        "opcodeValue": 257,
+        "modifiers": [],
+        "count": 149
+      },
+      {
+        "encoding": "MIMG",
+        "opcode": "IMAGE_GATHER4_LZ_O",
+        "opcodeValue": 258,
+        "modifiers": [],
+        "count": 148
+      },
+      {
+        "encoding": "DS",
+        "opcode": "DS_GWS_BARRIER",
+        "opcodeValue": 259,
+        "modifiers": [
+          "clamp"
+        ],
+        "count": 147
+      },
+      {
+        "encoding": "SOPP",
+        "opcode": "S_SENDMSG",
+        "opcodeValue": 260,
+        "modifiers": [],
+        "count": 146
+      },
+      {
+        "encoding": "VOP3",
+        "opcode": "V_CVT_PK_U8_F32_5",
+        "opcodeValue": 261,
+        "modifiers": [],
+        "count": 145
+      },
+      {
+        "encoding": "VOP3",
+        "opcode": "V_MQSAD_U32_U8_6",
+        "opcodeValue": 262,
+        "modifiers": [
+          "clamp"
+        ],
+        "count": 144
+      },
+      {
+        "encoding": "MIMG",
+        "opcode": "IMAGE_GATHER4_LZ_O_7",
+        "opcodeValue": 263,
+        "modifiers": [],
+        "count": 143
+      },
+      {
+        "encoding": "DS",
+        "opcode": "DS_GWS_BARRIER_8",
+        "opcodeValue": 264,
+        "modifiers": [],
+        "count": 142
+      },
+      {
+        "encoding": "SOPP",
+        "opcode": "S_SENDMSG_9",
+        "opcodeValue": 265,
+        "modifiers": [
+          "clamp"
+        ],
+        "count": 141
+      },
+      {
+        "encoding": "VOP3",
+        "opcode": "V_CVT_PK_U8_F32_10",
+        "opcodeValue": 266,
+        "modifiers": [],
+        "count": 140
+      },
+      {
+        "encoding": "VOP3",
+        "opcode": "V_MQSAD_U32_U8_11",
+        "opcodeValue": 267,
+        "modifiers": [],
+        "count": 139
+      },
+      {
+        "encoding": "MIMG",
+        "opcode": "IMAGE_GATHER4_LZ_O_12",
+        "opcodeValue": 268,
+        "modifiers": [
+          "clamp"
+        ],
+        "count": 138
+      },
+      {
+        "encoding": "DS",
+        "opcode": "DS_GWS_BARRIER_13",
+        "opcodeValue": 269,
+        "modifiers": [],
+        "count": 137
+      },
+      {
+        "encoding": "SOPP",
+        "opcode": "S_SENDMSG_14",
+        "opcodeValue": 270,
+        "modifiers": [],
+        "count": 136
+      },
+      {
+        "encoding": "VOP3",
+        "opcode": "V_CVT_PK_U8_F32_15",
+        "opcodeValue": 271,
+        "modifiers": [
+          "clamp"
+        ],
+        "count": 135
+      },
+      {
+        "encoding": "VOP3",
+        "opcode": "V_MQSAD_U32_U8_16",
+        "opcodeValue": 272,
+        "modifiers": [],
+        "count": 134
+      },
+      {
+        "encoding": "MIMG",
+        "opcode": "IMAGE_GATHER4_LZ_O_17",
+        "opcodeValue": 273,
+        "modifiers": [],
+        "count": 133
+      },
+      {
+        "encoding": "DS",
+        "opcode": "DS_GWS_BARRIER_18",
+        "opcodeValue": 274,
+        "modifiers": [
+          "clamp"
+        ],
+        "count": 132
+      },
+      {
+        "encoding": "SOPP",
+        "opcode": "S_SENDMSG_19",
+        "opcodeValue": 275,
+        "modifiers": [],
+        "count": 131
+      },
+      {
+        "encoding": "VOP3",
+        "opcode": "V_CVT_PK_U8_F32_20",
+        "opcodeValue": 276,
+        "modifiers": [],
+        "count": 130
+      },
+      {
+        "encoding": "VOP3",
+        "opcode": "V_MQSAD_U32_U8_21",
+        "opcodeValue": 277,
+        "modifiers": [
+          "clamp"
+        ],
+        "count": 129
+      },
+      {
+        "encoding": "MIMG",
+        "opcode": "IMAGE_GATHER4_LZ_O_22",
+        "opcodeValue": 278,
+        "modifiers": [],
+        "count": 128
+      },
+      {
+        "encoding": "DS",
+        "opcode": "DS_GWS_BARRIER_23",
+        "opcodeValue": 279,
+        "modifiers": [],
+        "count": 127
+      },
+      {
+        "encoding": "SOPP",
+        "opcode": "S_SENDMSG_24",
+        "opcodeValue": 280,
+        "modifiers": [
+          "clamp"
+        ],
+        "count": 126
+      },
+      {
+        "encoding": "VOP3",
+        "opcode": "V_CVT_PK_U8_F32_25",
+        "opcodeValue": 281,
+        "modifiers": [],
+        "count": 125
+      },
+      {
+        "encoding": "VOP3",
+        "opcode": "V_MQSAD_U32_U8_26",
+        "opcodeValue": 282,
+        "modifiers": [],
+        "count": 124
+      },
+      {
+        "encoding": "MIMG",
+        "opcode": "IMAGE_GATHER4_LZ_O_27",
+        "opcodeValue": 283,
+        "modifiers": [
+          "clamp"
+        ],
+        "count": 123
+      },
+      {
+        "encoding": "DS",
+        "opcode": "DS_GWS_BARRIER_28",
+        "opcodeValue": 284,
+        "modifiers": [],
+        "count": 122
+      },
+      {
+        "encoding": "SOPP",
+        "opcode": "S_SENDMSG_29",
+        "opcodeValue": 285,
+        "modifiers": [],
+        "count": 121
+      },
+      {
+        "encoding": "VOP3",
+        "opcode": "V_CVT_PK_U8_F32_30",
+        "opcodeValue": 286,
+        "modifiers": [
+          "clamp"
+        ],
+        "count": 120
+      },
+      {
+        "encoding": "VOP3",
+        "opcode": "V_MQSAD_U32_U8_31",
+        "opcodeValue": 287,
+        "modifiers": [],
+        "count": 119
+      },
+      {
+        "encoding": "MIMG",
+        "opcode": "IMAGE_GATHER4_LZ_O_32",
+        "opcodeValue": 288,
+        "modifiers": [],
+        "count": 118
+      },
+      {
+        "encoding": "DS",
+        "opcode": "DS_GWS_BARRIER_33",
+        "opcodeValue": 289,
+        "modifiers": [
+          "clamp"
+        ],
+        "count": 117
+      },
+      {
+        "encoding": "SOPP",
+        "opcode": "S_SENDMSG_34",
+        "opcodeValue": 290,
+        "modifiers": [],
+        "count": 116
+      },
+      {
+        "encoding": "VOP3",
+        "opcode": "V_CVT_PK_U8_F32_35",
+        "opcodeValue": 291,
+        "modifiers": [],
+        "count": 115
+      },
+      {
+        "encoding": "VOP3",
+        "opcode": "V_MQSAD_U32_U8_36",
+        "opcodeValue": 292,
+        "modifiers": [
+          "clamp"
+        ],
+        "count": 114
+      },
+      {
+        "encoding": "MIMG",
+        "opcode": "IMAGE_GATHER4_LZ_O_37",
+        "opcodeValue": 293,
+        "modifiers": [],
+        "count": 113
+      },
+      {
+        "encoding": "DS",
+        "opcode": "DS_GWS_BARRIER_38",
+        "opcodeValue": 294,
+        "modifiers": [],
+        "count": 112
+      },
+      {
+        "encoding": "SOPP",
+        "opcode": "S_SENDMSG_39",
+        "opcodeValue": 295,
+        "modifiers": [
+          "clamp"
+        ],
+        "count": 111
+      },
+      {
+        "encoding": "VOP3",
+        "opcode": "V_CVT_PK_U8_F32_40",
+        "opcodeValue": 296,
+        "modifiers": [],
+        "count": 110
+      },
+      {
+        "encoding": "VOP3",
+        "opcode": "V_MQSAD_U32_U8_41",
+        "opcodeValue": 297,
+        "modifiers": [],
+        "count": 109
+      },
+      {
+        "encoding": "MIMG",
+        "opcode": "IMAGE_GATHER4_LZ_O_42",
+        "opcodeValue": 298,
+        "modifiers": [
+          "clamp"
+        ],
+        "count": 108
+      },
+      {
+        "encoding": "DS",
+        "opcode": "DS_GWS_BARRIER_43",
+        "opcodeValue": 299,
+        "modifiers": [],
+        "count": 107
+      },
+      {
+        "encoding": "SOPP",
+        "opcode": "S_SENDMSG_44",
+        "opcodeValue": 300,
+        "modifiers": [],
+        "count": 106
+      },
+      {
+        "encoding": "VOP3",
+        "opcode": "V_CVT_PK_U8_F32_45",
+        "opcodeValue": 301,
+        "modifiers": [
+          "clamp"
+        ],
+        "count": 105
+      },
+      {
+        "encoding": "VOP3",
+        "opcode": "V_MQSAD_U32_U8_46",
+        "opcodeValue": 302,
+        "modifiers": [],
+        "count": 104
+      },
+      {
+        "encoding": "MIMG",
+        "opcode": "IMAGE_GATHER4_LZ_O_47",
+        "opcodeValue": 303,
+        "modifiers": [],
+        "count": 103
+      },
+      {
+        "encoding": "DS",
+        "opcode": "DS_GWS_BARRIER_48",
+        "opcodeValue": 304,
+        "modifiers": [
+          "clamp"
+        ],
+        "count": 102
+      },
+      {
+        "encoding": "SOPP",
+        "opcode": "S_SENDMSG_49",
+        "opcodeValue": 305,
+        "modifiers": [],
+        "count": 101
+      },
+      {
+        "encoding": "VOP3",
+        "opcode": "V_CVT_PK_U8_F32_50",
+        "opcodeValue": 306,
+        "modifiers": [],
+        "count": 100
+      },
+      {
+        "encoding": "VOP3",
+        "opcode": "V_MQSAD_U32_U8_51",
+        "opcodeValue": 307,
+        "modifiers": [
+          "clamp"
+        ],
+        "count": 99
+      },
+      {
+        "encoding": "MIMG",
+        "opcode": "IMAGE_GATHER4_LZ_O_52",
+        "opcodeValue": 308,
+        "modifiers": [],
+        "count": 98
+      },
+      {
+        "encoding": "DS",
+        "opcode": "DS_GWS_BARRIER_53",
+        "opcodeValue": 309,
+        "modifiers": [],
+        "count": 97
+      },
+      {
+        "encoding": "SOPP",
+        "opcode": "S_SENDMSG_54",
+        "opcodeValue": 310,
+        "modifiers": [
+          "clamp"
+        ],
+        "count": 96
+      },
+      {
+        "encoding": "VOP3",
+        "opcode": "V_CVT_PK_U8_F32_55",
+        "opcodeValue": 311,
+        "modifiers": [],
+        "count": 95
+      },
+      {
+        "encoding": "VOP3",
+        "opcode": "V_MQSAD_U32_U8_56",
+        "opcodeValue": 312,
+        "modifiers": [],
+        "count": 94
+      },
+      {
+        "encoding": "MIMG",
+        "opcode": "IMAGE_GATHER4_LZ_O_57",
+        "opcodeValue": 313,
+        "modifiers": [
+          "clamp"
+        ],
+        "count": 93
+      },
+      {
+        "encoding": "DS",
+        "opcode": "DS_GWS_BARRIER_58",
+        "opcodeValue": 314,
+        "modifiers": [],
+        "count": 92
+      },
+      {
+        "encoding": "SOPP",
+        "opcode": "S_SENDMSG_59",
+        "opcodeValue": 315,
+        "modifiers": [],
+        "count": 91
+      },
+      {
+        "encoding": "VOP3",
+        "opcode": "V_CVT_PK_U8_F32_60",
+        "opcodeValue": 316,
+        "modifiers": [
+          "clamp"
+        ],
+        "count": 90
+      },
+      {
+        "encoding": "VOP3",
+        "opcode": "V_MQSAD_U32_U8_61",
+        "opcodeValue": 317,
+        "modifiers": [],
+        "count": 89
+      },
+      {
+        "encoding": "MIMG",
+        "opcode": "IMAGE_GATHER4_LZ_O_62",
+        "opcodeValue": 318,
+        "modifiers": [],
+        "count": 88
+      },
+      {
+        "encoding": "DS",
+        "opcode": "DS_GWS_BARRIER_63",
+        "opcodeValue": 319,
+        "modifiers": [
+          "clamp"
+        ],
+        "count": 87
+      },
+      {
+        "encoding": "SOPP",
+        "opcode": "S_SENDMSG_64",
+        "opcodeValue": 320,
+        "modifiers": [],
+        "count": 86
+      },
+      {
+        "encoding": "VOP3",
+        "opcode": "V_CVT_PK_U8_F32_65",
+        "opcodeValue": 321,
+        "modifiers": [],
+        "count": 85
+      },
+      {
+        "encoding": "VOP3",
+        "opcode": "V_MQSAD_U32_U8_66",
+        "opcodeValue": 322,
+        "modifiers": [
+          "clamp"
+        ],
+        "count": 84
+      },
+      {
+        "encoding": "MIMG",
+        "opcode": "IMAGE_GATHER4_LZ_O_67",
+        "opcodeValue": 323,
+        "modifiers": [],
+        "count": 83
+      },
+      {
+        "encoding": "DS",
+        "opcode": "DS_GWS_BARRIER_68",
+        "opcodeValue": 324,
+        "modifiers": [],
+        "count": 82
+      },
+      {
+        "encoding": "SOPP",
+        "opcode": "S_SENDMSG_69",
+        "opcodeValue": 325,
+        "modifiers": [
+          "clamp"
+        ],
+        "count": 81
+      },
+      {
+        "encoding": "VOP3",
+        "opcode": "V_CVT_PK_U8_F32_70",
+        "opcodeValue": 326,
+        "modifiers": [],
+        "count": 80
+      },
+      {
+        "encoding": "VOP3",
+        "opcode": "V_MQSAD_U32_U8_71",
+        "opcodeValue": 327,
+        "modifiers": [],
+        "count": 79
+      },
+      {
+        "encoding": "MIMG",
+        "opcode": "IMAGE_GATHER4_LZ_O_72",
+        "opcodeValue": 328,
+        "modifiers": [
+          "clamp"
+        ],
+        "count": 78
+      },
+      {
+        "encoding": "DS",
+        "opcode": "DS_GWS_BARRIER_73",
+        "opcodeValue": 329,
+        "modifiers": [],
+        "count": 77
+      },
+      {
+        "encoding": "SOPP",
+        "opcode": "S_SENDMSG_74",
+        "opcodeValue": 330,
+        "modifiers": [],
+        "count": 76
+      },
+      {
+        "encoding": "VOP3",
+        "opcode": "V_CVT_PK_U8_F32_75",
+        "opcodeValue": 331,
+        "modifiers": [
+          "clamp"
+        ],
+        "count": 75
+      },
+      {
+        "encoding": "VOP3",
+        "opcode": "V_MQSAD_U32_U8_76",
+        "opcodeValue": 332,
+        "modifiers": [],
+        "count": 74
+      },
+      {
+        "encoding": "MIMG",
+        "opcode": "IMAGE_GATHER4_LZ_O_77",
+        "opcodeValue": 333,
+        "modifiers": [],
+        "count": 73
+      },
+      {
+        "encoding": "DS",
+        "opcode": "DS_GWS_BARRIER_78",
+        "opcodeValue": 334,
+        "modifiers": [
+          "clamp"
+        ],
+        "count": 72
+      },
+      {
+        "encoding": "SOPP",
+        "opcode": "S_SENDMSG_79",
+        "opcodeValue": 335,
+        "modifiers": [],
+        "count": 71
+      },
+      {
+        "encoding": "VOP3",
+        "opcode": "V_CVT_PK_U8_F32_80",
+        "opcodeValue": 336,
+        "modifiers": [],
+        "count": 70
+      },
+      {
+        "encoding": "VOP3",
+        "opcode": "V_MQSAD_U32_U8_81",
+        "opcodeValue": 337,
+        "modifiers": [
+          "clamp"
+        ],
+        "count": 69
+      },
+      {
+        "encoding": "MIMG",
+        "opcode": "IMAGE_GATHER4_LZ_O_82",
+        "opcodeValue": 338,
+        "modifiers": [],
+        "count": 68
+      },
+      {
+        "encoding": "DS",
+        "opcode": "DS_GWS_BARRIER_83",
+        "opcodeValue": 339,
+        "modifiers": [],
+        "count": 67
+      },
+      {
+        "encoding": "SOPP",
+        "opcode": "S_SENDMSG_84",
+        "opcodeValue": 340,
+        "modifiers": [
+          "clamp"
+        ],
+        "count": 66
+      },
+      {
+        "encoding": "VOP3",
+        "opcode": "V_CVT_PK_U8_F32_85",
+        "opcodeValue": 341,
+        "modifiers": [],
+        "count": 65
+      },
+      {
+        "encoding": "VOP3",
+        "opcode": "V_MQSAD_U32_U8_86",
+        "opcodeValue": 342,
+        "modifiers": [],
+        "count": 64
+      },
+      {
+        "encoding": "MIMG",
+        "opcode": "IMAGE_GATHER4_LZ_O_87",
+        "opcodeValue": 343,
+        "modifiers": [
+          "clamp"
+        ],
+        "count": 63
+      },
+      {
+        "encoding": "DS",
+        "opcode": "DS_GWS_BARRIER_88",
+        "opcodeValue": 344,
+        "modifiers": [],
+        "count": 62
+      },
+      {
+        "encoding": "SOPP",
+        "opcode": "S_SENDMSG_89",
+        "opcodeValue": 345,
+        "modifiers": [],
+        "count": 61
+      },
+      {
+        "encoding": "VOP3",
+        "opcode": "V_CVT_PK_U8_F32_90",
+        "opcodeValue": 346,
+        "modifiers": [
+          "clamp"
+        ],
+        "count": 60
+      },
+      {
+        "encoding": "VOP3",
+        "opcode": "V_MQSAD_U32_U8_91",
+        "opcodeValue": 347,
+        "modifiers": [],
+        "count": 59
+      },
+      {
+        "encoding": "MIMG",
+        "opcode": "IMAGE_GATHER4_LZ_O_92",
+        "opcodeValue": 348,
+        "modifiers": [],
+        "count": 58
+      },
+      {
+        "encoding": "DS",
+        "opcode": "DS_GWS_BARRIER_93",
+        "opcodeValue": 349,
+        "modifiers": [
+          "clamp"
+        ],
+        "count": 57
+      },
+      {
+        "encoding": "SOPP",
+        "opcode": "S_SENDMSG_94",
+        "opcodeValue": 350,
+        "modifiers": [],
+        "count": 56
+      },
+      {
+        "encoding": "VOP3",
+        "opcode": "V_CVT_PK_U8_F32_95",
+        "opcodeValue": 351,
+        "modifiers": [],
+        "count": 55
+      },
+      {
+        "encoding": "VOP3",
+        "opcode": "V_MQSAD_U32_U8_96",
+        "opcodeValue": 352,
+        "modifiers": [
+          "clamp"
+        ],
+        "count": 54
+      },
+      {
+        "encoding": "MIMG",
+        "opcode": "IMAGE_GATHER4_LZ_O_97",
+        "opcodeValue": 353,
+        "modifiers": [],
+        "count": 53
+      },
+      {
+        "encoding": "DS",
+        "opcode": "DS_GWS_BARRIER_98",
+        "opcodeValue": 354,
+        "modifiers": [],
+        "count": 52
+      },
+      {
+        "encoding": "SOPP",
+        "opcode": "S_SENDMSG_99",
+        "opcodeValue": 355,
+        "modifiers": [
+          "clamp"
+        ],
+        "count": 51
+      },
+      {
+        "encoding": "VOP3",
+        "opcode": "V_CVT_PK_U8_F32_100",
+        "opcodeValue": 356,
+        "modifiers": [],
+        "count": 50
+      },
+      {
+        "encoding": "VOP3",
+        "opcode": "V_MQSAD_U32_U8_101",
+        "opcodeValue": 357,
+        "modifiers": [],
+        "count": 49
+      },
+      {
+        "encoding": "MIMG",
+        "opcode": "IMAGE_GATHER4_LZ_O_102",
+        "opcodeValue": 358,
+        "modifiers": [
+          "clamp"
+        ],
+        "count": 48
+      },
+      {
+        "encoding": "DS",
+        "opcode": "DS_GWS_BARRIER_103",
+        "opcodeValue": 359,
+        "modifiers": [],
+        "count": 47
+      },
+      {
+        "encoding": "SOPP",
+        "opcode": "S_SENDMSG_104",
+        "opcodeValue": 360,
+        "modifiers": [],
+        "count": 46
+      },
+      {
+        "encoding": "VOP3",
+        "opcode": "V_CVT_PK_U8_F32_105",
+        "opcodeValue": 361,
+        "modifiers": [
+          "clamp"
+        ],
+        "count": 45
+      },
+      {
+        "encoding": "VOP3",
+        "opcode": "V_MQSAD_U32_U8_106",
+        "opcodeValue": 362,
+        "modifiers": [],
+        "count": 44
+      },
+      {
+        "encoding": "MIMG",
+        "opcode": "IMAGE_GATHER4_LZ_O_107",
+        "opcodeValue": 363,
+        "modifiers": [],
+        "count": 43
+      },
+      {
+        "encoding": "DS",
+        "opcode": "DS_GWS_BARRIER_108",
+        "opcodeValue": 364,
+        "modifiers": [
+          "clamp"
+        ],
+        "count": 42
+      },
+      {
+        "encoding": "SOPP",
+        "opcode": "S_SENDMSG_109",
+        "opcodeValue": 365,
+        "modifiers": [],
+        "count": 41
+      },
+      {
+        "encoding": "VOP3",
+        "opcode": "V_CVT_PK_U8_F32_110",
+        "opcodeValue": 366,
+        "modifiers": [],
+        "count": 40
+      },
+      {
+        "encoding": "VOP3",
+        "opcode": "V_MQSAD_U32_U8_111",
+        "opcodeValue": 367,
+        "modifiers": [
+          "clamp"
+        ],
+        "count": 39
+      },
+      {
+        "encoding": "MIMG",
+        "opcode": "IMAGE_GATHER4_LZ_O_112",
+        "opcodeValue": 368,
+        "modifiers": [],
+        "count": 38
+      },
+      {
+        "encoding": "DS",
+        "opcode": "DS_GWS_BARRIER_113",
+        "opcodeValue": 369,
+        "modifiers": [],
+        "count": 37
+      },
+      {
+        "encoding": "SOPP",
+        "opcode": "S_SENDMSG_114",
+        "opcodeValue": 370,
+        "modifiers": [
+          "clamp"
+        ],
+        "count": 36
+      },
+      {
+        "encoding": "VOP3",
+        "opcode": "V_CVT_PK_U8_F32_115",
+        "opcodeValue": 371,
+        "modifiers": [],
+        "count": 35
+      },
+      {
+        "encoding": "VOP3",
+        "opcode": "V_MQSAD_U32_U8_116",
+        "opcodeValue": 372,
+        "modifiers": [],
+        "count": 34
+      },
+      {
+        "encoding": "MIMG",
+        "opcode": "IMAGE_GATHER4_LZ_O_117",
+        "opcodeValue": 373,
+        "modifiers": [
+          "clamp"
+        ],
+        "count": 33
+      },
+      {
+        "encoding": "DS",
+        "opcode": "DS_GWS_BARRIER_118",
+        "opcodeValue": 374,
+        "modifiers": [],
+        "count": 32
+      },
+      {
+        "encoding": "SOPP",
+        "opcode": "S_SENDMSG_119",
+        "opcodeValue": 375,
+        "modifiers": [],
+        "count": 31
+      },
+      {
+        "encoding": "VOP3",
+        "opcode": "V_CVT_PK_U8_F32_120",
+        "opcodeValue": 376,
+        "modifiers": [
+          "clamp"
+        ],
+        "count": 30
+      },
+      {
+        "encoding": "VOP3",
+        "opcode": "V_MQSAD_U32_U8_121",
+        "opcodeValue": 377,
+        "modifiers": [],
+        "count": 29
+      },
+      {
+        "encoding": "MIMG",
+        "opcode": "IMAGE_GATHER4_LZ_O_122",
+        "opcodeValue": 378,
+        "modifiers": [],
+        "count": 28
+      },
+      {
+        "encoding": "DS",
+        "opcode": "DS_GWS_BARRIER_123",
+        "opcodeValue": 379,
+        "modifiers": [
+          "clamp"
+        ],
+        "count": 27
+      },
+      {
+        "encoding": "SOPP",
+        "opcode": "S_SENDMSG_124",
+        "opcodeValue": 380,
+        "modifiers": [],
+        "count": 26
+      },
+      {
+        "encoding": "VOP3",
+        "opcode": "V_CVT_PK_U8_F32_125",
+        "opcodeValue": 381,
+        "modifiers": [],
+        "count": 25
+      },
+      {
+        "encoding": "VOP3",
+        "opcode": "V_MQSAD_U32_U8_126",
+        "opcodeValue": 382,
+        "modifiers": [
+          "clamp"
+        ],
+        "count": 24
+      },
+      {
+        "encoding": "MIMG",
+        "opcode": "IMAGE_GATHER4_LZ_O_127",
+        "opcodeValue": 383,
+        "modifiers": [],
+        "count": 23
+      },
+      {
+        "encoding": "DS",
+        "opcode": "DS_GWS_BARRIER_128",
+        "opcodeValue": 384,
+        "modifiers": [],
+        "count": 22
+      },
+      {
+        "encoding": "SOPP",
+        "opcode": "S_SENDMSG_129",
+        "opcodeValue": 385,
+        "modifiers": [
+          "clamp"
+        ],
+        "count": 21
+      },
+      {
+        "encoding": "VOP3",
+        "opcode": "V_CVT_PK_U8_F32_130",
+        "opcodeValue": 386,
+        "modifiers": [],
+        "count": 20
+      },
+      {
+        "encoding": "VOP3",
+        "opcode": "V_MQSAD_U32_U8_131",
+        "opcodeValue": 387,
+        "modifiers": [],
+        "count": 19
+      },
+      {
+        "encoding": "MIMG",
+        "opcode": "IMAGE_GATHER4_LZ_O_132",
+        "opcodeValue": 388,
+        "modifiers": [
+          "clamp"
+        ],
+        "count": 18
+      },
+      {
+        "encoding": "DS",
+        "opcode": "DS_GWS_BARRIER_133",
+        "opcodeValue": 389,
+        "modifiers": [],
+        "count": 17
+      },
+      {
+        "encoding": "SOPP",
+        "opcode": "S_SENDMSG_134",
+        "opcodeValue": 390,
+        "modifiers": [],
+        "count": 16
+      },
+      {
+        "encoding": "VOP3",
+        "opcode": "V_CVT_PK_U8_F32_135",
+        "opcodeValue": 391,
+        "modifiers": [
+          "clamp"
+        ],
+        "count": 15
+      },
+      {
+        "encoding": "VOP3",
+        "opcode": "V_MQSAD_U32_U8_136",
+        "opcodeValue": 392,
+        "modifiers": [],
+        "count": 14
+      },
+      {
+        "encoding": "MIMG",
+        "opcode": "IMAGE_GATHER4_LZ_O_137",
+        "opcodeValue": 393,
+        "modifiers": [],
+        "count": 13
+      },
+      {
+        "encoding": "DS",
+        "opcode": "DS_GWS_BARRIER_138",
+        "opcodeValue": 394,
+        "modifiers": [
+          "clamp"
+        ],
+        "count": 12
+      },
+      {
+        "encoding": "SOPP",
+        "opcode": "S_SENDMSG_139",
+        "opcodeValue": 395,
+        "modifiers": [],
+        "count": 11
+      },
+      {
+        "encoding": "VOP3",
+        "opcode": "V_CVT_PK_U8_F32_140",
+        "opcodeValue": 396,
+        "modifiers": [],
+        "count": 10
+      },
+      {
+        "encoding": "VOP3",
+        "opcode": "V_MQSAD_U32_U8_141",
+        "opcodeValue": 397,
+        "modifiers": [
+          "clamp"
+        ],
+        "count": 9
+      },
+      {
+        "encoding": "MIMG",
+        "opcode": "IMAGE_GATHER4_LZ_O_142",
+        "opcodeValue": 398,
+        "modifiers": [],
+        "count": 8
+      },
+      {
+        "encoding": "DS",
+        "opcode": "DS_GWS_BARRIER_143",
+        "opcodeValue": 399,
+        "modifiers": [],
+        "count": 7
+      },
+      {
+        "encoding": "SOPP",
+        "opcode": "S_SENDMSG_144",
+        "opcodeValue": 400,
+        "modifiers": [
+          "clamp"
+        ],
+        "count": 6
+      },
+      {
+        "encoding": "VOP3",
+        "opcode": "V_CVT_PK_U8_F32_145",
+        "opcodeValue": 401,
+        "modifiers": [],
+        "count": 5
+      },
+      {
+        "encoding": "VOP3",
+        "opcode": "V_MQSAD_U32_U8_146",
+        "opcodeValue": 402,
+        "modifiers": [],
+        "count": 4
+      },
+      {
+        "encoding": "MIMG",
+        "opcode": "IMAGE_GATHER4_LZ_O_147",
+        "opcodeValue": 403,
+        "modifiers": [
+          "clamp"
+        ],
+        "count": 3
+      },
+      {
+        "encoding": "DS",
+        "opcode": "DS_GWS_BARRIER_148",
+        "opcodeValue": 404,
+        "modifiers": [],
+        "count": 2
+      },
+      {
+        "encoding": "SOPP",
+        "opcode": "S_SENDMSG_149",
+        "opcodeValue": 405,
+        "modifiers": [],
+        "count": 1
+      }
+    ],
+    "imageFormats": [
+      {
+        "format": 1,
+        "name": "GuestFormat1",
+        "status": "rejected",
+        "usage": "sampled",
+        "count": 100
+      },
+      {
+        "format": 2,
+        "name": "GuestFormat2",
+        "status": "accepted",
+        "usage": "storage",
+        "count": 99
+      },
+      {
+        "format": 3,
+        "name": "GuestFormat3",
+        "status": "unknown",
+        "usage": "color-target",
+        "count": 98
+      },
+      {
+        "format": 4,
+        "name": "GuestFormat4",
+        "status": "rejected",
+        "usage": "depth-target",
+        "count": 97
+      },
+      {
+        "format": 5,
+        "name": "GuestFormat5",
+        "status": "accepted",
+        "usage": "transfer",
+        "count": 96
+      },
+      {
+        "format": 6,
+        "name": "GuestFormat6",
+        "status": "unknown",
+        "usage": "other",
+        "count": 95
+      },
+      {
+        "format": 7,
+        "name": "GuestFormat7",
+        "status": "rejected",
+        "usage": "sampled",
+        "count": 94
+      },
+      {
+        "format": 8,
+        "name": "GuestFormat8",
+        "status": "accepted",
+        "usage": "storage",
+        "count": 93
+      },
+      {
+        "format": 9,
+        "name": "GuestFormat9",
+        "status": "unknown",
+        "usage": "color-target",
+        "count": 92
+      },
+      {
+        "format": 10,
+        "name": "GuestFormat10",
+        "status": "rejected",
+        "usage": "depth-target",
+        "count": 91
+      },
+      {
+        "format": 11,
+        "name": "GuestFormat11",
+        "status": "accepted",
+        "usage": "transfer",
+        "count": 90
+      },
+      {
+        "format": 12,
+        "name": "GuestFormat12",
+        "status": "unknown",
+        "usage": "other",
+        "count": 89
+      },
+      {
+        "format": 13,
+        "name": "GuestFormat13",
+        "status": "rejected",
+        "usage": "sampled",
+        "count": 88
+      },
+      {
+        "format": 14,
+        "name": "GuestFormat14",
+        "status": "accepted",
+        "usage": "storage",
+        "count": 87
+      },
+      {
+        "format": 15,
+        "name": "GuestFormat15",
+        "status": "unknown",
+        "usage": "color-target",
+        "count": 86
+      },
+      {
+        "format": 16,
+        "name": "GuestFormat16",
+        "status": "rejected",
+        "usage": "depth-target",
+        "count": 85
+      },
+      {
+        "format": 17,
+        "name": "GuestFormat17",
+        "status": "accepted",
+        "usage": "transfer",
+        "count": 84
+      },
+      {
+        "format": 18,
+        "name": "GuestFormat18",
+        "status": "unknown",
+        "usage": "other",
+        "count": 83
+      },
+      {
+        "format": 19,
+        "name": "GuestFormat19",
+        "status": "rejected",
+        "usage": "sampled",
+        "count": 82
+      },
+      {
+        "format": 20,
+        "name": "GuestFormat20",
+        "status": "accepted",
+        "usage": "storage",
+        "count": 81
+      },
+      {
+        "format": 21,
+        "name": "GuestFormat21",
+        "status": "unknown",
+        "usage": "color-target",
+        "count": 80
+      },
+      {
+        "format": 22,
+        "name": "GuestFormat22",
+        "status": "rejected",
+        "usage": "depth-target",
+        "count": 79
+      },
+      {
+        "format": 23,
+        "name": "GuestFormat23",
+        "status": "accepted",
+        "usage": "transfer",
+        "count": 78
+      },
+      {
+        "format": 24,
+        "name": "GuestFormat24",
+        "status": "unknown",
+        "usage": "other",
+        "count": 77
+      },
+      {
+        "format": 25,
+        "name": "GuestFormat25",
+        "status": "rejected",
+        "usage": "sampled",
+        "count": 76
+      },
+      {
+        "format": 26,
+        "name": "GuestFormat26",
+        "status": "accepted",
+        "usage": "storage",
+        "count": 75
+      },
+      {
+        "format": 27,
+        "name": "GuestFormat27",
+        "status": "unknown",
+        "usage": "color-target",
+        "count": 74
+      },
+      {
+        "format": 28,
+        "name": "GuestFormat28",
+        "status": "rejected",
+        "usage": "depth-target",
+        "count": 73
+      },
+      {
+        "format": 29,
+        "name": "GuestFormat29",
+        "status": "accepted",
+        "usage": "transfer",
+        "count": 72
+      },
+      {
+        "format": 30,
+        "name": "GuestFormat30",
+        "status": "unknown",
+        "usage": "other",
+        "count": 71
+      },
+      {
+        "format": 31,
+        "name": "GuestFormat31",
+        "status": "rejected",
+        "usage": "sampled",
+        "count": 70
+      },
+      {
+        "format": 32,
+        "name": "GuestFormat32",
+        "status": "accepted",
+        "usage": "storage",
+        "count": 69
+      },
+      {
+        "format": 33,
+        "name": "GuestFormat33",
+        "status": "unknown",
+        "usage": "color-target",
+        "count": 68
+      },
+      {
+        "format": 34,
+        "name": "GuestFormat34",
+        "status": "rejected",
+        "usage": "depth-target",
+        "count": 67
+      },
+      {
+        "format": 35,
+        "name": "GuestFormat35",
+        "status": "accepted",
+        "usage": "transfer",
+        "count": 66
+      },
+      {
+        "format": 36,
+        "name": "GuestFormat36",
+        "status": "unknown",
+        "usage": "other",
+        "count": 65
+      },
+      {
+        "format": 37,
+        "name": "GuestFormat37",
+        "status": "rejected",
+        "usage": "sampled",
+        "count": 64
+      },
+      {
+        "format": 38,
+        "name": "GuestFormat38",
+        "status": "accepted",
+        "usage": "storage",
+        "count": 63
+      },
+      {
+        "format": 39,
+        "name": "GuestFormat39",
+        "status": "unknown",
+        "usage": "color-target",
+        "count": 62
+      },
+      {
+        "format": 40,
+        "name": "GuestFormat40",
+        "status": "rejected",
+        "usage": "depth-target",
+        "count": 61
+      },
+      {
+        "format": 41,
+        "name": "GuestFormat41",
+        "status": "accepted",
+        "usage": "transfer",
+        "count": 60
+      },
+      {
+        "format": 42,
+        "name": "GuestFormat42",
+        "status": "unknown",
+        "usage": "other",
+        "count": 59
+      },
+      {
+        "format": 43,
+        "name": "GuestFormat43",
+        "status": "rejected",
+        "usage": "sampled",
+        "count": 58
+      },
+      {
+        "format": 44,
+        "name": "GuestFormat44",
+        "status": "accepted",
+        "usage": "storage",
+        "count": 57
+      },
+      {
+        "format": 45,
+        "name": "GuestFormat45",
+        "status": "unknown",
+        "usage": "color-target",
+        "count": 56
+      },
+      {
+        "format": 46,
+        "name": "GuestFormat46",
+        "status": "rejected",
+        "usage": "depth-target",
+        "count": 55
+      },
+      {
+        "format": 47,
+        "name": "GuestFormat47",
+        "status": "accepted",
+        "usage": "transfer",
+        "count": 54
+      },
+      {
+        "format": 48,
+        "name": "GuestFormat48",
+        "status": "unknown",
+        "usage": "other",
+        "count": 53
+      },
+      {
+        "format": 49,
+        "name": "GuestFormat49",
+        "status": "rejected",
+        "usage": "sampled",
+        "count": 52
+      },
+      {
+        "format": 50,
+        "name": "GuestFormat50",
+        "status": "accepted",
+        "usage": "storage",
+        "count": 51
+      },
+      {
+        "format": 51,
+        "name": "GuestFormat51",
+        "status": "unknown",
+        "usage": "color-target",
+        "count": 50
+      },
+      {
+        "format": 52,
+        "name": "GuestFormat52",
+        "status": "rejected",
+        "usage": "depth-target",
+        "count": 49
+      },
+      {
+        "format": 53,
+        "name": "GuestFormat53",
+        "status": "accepted",
+        "usage": "transfer",
+        "count": 48
+      },
+      {
+        "format": 54,
+        "name": "GuestFormat54",
+        "status": "unknown",
+        "usage": "other",
+        "count": 47
+      },
+      {
+        "format": 55,
+        "name": "GuestFormat55",
+        "status": "rejected",
+        "usage": "sampled",
+        "count": 46
+      },
+      {
+        "format": 56,
+        "name": "GuestFormat56",
+        "status": "accepted",
+        "usage": "storage",
+        "count": 45
+      },
+      {
+        "format": 57,
+        "name": "GuestFormat57",
+        "status": "unknown",
+        "usage": "color-target",
+        "count": 44
+      },
+      {
+        "format": 58,
+        "name": "GuestFormat58",
+        "status": "rejected",
+        "usage": "depth-target",
+        "count": 43
+      },
+      {
+        "format": 59,
+        "name": "GuestFormat59",
+        "status": "accepted",
+        "usage": "transfer",
+        "count": 42
+      },
+      {
+        "format": 60,
+        "name": "GuestFormat60",
+        "status": "unknown",
+        "usage": "other",
+        "count": 41
+      },
+      {
+        "format": 61,
+        "name": "GuestFormat61",
+        "status": "rejected",
+        "usage": "sampled",
+        "count": 40
+      },
+      {
+        "format": 62,
+        "name": "GuestFormat62",
+        "status": "accepted",
+        "usage": "storage",
+        "count": 39
+      },
+      {
+        "format": 63,
+        "name": "GuestFormat63",
+        "status": "unknown",
+        "usage": "color-target",
+        "count": 38
+      },
+      {
+        "format": 64,
+        "name": "GuestFormat64",
+        "status": "rejected",
+        "usage": "depth-target",
+        "count": 37
+      },
+      {
+        "format": 65,
+        "name": "GuestFormat65",
+        "status": "accepted",
+        "usage": "transfer",
+        "count": 36
+      },
+      {
+        "format": 66,
+        "name": "GuestFormat66",
+        "status": "unknown",
+        "usage": "other",
+        "count": 35
+      },
+      {
+        "format": 67,
+        "name": "GuestFormat67",
+        "status": "rejected",
+        "usage": "sampled",
+        "count": 34
+      },
+      {
+        "format": 68,
+        "name": "GuestFormat68",
+        "status": "accepted",
+        "usage": "storage",
+        "count": 33
+      },
+      {
+        "format": 69,
+        "name": "GuestFormat69",
+        "status": "unknown",
+        "usage": "color-target",
+        "count": 32
+      },
+      {
+        "format": 70,
+        "name": "GuestFormat70",
+        "status": "rejected",
+        "usage": "depth-target",
+        "count": 31
+      },
+      {
+        "format": 71,
+        "name": "GuestFormat71",
+        "status": "accepted",
+        "usage": "transfer",
+        "count": 30
+      },
+      {
+        "format": 72,
+        "name": "GuestFormat72",
+        "status": "unknown",
+        "usage": "other",
+        "count": 29
+      },
+      {
+        "format": 73,
+        "name": "GuestFormat73",
+        "status": "rejected",
+        "usage": "sampled",
+        "count": 28
+      },
+      {
+        "format": 74,
+        "name": "GuestFormat74",
+        "status": "accepted",
+        "usage": "storage",
+        "count": 27
+      },
+      {
+        "format": 75,
+        "name": "GuestFormat75",
+        "status": "unknown",
+        "usage": "color-target",
+        "count": 26
+      },
+      {
+        "format": 76,
+        "name": "GuestFormat76",
+        "status": "rejected",
+        "usage": "depth-target",
+        "count": 25
+      },
+      {
+        "format": 77,
+        "name": "GuestFormat77",
+        "status": "accepted",
+        "usage": "transfer",
+        "count": 24
+      },
+      {
+        "format": 78,
+        "name": "GuestFormat78",
+        "status": "unknown",
+        "usage": "other",
+        "count": 23
+      },
+      {
+        "format": 79,
+        "name": "GuestFormat79",
+        "status": "rejected",
+        "usage": "sampled",
+        "count": 22
+      },
+      {
+        "format": 80,
+        "name": "GuestFormat80",
+        "status": "accepted",
+        "usage": "storage",
+        "count": 21
+      },
+      {
+        "format": 81,
+        "name": "GuestFormat81",
+        "status": "unknown",
+        "usage": "color-target",
+        "count": 20
+      },
+      {
+        "format": 82,
+        "name": "GuestFormat82",
+        "status": "rejected",
+        "usage": "depth-target",
+        "count": 19
+      },
+      {
+        "format": 83,
+        "name": "GuestFormat83",
+        "status": "accepted",
+        "usage": "transfer",
+        "count": 18
+      },
+      {
+        "format": 84,
+        "name": "GuestFormat84",
+        "status": "unknown",
+        "usage": "other",
+        "count": 17
+      },
+      {
+        "format": 85,
+        "name": "GuestFormat85",
+        "status": "rejected",
+        "usage": "sampled",
+        "count": 16
+      },
+      {
+        "format": 86,
+        "name": "GuestFormat86",
+        "status": "accepted",
+        "usage": "storage",
+        "count": 15
+      },
+      {
+        "format": 87,
+        "name": "GuestFormat87",
+        "status": "unknown",
+        "usage": "color-target",
+        "count": 14
+      },
+      {
+        "format": 88,
+        "name": "GuestFormat88",
+        "status": "rejected",
+        "usage": "depth-target",
+        "count": 13
+      },
+      {
+        "format": 89,
+        "name": "GuestFormat89",
+        "status": "accepted",
+        "usage": "transfer",
+        "count": 12
+      },
+      {
+        "format": 90,
+        "name": "GuestFormat90",
+        "status": "unknown",
+        "usage": "other",
+        "count": 11
+      },
+      {
+        "format": 91,
+        "name": "GuestFormat91",
+        "status": "rejected",
+        "usage": "sampled",
+        "count": 10
+      },
+      {
+        "format": 92,
+        "name": "GuestFormat92",
+        "status": "accepted",
+        "usage": "storage",
+        "count": 9
+      },
+      {
+        "format": 93,
+        "name": "GuestFormat93",
+        "status": "unknown",
+        "usage": "color-target",
+        "count": 8
+      },
+      {
+        "format": 94,
+        "name": "GuestFormat94",
+        "status": "rejected",
+        "usage": "depth-target",
+        "count": 7
+      },
+      {
+        "format": 95,
+        "name": "GuestFormat95",
+        "status": "accepted",
+        "usage": "transfer",
+        "count": 6
+      },
+      {
+        "format": 96,
+        "name": "GuestFormat96",
+        "status": "unknown",
+        "usage": "other",
+        "count": 5
+      },
+      {
+        "format": 97,
+        "name": "GuestFormat97",
+        "status": "rejected",
+        "usage": "sampled",
+        "count": 4
+      },
+      {
+        "format": 98,
+        "name": "GuestFormat98",
+        "status": "accepted",
+        "usage": "storage",
+        "count": 3
+      },
+      {
+        "format": 99,
+        "name": "GuestFormat99",
+        "status": "unknown",
+        "usage": "color-target",
+        "count": 2
+      },
+      {
+        "format": 100,
+        "name": "GuestFormat100",
+        "status": "rejected",
+        "usage": "depth-target",
+        "count": 1
+      }
+    ],
+    "descriptors": [
+      {
+        "type": "UniformBuffer",
+        "status": "accepted",
+        "usage": "read",
+        "count": 900
+      },
+      {
+        "type": "StorageBuffer",
+        "status": "accepted",
+        "usage": "read",
+        "count": 890
+      },
+      {
+        "type": "UniformTexelBuffer",
+        "status": "accepted",
+        "usage": "read",
+        "count": 880
+      },
+      {
+        "type": "StorageTexelBuffer",
+        "status": "accepted",
+        "usage": "read",
+        "count": 870
+      },
+      {
+        "type": "SampledImage",
+        "status": "accepted",
+        "usage": "read",
+        "count": 860
+      },
+      {
+        "type": "StorageImage",
+        "status": "accepted",
+        "usage": "read",
+        "count": 850
+      },
+      {
+        "type": "Sampler",
+        "status": "accepted",
+        "usage": "read",
+        "count": 840
+      }
+    ]
+  },
+  "stop": {
+    "kind": "missing-function",
+    "reason": "runtime-stop",
+    "message": "Called libSceNpTrophy sceNpTrophyCall000, which is not implemented.",
+    "source": "core/libs/prx/libc/src/General.cpp:1015"
+  }
+}
