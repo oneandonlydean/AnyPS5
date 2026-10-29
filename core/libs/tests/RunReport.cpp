@@ -565,6 +565,67 @@ void PrivacySweepTest() {
 #endif
 }
 
+RunReport::Settings Covered(const fs::path& executable, const fs::path& user, const char* id);
+
+void PrivacySweepEverythingTest() {
+#ifdef _WIN32
+    throw NotRun("environment canaries are POSIX here");
+#else
+    ::setenv("USER", "canaryuser9", 1);
+    ::setenv("HOME", "/home/canaryuser9", 1);
+    ::setenv("HOSTNAME", "canary-host-9", 1);
+    Directory executable, user;
+    auto settings = Covered(executable.path, user.path, IdA);
+    settings.worker = true;
+    settings.checkpointInterval = std::chrono::milliseconds(10);
+    settings.game = [] {
+        RunReport::GameInfo game;
+        game.titleId = "PPSA12345";
+        game.contentVersion = "canaryuser9";
+        game.name = "Game canary-host-9";
+        return game;
+    };
+    RunReport::Collector collector(std::move(settings));
+    Require(collector.Start(), "the collector did not start");
+    // Every free input carries a host name, a user name or a path; none of it may reach a report, a checkpoint or a recovered report.
+    collector.NoteMissingFunction("libcanaryuser9", "fn_canaryuser9_call", "/home/canaryuser9/core/a.cpp", "fn_canaryuser9_call not implemented");
+    collector.NoteMissingFunction("lib/home/canaryuser9", "fn_ok", "C:\\Users\\canaryuser9\\core\\a.cpp", "fn_ok not implemented");
+    collector.NoteUnsupportedInstruction("VOPcanaryuser9", "OP_canary-host-9", 12, "/home/canaryuser9/x.cpp");
+    collector.NoteImageFormat(3, "fmt_canaryuser9", RunReport::Status::Rejected, 0);
+    collector.NoteUnsupportedShaderStop("canaryuser9", "canary-host-9", "/home/canaryuser9/y.cpp");
+    collector.NoteMilestone(2);
+    std::this_thread::sleep_for(std::chrono::milliseconds(100));
+    const auto checkpoint = Read(collector.CheckpointPath());
+    collector.Finish(RunReport::Exit::Abort, collector.PendingStop().value(), std::nullopt);
+    const auto report = Read(collector.ReportPath());
+    for (const auto& text : {checkpoint, report}) {
+        Require(!text.empty(), "an output is empty");
+        for (const char* canary : {"canaryuser9", "canary-host-9", "/home/", "C:\\", "Users", "@"}) {
+            Require(!Contains(text, canary), std::string("the output contains the canary ") + canary + ": " + text);
+        }
+    }
+    // A recovered report is built from the checkpoint and must be as clean.
+    {
+        Directory other, userOther;
+        auto abandonedSettings = Covered(other.path, userOther.path, IdB);
+        abandonedSettings.worker = true;
+        abandonedSettings.checkpointInterval = std::chrono::milliseconds(10);
+        {
+            RunReport::Collector abandoned(std::move(abandonedSettings));
+            Require(abandoned.Start(), "the collector did not start");
+            abandoned.NoteMissingFunction("libcanaryuser9", "fn_canaryuser9_call", "", "x");
+            abandoned.NoteMilestone(2);
+            std::this_thread::sleep_for(std::chrono::milliseconds(100));
+        }
+        RunReport::Collector next(Covered(other.path, userOther.path, "cccccccccccccccccccccccccccccccc"));
+        Require(next.Start(), "the next collector did not start");
+        const auto recovered = Read(other.path / "reports" / IdB / "anyps5-report.json");
+        Require(!Contains(recovered, "canaryuser9") && !Contains(recovered, "canary-host-9"), "the recovered report contains a canary: " + recovered);
+        next.Finish(RunReport::Exit::Clean, {}, 0);
+    }
+#endif
+}
+
 void NumericLocaleTest() {
 #ifdef _WIN32
     throw NotRun("locale names differ");
@@ -1439,6 +1500,7 @@ int main(int argc, char** argv) {
         Run("recovery-rejects-link", RecoveryRejectsLinkTest);
         Run("privacy-isolated", PrivacyIsolatedTest);
         Run("privacy-sweep", PrivacySweepTest);
+        Run("privacy-sweep-everything", PrivacySweepEverythingTest);
         Run("numeric-locale", NumericLocaleTest);
         Run("ancestor-link", AncestorLinkTest);
         Run("metadata-host-token", MetadataHostTokenTest);
