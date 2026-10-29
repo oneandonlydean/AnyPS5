@@ -691,6 +691,8 @@ Report Sanitized(Report report, const HostIdentifiers& host) {
     // The brand string of most Intel and some other CPUs ends in " @ 3.50GHz". The clock is no identity, and the "@" would read as an address.
     // Only an annotation that stands apart (a space on both sides of the "@") is cut, and what is left goes through the same filter as any
     // other value below; "alice@3.5GHz" is not an annotation, keeps its "@" and is dropped.
+    // The names of the host and the user are looked for in the whole original text first, then again in what is left.
+    if (report.machine.cpu && NamesHost(*report.machine.cpu, machineNames)) report.machine.cpu.reset();
     if (report.machine.cpu) {
         static const std::regex clock(R"((.*[^ @]) +@ +[0-9]{1,2}([.,][0-9]{1,3})? ?[GMgm][Hh][Zz])");
         std::smatch parts;

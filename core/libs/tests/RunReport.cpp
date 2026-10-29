@@ -870,6 +870,15 @@ void CpuClockSuffixTest() {
         const auto output = RunReport::Serialize(report, named);
         Require(kept(output, "\"cpu\": null") && !kept(output, "jdoe") && !kept(output, "ali"), std::string("a CPU name with an address or a name before the clock was kept: ") + hostile + ": " + output);
     }
+    {
+        // A name that is the whole original text is found before the clock is cut off it.
+        RunReport::HostIdentifiers whole;
+        whole.words = {"alice @ 3.5GHz"};
+        auto report = SampleReport();
+        report.machine.cpu = std::string("alice @ 3.5GHz");
+        const auto output = RunReport::Serialize(report, whole);
+        Require(kept(output, "\"cpu\": null") && !kept(output, "alice"), "a host name that is the whole CPU text was kept after the clock was cut: " + output);
+    }
     text = cpuOf("Core i7 @ 3.2GHz @ 3.5GHz extra");
     Require(kept(text, "\"cpu\": null"), "a CPU name with text after the clock was kept: " + text);
 }
