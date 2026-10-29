@@ -181,11 +181,17 @@ void SerializeTests() {
     Require(Contains(RunReport::Serialize(controls), "\"name\": null"), "a name with a control character was written");
 }
 
+// The collector names folders by their real path (macOS temp folders are under the /var link to /private/var), so paths are compared by it.
+bool SamePath(const fs::path& left, const fs::path& right) {
+    std::error_code error;
+    return fs::weakly_canonical(left, error) == fs::weakly_canonical(right, error);
+}
+
 void FinishTests() {
     Directory executable, user;
     RunReport::Collector collector(SettingsFor(executable.path, user.path, IdA));
     Require(collector.Start(), "the collector did not start");
-    Require(collector.ReportPath() == executable.path / "anyps5-report.json", "the report is not next to the executable");
+    Require(SamePath(collector.ReportPath(), executable.path / "anyps5-report.json"), "the report is not next to the executable");
     const auto checkpoint = Read(collector.CheckpointPath());
     Require(Contains(checkpoint, "\"recovered\": true") && Contains(checkpoint, "\"exit\": \"killed\"") && Contains(checkpoint, "\"reason\": \"unclean-unknown\"") && Contains(checkpoint, "\"exitCode\": null") && Contains(checkpoint, "\"incomplete\": true"), "the checkpoint is not a recovered report");
     Require(fs::exists(executable.path / ("anyps5-report." + std::string(IdA) + ".lock")), "the run holds no lock file");
@@ -218,7 +224,7 @@ void FallbackTests() {
     std::ofstream(root.path / "file") << "not a directory";
     RunReport::Collector collector(SettingsFor(root.path / "file" / "below", user.path, IdA));
     Require(collector.Start(), "the collector did not fall back to the user folder");
-    Require(collector.ReportPath() == user.path / "reports" / IdA / "anyps5-report.json", "the fallback report is not under reports/<run id>/");
+    Require(SamePath(collector.ReportPath(), user.path / "reports" / IdA / "anyps5-report.json"), "the fallback report is not under reports/<run id>/");
     collector.Finish(RunReport::Exit::Clean, {}, 0);
     Require(fs::exists(collector.ReportPath()), "the fallback report was not written");
     RunReport::Collector nowhere(SettingsFor(root.path / "file" / "below", root.path / "file" / "also", IdB));
@@ -834,6 +840,27 @@ RunReport::SystemInfo CleanMachine() {
     machine.ramGiB = 32;
     machine.gpu = RunReport::GpuInfo{std::string("NVIDIA"), std::string("Test GPU 4090"), std::string("NVIDIA 575.64.03"), std::string("1.3.280")};
     return machine;
+}
+
+void CpuClockSuffixTest() {
+    // Brand strings like "Intel(R) Xeon(R) CPU E5-1650 v2 @ 3.50GHz" keep the model and lose the clock; an address-like "@" elsewhere still removes the field.
+    RunReport::HostIdentifiers host;
+    const auto cpuOf = [&](const char* cpu) {
+        auto report = SampleReport();
+        report.machine.cpu = std::string(cpu);
+        return RunReport::Serialize(report, host);
+    };
+    const auto kept = [](const std::string& text, const char* needle) { return text.find(needle) != std::string::npos; };
+    auto text = cpuOf("Intel(R) Xeon(R) CPU E5-1650 v2 @ 3.50GHz");
+    Require(kept(text, "\"cpu\": \"Intel(R) Xeon(R) CPU E5-1650 v2\"") && !kept(text, "GHz"), "the clock suffix was not dropped from the CPU name: " + text);
+    text = cpuOf("VirtualApple @ 2.50GHz");
+    Require(kept(text, "\"cpu\": \"VirtualApple\""), "the clock suffix was not dropped from the Rosetta CPU name: " + text);
+    text = cpuOf("Apple M1 (Virtual)");
+    Require(kept(text, "\"cpu\": \"Apple M1 (Virtual)\""), "a CPU name without a clock was changed: " + text);
+    text = cpuOf("Core @ somebody@example.org");
+    Require(kept(text, "\"cpu\": null"), "an address-like CPU name was kept: " + text);
+    text = cpuOf("Core i7 @ 3.2GHz @ 3.5GHz extra");
+    Require(kept(text, "\"cpu\": null"), "a CPU name with text after the clock was kept: " + text);
 }
 
 void MachineFieldCanaryTest() {
@@ -1995,6 +2022,7 @@ void Dump(const fs::path& directory) {
 
 #ifndef _WIN32
 extern "C" [[noreturn]] void LibcRuntimeAssertion(const char*, int, const char*, const char*);
+extern "C" [[noreturn]] void _ZSt9terminatev_nid_postfix();
 extern "C" [[noreturn]] void abort_nid_postfix(unsigned long, unsigned long, unsigned long, unsigned long, unsigned long, unsigned long);
 #endif
 
@@ -2035,10 +2063,15 @@ int main(int argc, char** argv) {
                 LibcRunReportShader_nid_no_patch(0);
                 LibcRunReportMilestone_nid_no_patch(3);
                 // The guest does not catch it: an exception out of a noexcept function is std::terminate, as for a real stub call.
+#ifdef __APPLE__
+                // The guest's terminate is the library's; the host's std::terminate here is not (no symbol interposition on macOS).
+                std::set_terminate([] { _ZSt9terminatev_nid_postfix(); });
+#endif
                 [] () noexcept { NotImplemented_nid_no_patch("sceNpTestCall_nid_postfix"); }();
             }
             if (mode == "abort") abort_nid_postfix(0, 0, 0, 0, 0, 0);
-            if (mode == "std-terminate") std::terminate();
+            // The guest calls the library's terminate by its name; a host without symbol interposition (macOS) would reach its own std::terminate otherwise.
+            if (mode == "std-terminate") _ZSt9terminatev_nid_postfix();
             if (mode == "assert") LibcRuntimeAssertion("file", 1, "function", "condition");
             if (mode == "relaunch-env") {
                 const char* choice = LibcRunReportRelaunchEnvironment_nid_no_patch();
@@ -2110,6 +2143,7 @@ int main(int argc, char** argv) {
         Run("system-fields", SystemFieldsTest);
         Run("host-probe", HostProbeTest);
         Run("machine-field-canary", MachineFieldCanaryTest);
+        Run("cpu-clock-suffix", CpuClockSuffixTest);
         Run("machine-host-name-rules", MachineHostNameRulesTest);
         Run("os-version-format", OsVersionFormatTest);
         Run("os-identity-only-for-the-os-version", OsIdentityOnlyForTheOsVersionTest);
