@@ -767,6 +767,19 @@ void ResumeRetractsReportTest() {
     next.Finish(RunReport::Exit::Clean, {}, 0);
 }
 
+void ResumeKeepsNewerReportTest() {
+    Directory executable, user;
+    RunReport::Collector collector(SettingsFor(executable.path, user.path, IdA));
+    Require(collector.Start(), "the collector did not start");
+    collector.Finish(RunReport::Exit::Clean, {}, 0);
+    // Another run in the same folder finishes after this one's handoff and replaces the report.
+    const std::string newer = RunReport::Serialize(SampleReport());
+    std::string error;
+    Require(RunReport::WriteAtomically(collector.ReportPath(), newer, "bbbbbbbb", error), "the newer report was not written: " + error);
+    Require(collector.Resume(), "the run was not reopened");
+    Require(Read(collector.ReportPath()) == newer, "Resume deleted a newer completed report");
+}
+
 void HandoffOutcomeTest() {
     {
         Directory executable, user;
@@ -1001,6 +1014,7 @@ int main(int argc, char** argv) {
         Run("component-provenance", ComponentProvenanceTest);
         Run("resume-blocked-worker", ResumeBlockedWorkerTest);
         Run("resume-retracts-report", ResumeRetractsReportTest);
+        Run("resume-keeps-newer-report", ResumeKeepsNewerReportTest);
         Run("handoff-outcome", HandoffOutcomeTest);
 #ifndef _WIN32
         Run("child-exit", ChildExitTest);

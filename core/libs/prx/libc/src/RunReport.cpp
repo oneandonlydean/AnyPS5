@@ -1183,9 +1183,12 @@ bool Collector::Resume() {
         }
         if (!WriteCheckpoint()) return false;
         if (reportPublished) {
+            // Only the report this run wrote is taken back: a newer report from another run in the same folder is not ours to delete.
+            std::string current;
             std::error_code error;
-            if (fs::symlink_status(reportPath, error).type() == fs::file_type::regular) fs::remove(reportPath, error);
+            if (ReadBounded(reportPath, MaxBytes, current) && current == publishedBytes) fs::remove(reportPath, error);
             reportPublished = false;
+            publishedBytes.clear();
         }
         std::lock_guard guard(mutex);
         if (!workerRunning) {
@@ -1344,6 +1347,7 @@ void Collector::Finish(Exit exit, Stop stop, std::optional<std::int64_t> exitCod
             std::string error;
             if (WriteAtomically(reportPath, text, settings.runId.substr(0, 8), error)) {
                 reportPublished = true;
+                publishedBytes = text;
                 if (settings.beforeCheckpointRemoval) settings.beforeCheckpointRemoval();
                 // The checkpoint goes while the lock is still held, so no other run can find it unlocked and report this run as killed.
                 std::error_code ignored;

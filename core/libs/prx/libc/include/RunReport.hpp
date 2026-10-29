@@ -195,6 +195,7 @@ private:
     bool workerRunning = false;
     bool workerWanted = false;
     bool reportPublished = false;
+    std::string publishedBytes;
     std::atomic<bool> finalized{false};
     HostIdentifiers host;
 };
