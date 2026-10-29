@@ -116,7 +116,10 @@ const FormatEntry& findFormatEntry(std::uint32_t guestFormat) {
         LibcRunReportImageFormat_nid_no_patch(guestFormat, nullptr, 1, 5);
         LibcRunReportUnsupportedFormatStop_nid_no_patch(guestFormat, __FILE__, __LINE__);
         // The same function builds the key the run report files the rejection under, so the two cannot drift apart.
-        Require(false, RunReport::UnsupportedFormatKey(guestFormat));
+        // The key comes through the exported call: libc's C++ symbols are not visible from this library once the libraries are patched.
+        char key[96];
+        LibcRunReportUnsupportedFormatKey_nid_no_patch(guestFormat, key, sizeof(key));
+        Require(false, key);
     }
     // Counted only while a report is collected; the answer cannot change after startup.
     static const bool reporting = LibcRunReportEnabled_nid_no_patch();

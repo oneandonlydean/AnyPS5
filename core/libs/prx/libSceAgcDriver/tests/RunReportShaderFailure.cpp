@@ -68,6 +68,17 @@ RecompileResult recompile(std::span<const std::uint32_t> code, bool useCache) {
 }
 
 // The text the graphics layer really throws for a rejected format finds the stop the run report filed for it.
+// The exported call gives the same key as the C++ function, whatever the buffer size.
+void verifyFormatKeyCall() {
+    char key[96];
+    const auto length = LibcRunReportUnsupportedFormatKey_nid_no_patch(9999u, key, sizeof(key));
+    require(std::string(key, length) == RunReport::UnsupportedFormatKey(9999u) && key[length] == '\0', "the exported key differs from the C++ key");
+    char small[8];
+    const auto cut = LibcRunReportUnsupportedFormatKey_nid_no_patch(9999u, small, sizeof(small));
+    require(cut == sizeof(small) - 1u && small[cut] == '\0', "a short buffer was overrun or not terminated");
+    require(LibcRunReportUnsupportedFormatKey_nid_no_patch(1u, nullptr, 0u) == 0u, "a null buffer was written");
+}
+
 void verifyFormatStop() {
     std::string text;
     try {
@@ -117,6 +128,7 @@ void verify() {
 #else
     setenv("ANYPS5_NO_SHADER_CACHE", "1", 1);
 #endif
+    verifyFormatKeyCall();
     verifyFormatStop();
     static const DiagnosticSink sink{.shader = Shader, .unsupportedInstruction = Unsupported};
     SetDiagnosticSink(&sink);

@@ -2317,6 +2317,20 @@ extern "C" void LibcRunReportDescriptor_nid_no_patch(int type, int status, int u
     }
 }
 
+extern "C" unsigned long LibcRunReportUnsupportedFormatKey_nid_no_patch(unsigned format, char* buffer, unsigned long size) noexcept {
+    if (buffer == nullptr || size == 0u) return 0;
+    try {
+        const auto key = RunReport::UnsupportedFormatKey(format);
+        const auto length = std::min<std::size_t>(key.size(), size - 1u);
+        std::memcpy(buffer, key.data(), length);
+        buffer[length] = '\0';
+        return static_cast<unsigned long>(length);
+    } catch (...) {
+        buffer[0] = '\0';
+        return 0;
+    }
+}
+
 extern "C" void LibcRunReportUnsupportedFormatStop_nid_no_patch(unsigned format, const char* file, int line) noexcept {
     try {
         if (collector == nullptr) return;

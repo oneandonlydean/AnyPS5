@@ -66,6 +66,9 @@ extern "C" void LibcRunReportSetDescriptorCounters_nid_no_patch(const std::atomi
 extern "C" void LibcRunReportSetFormatCounters_nid_no_patch(const std::atomic<unsigned long long>* counters, unsigned count) noexcept;
 // The run ended on a shader instruction the recompiler cannot translate (the failure reached the driver as fatal).
 extern "C" void LibcRunReportUnsupportedShaderStop_nid_no_patch(const char* encoding, const char* opcode, long long opcodeValue, const char* file, int line) noexcept;
+// Writes the key a rejected format is filed under (the text its lookup throws) into `buffer`, always null-terminated, and returns its
+// length. Other libraries get the key through this call: C++ symbols of libc are not exported to them, only the _nid_no_patch names.
+extern "C" unsigned long LibcRunReportUnsupportedFormatKey_nid_no_patch(unsigned format, char* buffer, unsigned long size) noexcept;
 // A guest image format the runtime cannot handle ended the run.
 extern "C" void LibcRunReportUnsupportedFormatStop_nid_no_patch(unsigned format, const char* file, int line) noexcept;
 
