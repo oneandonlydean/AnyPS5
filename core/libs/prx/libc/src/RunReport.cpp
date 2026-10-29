@@ -682,16 +682,43 @@ bool ReparseOrMissing(const fs::path& path, bool& reparse, bool& directory) {
     return true;
 }
 
-// Every folder from the drive root down to `folder` must exist, be a folder and not be a link or junction.
-bool FolderChainIsReal(const fs::path& folder) {
-    auto absolute = fs::absolute(folder);
-    for (auto at = absolute; ; at = at.parent_path()) {
-        if (at == at.root_path()) return true;
-        bool reparse = false, directory = false;
-        if (!ReparseOrMissing(at, reparse, directory) || reparse || !directory) return false;
-        if (at.parent_path() == at) return true;
+// Every folder from the drive root down to `folder` is opened without following a link or junction and kept open. The handles are
+// opened with a share mode that allows no rename and no delete, so none of the folders can be replaced by a link while the chain is
+// held: a check made on a name stays true for the writes that follow, which is what a directory handle gives on POSIX.
+class PinnedChain {
+public:
+    PinnedChain() = default;
+    PinnedChain(const PinnedChain&) = delete;
+    PinnedChain& operator=(const PinnedChain&) = delete;
+    ~PinnedChain() {
+        for (const HANDLE handle : handles) CloseHandle(handle);
     }
-}
+    // False when a folder is missing, is not a folder, or is a link, a junction or any other reparse point.
+    bool Pin(const fs::path& folder) {
+        const auto absolute = fs::absolute(folder).lexically_normal();
+        auto at = absolute.root_path();
+        if (at.empty()) return false;
+        std::vector<fs::path> chain{at};
+        for (const auto& part : absolute.relative_path()) {
+            if (part.empty() || part == L".") continue;
+            at /= part;
+            chain.push_back(at);
+        }
+        for (const auto& path : chain) {
+            const HANDLE handle = CreateFileW(path.c_str(), FILE_READ_ATTRIBUTES, FILE_SHARE_READ | FILE_SHARE_WRITE, nullptr, OPEN_EXISTING,
+                                              FILE_FLAG_BACKUP_SEMANTICS | FILE_FLAG_OPEN_REPARSE_POINT, nullptr);
+            if (handle == INVALID_HANDLE_VALUE) return false;
+            handles.push_back(handle);
+            BY_HANDLE_FILE_INFORMATION information{};
+            if (!GetFileInformationByHandle(handle, &information) || (information.dwFileAttributes & FILE_ATTRIBUTE_REPARSE_POINT) != 0 ||
+                (information.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY) == 0) return false;
+        }
+        return true;
+    }
+
+private:
+    std::vector<HANDLE> handles;
+};
 #else
 // Opens `folder` one component at a time with O_NOFOLLOW, so a link anywhere in the chain (not only in the last name) fails the open.
 int OpenFolderNoFollow(const fs::path& folder) {
@@ -730,7 +757,9 @@ bool WriteAtomically(const fs::path& target, std::string_view bytes, std::string
     const auto temporaryName = "." + leaf + "." + std::string(uniqueName) + ".tmp";
 #ifdef _WIN32
     bool reparse = false, directory = false;
-    if (!FolderChainIsReal(parent)) {
+    // Held until the function returns, so the folders cannot be swapped between the check and the writes.
+    PinnedChain chain;
+    if (!chain.Pin(parent)) {
         error = "the destination folder is missing, a link or not a folder";
         return false;
     }
@@ -820,7 +849,8 @@ bool WriteAtomically(const fs::path& target, std::string_view bytes, std::string
 bool ReadBounded(const fs::path& path, std::size_t limit, std::string& bytes) {
     bytes.clear();
 #ifdef _WIN32
-    if (!FolderChainIsReal(path.parent_path())) return false;
+    PinnedChain chain;
+    if (!chain.Pin(path.parent_path())) return false;
     HANDLE file = CreateFileW(path.c_str(), GENERIC_READ, FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE, nullptr, OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL | FILE_FLAG_OPEN_REPARSE_POINT, nullptr);
     if (file == INVALID_HANDLE_VALUE) return false;
     BY_HANDLE_FILE_INFORMATION information{};

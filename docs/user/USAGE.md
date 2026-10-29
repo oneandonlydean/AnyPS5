@@ -397,7 +397,7 @@ Which milestones a run records depends on the system:
 | Windows | not recorded | recorded | recorded |
 | macOS | recorded | recorded | recorded |
 
-A milestone that is missing from the report is not one the game failed to reach: on Linux and Windows `loaded` and `started` are never recorded, and `stage` and `framesPresented` say how far the run got. On Windows a run that returns from its entry without calling `exit` leaves no report (its checkpoint is removed so it is not recovered as killed).
+A milestone that is missing from the report is not one the game failed to reach: on Linux and Windows `loaded` and `started` are never recorded, and `stage` and `framesPresented` say how far the run got. On Windows a run that returns from its entry without calling `exit` leaves no report (its checkpoint is removed so it is not recovered as killed). **The run report is not supported on Windows yet**: its safe-folder code has not passed the Windows build and tests, so on Windows set `APS5_REPORT=0` until this line is removed.
 
 To share a run, attach `anyps5-report.json` to the title's discussion. The report holds no user name, home folder, host name, address or save data; read it before you share it.
 

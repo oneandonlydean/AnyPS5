@@ -1108,6 +1108,27 @@ void DeferredWorkerTest() {
     Require(written, "no worker was started to write the checkpoint of an early milestone");
 }
 
+void JunctionTest() {
+#ifndef _WIN32
+    throw NotRun("junctions are a Windows feature");
+#else
+    // A junction needs no privilege. A write or read through one, at the parent or above it, must fail; real folders must work.
+    Directory directory;
+    fs::create_directories(directory.path / "real" / "sub");
+    const auto junction = directory.path / "link";
+    const auto command = "mklink /J \"" + junction.string() + "\" \"" + (directory.path / "real").string() + "\" > NUL";
+    Require(std::system(("cmd /c " + command).c_str()) == 0, "could not make a junction");
+    std::string error;
+    Require(!RunReport::WriteAtomically(junction / "sub" / "anyps5-report.json", "x\n", "aaaaaaaa", error) && !fs::exists(directory.path / "real" / "sub" / "anyps5-report.json"), "a write went through a junction above the parent folder");
+    Require(!RunReport::WriteAtomically(junction / "anyps5-report.json", "x\n", "bbbbbbbb", error) && !fs::exists(directory.path / "real" / "anyps5-report.json"), "a write went through a junction parent");
+    Require(RunReport::WriteAtomically(directory.path / "real" / "sub" / "anyps5-report.json", "x\n", "cccccccc", error), "a write through real folders failed: " + error);
+    std::string bytes;
+    Require(!RunReport::ReadBounded(junction / "sub" / "anyps5-report.json", 100, bytes), "a read went through a junction");
+    Require(RunReport::ReadBounded(directory.path / "real" / "sub" / "anyps5-report.json", 100, bytes) && bytes == "x\n", "a read through real folders failed");
+    std::system(("cmd /c rmdir \"" + junction.string() + "\" > NUL").c_str());
+#endif
+}
+
 void CommitWithHexNameTest() {
     // A user whose name is made of hex digits ("dead", "abc") would match inside any commit; the commit is never compared with names.
     RunReport::HostIdentifiers host;
@@ -1525,6 +1546,7 @@ int main(int argc, char** argv) {
         Run("lost-observation", LostObservationTest);
         Run("checkpoint-does-not-block-hooks", CheckpointDoesNotBlockHooksTest);
         Run("source-boundary", SourceBoundaryTest);
+        Run("junction", JunctionTest);
         Run("commit-with-hex-name", CommitWithHexNameTest);
         Run("search-only-ancestor", SearchOnlyAncestorTest);
         Run("format-stop-key", FormatStopKeyTest);

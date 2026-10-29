@@ -38,6 +38,10 @@ class MilestoneDocsTests(unittest.TestCase):
         self.assertRegex(text, r"never as .not reached.")
         self.assertIn("coverage.milestones", text)
 
+    def test_windows_is_unsupported_until_its_tests_pass(self):
+        text = (ROOT / "docs/user/USAGE.md").read_text(encoding="utf-8")
+        self.assertRegex(text, r"run report is not supported on Windows yet")
+
     def test_usage_says_the_same(self):
         text = (ROOT / "docs/user/USAGE.md").read_text(encoding="utf-8")
         self.assertRegex(text, r"is not one the game failed to reach")
