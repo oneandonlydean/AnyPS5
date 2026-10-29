@@ -38,9 +38,10 @@ class MilestoneDocsTests(unittest.TestCase):
         self.assertRegex(text, r"never as .not reached.")
         self.assertIn("coverage.milestones", text)
 
-    def test_windows_is_unsupported_until_its_tests_pass(self):
+    def test_usage_says_where_the_report_tests_pass(self):
         text = (ROOT / "docs/user/USAGE.md").read_text(encoding="utf-8")
-        self.assertRegex(text, r"run report is not supported on Windows yet")
+        self.assertRegex(text, r"pass on Linux and on Windows in the fork's CI \(run \d+\)")
+        self.assertNotRegex(text, r"not supported on Windows yet")
 
     def test_docs_do_not_infer_not_reached_from_a_lower_stage(self):
         for name, path in DOCS.items():
