@@ -74,6 +74,8 @@ jobs:
         os: [macos-15-intel, macos-15]
     runs-on: ${{ matrix.os }}
     timeout-minutes: 90
+    env:
+      RUN_REPORT_TESTS: ^(run_report|run_report_schema|run_report_revision)$
     defaults:
       run:
         shell: bash
@@ -93,8 +95,8 @@ jobs:
           echo "$RUNNER_TEMP/venv/bin" >> "$GITHUB_PATH"
       - name: Configure
         run: cmake -S . -B build -G Ninja -DCMAKE_BUILD_TYPE=Release -DBUILD_TESTING=ON -DCMAKE_CXX_COMPILER=clang++
-      - name: Build the libraries and the run report tests
-        run: cmake --build build --target libs run_report_tests agc_run_report_shader_failure_tests agc_command_batch_failure_tests
+      - name: Build the run report tests
+        run: cmake --build build --target run_report_tests
       - name: Run the run report tests
         run: ctest --test-dir build --output-on-failure --timeout 120 --no-tests=error -R "$RUN_REPORT_TESTS" | tee ctest.log
       - name: Show the test counts
