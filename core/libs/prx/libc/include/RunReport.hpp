@@ -272,7 +272,9 @@ public:
     void NoteImageFormat(std::int64_t format, std::optional<std::string> name, Status status, int usage);
     void NoteDescriptor(int type, Status status, int usage);
     void NoteStop(Stop stop);
-    void NoteSoftStop(Stop stop, std::string terminatingMessage);
+    // `prefixed`: the thrower puts a known prefix ("AGC graphics: ") in front of the message, so that form matches too. Every other
+    // failure matches its message exactly: "read" must not be taken for the end of "pread".
+    void NoteSoftStop(Stop stop, std::string terminatingMessage, bool prefixed = false);
     void NoteUnsupportedShaderStop(std::optional<std::string> encoding, std::optional<std::string> opcode, std::string_view source);
     void SetDescriptorCounters(const std::atomic<unsigned long long>* counters);
     void SetFormatCounters(const std::atomic<unsigned long long>* counters, unsigned count);

@@ -981,11 +981,30 @@ void FormatStopKeyTest() {
     RunReport::Collector collector(Covered(executable.path, user.path, IdA));
     Require(collector.Start(), "the collector did not start");
     RunReport::Stop stop{RunReport::Kind::UnsupportedFormat, RunReport::Reason::RuntimeStop, std::nullopt, "A guest image format is not supported (format 99)."};
-    collector.NoteSoftStop(stop, RunReport::UnsupportedFormatKey(99));
+    collector.NoteSoftStop(stop, RunReport::UnsupportedFormatKey(99), true);
     const auto found = collector.StopFor("AGC graphics: " + RunReport::UnsupportedFormatKey(99));
     Require(found && found->kind == RunReport::Kind::UnsupportedFormat, "a prefixed message did not find the stop of a rejected format");
     Require(!collector.StopFor("AGC graphics: " + RunReport::UnsupportedFormatKey(98)).has_value(), "another format's message found the stop");
     Require(!collector.StopFor("AGC graphics: unrelated").has_value(), "an unrelated message found the stop");
+}
+
+void SuffixNamesTest() {
+    Directory executable, user;
+    RunReport::Collector collector(Covered(executable.path, user.path, IdA));
+    Require(collector.Start(), "the collector did not start");
+    // The game caught a "read" and went on; the run then ended on an uncaught "pread". Names that end with each other must not mix.
+    collector.NoteMissingFunction("libkernel", "read", "core/libs/prx/libkernel/a.cpp:1", "read not implemented");
+    collector.NoteMissingFunction("libkernel", "stat", "core/libs/prx/libkernel/a.cpp:2", "stat not implemented");
+    collector.NoteMissingFunction("libkernel", "pread", "core/libs/prx/libkernel/a.cpp:3", "pread not implemented");
+    collector.NoteMissingFunction("libkernel", "lstat", "core/libs/prx/libkernel/a.cpp:4", "lstat not implemented");
+    const auto pread = collector.StopFor("pread not implemented");
+    const auto lstat = collector.StopFor("lstat not implemented");
+    const auto read = collector.StopFor("read not implemented");
+    Require(pread && pread->source == std::optional<std::string>("core/libs/prx/libkernel/a.cpp:3"), "an uncaught pread was reported as another function");
+    Require(lstat && lstat->source == std::optional<std::string>("core/libs/prx/libkernel/a.cpp:4"), "an uncaught lstat was reported as another function");
+    Require(read && read->source == std::optional<std::string>("core/libs/prx/libkernel/a.cpp:1"), "an uncaught read was reported as another function");
+    // Only the graphics layer's own prefix is understood for a suffix match, and only for the format key.
+    Require(!collector.StopFor("xread not implemented").has_value() && !collector.StopFor("AGC graphics: read not implemented").has_value(), "a message that only ends with a function's text found its stop");
 }
 
 void SoftStopDedupTest() {
@@ -1416,6 +1435,7 @@ int main(int argc, char** argv) {
         Run("checkpoint-does-not-block-hooks", CheckpointDoesNotBlockHooksTest);
         Run("source-boundary", SourceBoundaryTest);
         Run("format-stop-key", FormatStopKeyTest);
+        Run("suffix-names", SuffixNamesTest);
         Run("soft-stop-dedup", SoftStopDedupTest);
         Run("format-overflow", FormatOverflowTest);
         Run("deferred-worker", DeferredWorkerTest);

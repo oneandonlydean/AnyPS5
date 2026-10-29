@@ -4,6 +4,7 @@
 #include "Recompiler.hpp"
 #include "RdnaDecoder/DiagnosticSink.hpp"
 #include "prx/libSceAgcDriver/Graphics/include/TextureFormat.hpp"
+#include "prx/libSceAgcDriver/Graphics/include/GuestWorkMark.hpp"
 #include "prx/libc/include/RunReport.hpp"
 #include <spirv/unified1/spirv.hpp>
 #include <array>
@@ -81,7 +82,7 @@ void verifyFormatStop() {
     settings.worker = false;
     RunReport::Collector collector(std::move(settings));
     require(collector.Start(), "the collector did not start");
-    collector.NoteSoftStop(RunReport::Stop{RunReport::Kind::UnsupportedFormat, RunReport::Reason::RuntimeStop, std::nullopt, "A guest image format is not supported (format 9999)."}, RunReport::UnsupportedFormatKey(9999u));
+    collector.NoteSoftStop(RunReport::Stop{RunReport::Kind::UnsupportedFormat, RunReport::Reason::RuntimeStop, std::nullopt, "A guest image format is not supported (format 9999)."}, RunReport::UnsupportedFormatKey(9999u), true);
     const auto stop = collector.StopFor(text);
     require(stop && stop->kind == RunReport::Kind::UnsupportedFormat, "the real message '" + text + "' did not find the stop of a rejected format");
     collector.Finish(RunReport::Exit::Clean, {}, 0);
@@ -89,7 +90,27 @@ void verifyFormatStop() {
     std::filesystem::remove_all(collector.ReportPath().parent_path(), ignored);
 }
 
+// A first-draw mark left on a command buffer that was abandoned or failed must not carry over to an unrelated batch that is handed the
+// same handle. CommandBatch::release() forgets the mark; this is the reuse case with fake handles (no Vulkan device).
+void verifyGuestWorkMarks() {
+    namespace Mark = AgcDriver::Graphics::GuestWorkMark;
+    int handleA = 0, handleB = 0;
+    Mark::Note(&handleA);
+    Mark::Note(&handleB);
+    require(Mark::Take(&handleB) && !Mark::Take(&handleB), "a mark is taken once");
+    Mark::Forget(&handleA);  // the batch holding handleA was released without a successful submit
+    require(!Mark::Take(&handleA), "a released batch's mark survived and would mark whoever is handed its handle next");
+    for (int index = 0; index < 20; ++index) Mark::Note(&handleA);
+    require(Mark::Take(&handleA) && !Mark::Take(&handleA), "a mark repeated is still one mark");
+    int many[32] = {};
+    for (auto& handle : many) Mark::Note(&handle);
+    int taken = 0;
+    for (auto& handle : many) taken += Mark::Take(&handle) ? 1 : 0;
+    require(taken <= 8, "more marks are kept than the table holds");
+}
+
 void verify() {
+    verifyGuestWorkMarks();
     // The disk cache would turn a compile into a reuse; this test counts compiles, so it never reads one.
 #ifdef _WIN32
     _putenv_s("ANYPS5_NO_SHADER_CACHE", "1");

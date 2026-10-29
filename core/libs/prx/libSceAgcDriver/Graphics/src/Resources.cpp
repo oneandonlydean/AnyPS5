@@ -2,6 +2,7 @@
 #include "prx/libSceAgcDriver/Graphics/include/BufferPool.hpp"
 #include "prx/libSceAgcDriver/Graphics/include/DeferredDestruction.hpp"
 #include "prx/libSceAgcDriver/Graphics/include/Recorder.hpp"
+#include "prx/libSceAgcDriver/Graphics/include/GuestWorkMark.hpp"
 #include "prx/libSceAgcDriver/Execution/include/PerformanceTimer.hpp"
 #include "prx/libSceAgcDriver/Execution/include/GuestMemory.hpp"
 #include "prx/libc/include/RunReport.hpp"
@@ -345,27 +346,8 @@ VkImageView RenderTarget::View() const {
     return view;
 }
 
-namespace {
-
-// The few buffers this thread recorded guest draws into and has not submitted yet.
-thread_local std::array<VkCommandBuffer, 8> guestWorkBuffers{};
-thread_local std::size_t guestWorkCount = 0;
-
-bool TakeGuestWork(VkCommandBuffer commands) {
-    for (std::size_t index = 0; index < guestWorkCount; ++index) {
-        if (guestWorkBuffers[index] != commands) continue;
-        guestWorkBuffers[index] = guestWorkBuffers[--guestWorkCount];
-        return true;
-    }
-    return false;
-}
-
-}
-
 void NoteGuestWorkOnCommandBuffer(VkCommandBuffer commands) {
-    for (std::size_t index = 0; index < guestWorkCount; ++index) if (guestWorkBuffers[index] == commands) return;
-    if (guestWorkCount == guestWorkBuffers.size()) guestWorkBuffers[0] = guestWorkBuffers[--guestWorkCount];
-    guestWorkBuffers[guestWorkCount++] = commands;
+    GuestWorkMark::Note(commands);
 }
 
 CommandBatch::CommandBatch(const Context& context) : context(context) {
@@ -397,6 +379,8 @@ CommandBatch::~CommandBatch() {
 }
 
 void CommandBatch::release() noexcept {
+    // A buffer that is freed (abandoned, failed or finished) keeps no first-draw mark for whoever is handed the same handle next.
+    GuestWorkMark::Forget(commands);
     if (pending) {
         auto result = context.Function<PFN_vkGetFenceStatus>("vkGetFenceStatus")(context.device, fence);
         if (result == VK_NOT_READY) result = context.Function<PFN_vkQueueWaitIdle>("vkQueueWaitIdle")(context.queue);
@@ -428,7 +412,7 @@ void CommandBatch::Submit() {
     pending = true;
     submitted = true;
     timing.Mark("queue_submit");
-    if (TakeGuestWork(commands)) LibcRunReportMilestone_nid_no_patch(2);
+    if (GuestWorkMark::Take(commands)) LibcRunReportMilestone_nid_no_patch(2);
 }
 
 void CommandBatch::Wait() {

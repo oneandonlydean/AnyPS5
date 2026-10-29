@@ -1399,19 +1399,20 @@ struct Collector::Tables {
     struct Soft {
         Stop stop;
         std::string message;
+        bool prefixed = false;
     };
     std::vector<Soft> softStops;
 };
 
 // A failure filed under the message of the error it threw. The same message is filed once, so a failure that repeats cannot fill the
 // list and hide a different one that comes later; the list keeps the most recent distinct ones.
-void AddSoft(Collector::Tables& tables, Stop stop, std::string message) {
+void AddSoft(Collector::Tables& tables, Stop stop, std::string message, bool prefixed = false) {
     if (message.empty()) return;
     auto& list = tables.softStops;
     const auto same = std::ranges::find(list, message, &Collector::Tables::Soft::message);
     if (same != list.end()) return;
     if (list.size() >= 8u) list.erase(list.begin());
-    list.push_back({std::move(stop), std::move(message)});
+    list.push_back({std::move(stop), std::move(message), prefixed});
 }
 
 Collector::Collector(Settings value) : settings(std::move(value)), game(std::make_shared<GameState>()), tables(std::make_shared<Tables>()) {
@@ -1845,10 +1846,10 @@ void Collector::NoteStop(Stop stop) {
     if (!tables->fatalStop) tables->fatalStop = std::move(stop);
 }
 
-void Collector::NoteSoftStop(Stop stop, std::string terminatingMessage) {
+void Collector::NoteSoftStop(Stop stop, std::string terminatingMessage, bool prefixed) {
     std::unique_lock guard(tables->mutex, std::defer_lock);
     if (!guard.try_lock_for(settings.tableWait)) return;
-    AddSoft(*tables, std::move(stop), std::move(terminatingMessage));
+    AddSoft(*tables, std::move(stop), std::move(terminatingMessage), prefixed);
 }
 
 std::optional<Stop> Collector::PendingStop() const {
@@ -1862,9 +1863,15 @@ std::optional<Stop> Collector::StopFor(std::string_view terminatingMessage) cons
     if (!guard.try_lock_for(settings.tableWait)) return std::nullopt;
     if (tables->fatalStop) return tables->fatalStop;
     if (terminatingMessage.empty()) return std::nullopt;
+    // An exact match comes first, so a caught "read" is never taken for the stop of an uncaught "pread".
     for (const auto& soft : tables->softStops) {
-        // The thrower may prefix its text (the graphics layer adds "AGC graphics: "); the registered key is the end of what it throws.
-        if (!soft.message.empty() && terminatingMessage.ends_with(soft.message)) return soft.stop;
+        if (!soft.message.empty() && terminatingMessage == soft.message) return soft.stop;
+    }
+    // A failure whose thrower adds the graphics layer's known prefix matches in that one form only.
+    constexpr std::string_view graphicsPrefix = "AGC graphics: ";
+    for (const auto& soft : tables->softStops) {
+        if (soft.prefixed && !soft.message.empty() && terminatingMessage.size() == graphicsPrefix.size() + soft.message.size() &&
+            terminatingMessage.starts_with(graphicsPrefix) && terminatingMessage.ends_with(soft.message)) return soft.stop;
     }
     return std::nullopt;
 }
@@ -2220,7 +2227,7 @@ extern "C" void LibcRunReportUnsupportedFormatStop_nid_no_patch(unsigned format,
         if (collector == nullptr) return;
         RunReport::Stop stop{RunReport::Kind::UnsupportedFormat, RunReport::Reason::RuntimeStop, RunReport::SourceOf(file != nullptr ? file : "", line), "A guest image format is not supported (format " + std::to_string(format) + ")."};
         // The runtime throws "unsupported guest texture format N" and callers may catch it; only that message ends the run with this stop.
-        collector->NoteSoftStop(std::move(stop), RunReport::UnsupportedFormatKey(format));
+        collector->NoteSoftStop(std::move(stop), RunReport::UnsupportedFormatKey(format), true);
     } catch (...) {
     }
 }
