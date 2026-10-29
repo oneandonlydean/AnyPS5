@@ -859,6 +859,17 @@ void CpuClockSuffixTest() {
     Require(kept(text, "\"cpu\": \"Apple M1 (Virtual)\""), "a CPU name without a clock was changed: " + text);
     text = cpuOf("Core @ somebody@example.org");
     Require(kept(text, "\"cpu\": null"), "an address-like CPU name was kept: " + text);
+    // An annotation that is not apart from the name is not cut: "jdoe@3.5GHz" is an address, and without its "@" the rest would pass the filter.
+    RunReport::HostIdentifiers named;
+    named.words = {"alice"};
+    named.hosts = {"alice"};
+    named.users = {"alice"};
+    for (const char* hostile : {"jdoe@3.5GHz", "ali@3.5GHz", "jdoe@3.5 GHz", "Core jdoe@3.5GHz", "jdoe @3.5GHz", "jdoe@ 3.5GHz", "alice@3.5GHz", "alice @ 3.5GHz"}) {
+        auto report = SampleReport();
+        report.machine.cpu = std::string(hostile);
+        const auto output = RunReport::Serialize(report, named);
+        Require(kept(output, "\"cpu\": null") && !kept(output, "jdoe") && !kept(output, "ali"), std::string("a CPU name with an address or a name before the clock was kept: ") + hostile + ": " + output);
+    }
     text = cpuOf("Core i7 @ 3.2GHz @ 3.5GHz extra");
     Require(kept(text, "\"cpu\": null"), "a CPU name with text after the clock was kept: " + text);
 }
