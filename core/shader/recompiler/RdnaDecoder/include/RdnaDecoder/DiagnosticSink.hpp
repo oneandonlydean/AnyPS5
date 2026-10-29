@@ -8,6 +8,8 @@ namespace ShaderRecompiler {
 // Typed facts the recompiler can report while it works. The host installs a sink (the run report does); without one every call
 // is a no-op, so the recompiler keeps building and running on its own. Callbacks must not throw and must not block.
 struct DiagnosticSink {
+    // Whether anyone is collecting; the recompiler skips the work of producing diagnostics when this says no.
+    bool (*enabled)() = nullptr;
     // what: 0 a shader was compiled, 1 a compile failed, 2 an existing compile was reused.
     void (*shader)(int what) = nullptr;
     // A guest instruction that cannot be translated. Unknown parts are null (names) or -1 (opcodeValue).

@@ -420,8 +420,8 @@ public:
     // so a batch is submitted after a bounded amount of work (APS5_BATCH_CAP).
     static std::uint64_t RecordedWorkSinceSubmit();
     static void CountRecordedWork();
-    // A guest draw or dispatch packet was recorded; the next submitted batch carries it (run report milestone).
-    static void CountGuestDraw();
+    // Guest draw or dispatch commands were just recorded into the open batch; the batch carries them to its submit (run report milestone).
+    void NoteGuestWork();
 
     // The recorder of the current device, for code that only has guest addresses (the flush hook)
     // and for helpers that must not recycle resources the recorded work still uses.
@@ -588,6 +588,8 @@ private:
         std::uint64_t serial = 0;
         std::uint64_t traceId = 0;
         bool submitted = false;
+        // The batch holds recorded guest draw or dispatch commands.
+        bool guestWork = false;
         // The GpuMutex queue tag of the thread that opened the batch, and when it was submitted
         // (the [syncwait] line reports what a wait's target and the batches ahead of it were).
         std::uint32_t queue = 0xffffffffu;

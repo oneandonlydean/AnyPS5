@@ -1266,7 +1266,12 @@ RecompileResult materializeResult(const CompiledVariant& variant, const Recompil
     if (patch != nullptr) recordMemoPatch(*patch, *bindingPlan, variant);
     result.workgroupMemoryDwords = WorkgroupMemoryStrideDwords(variant.info.info);
     result.bindings = std::move(bindings.bindings);
-    if (const auto* sink = Diagnostics(); sink != nullptr && sink->descriptor != nullptr) {
+    // With the report off the bindings are not even looked at.
+    static const bool reporting = [] {
+        const auto* sink = Diagnostics();
+        return sink != nullptr && sink->descriptor != nullptr && (sink->enabled == nullptr || sink->enabled());
+    }();
+    if (const auto* sink = Diagnostics(); reporting && sink != nullptr) {
         for (const auto& binding : result.bindings) {
             if (binding.role != DescriptorRole::GuestBuffers && binding.role != DescriptorRole::GuestImages && binding.role != DescriptorRole::GuestSamplers) continue;
             const bool atomic = std::ranges::any_of(binding.bufferAtomic, [](bool value) { return value; }) || std::ranges::any_of(binding.imageAtomic, [](bool value) { return value; });
@@ -1379,15 +1384,27 @@ void NoteShader(int what) {
     if (const auto* sink = Diagnostics(); sink != nullptr && sink->shader != nullptr) sink->shader(what);
 }
 
-// Counts one real compilation: a success or a failure, once, where the compile happens. Reuse of a finished variant is not a compilation.
+// One failed attempt is counted once, wherever it is first seen: the same exception object passing several boundaries (the compile,
+// the public entry point) is not counted again, and a retry that asks for converted samples is not a failure.
+void NoteFailureOnce() {
+    thread_local std::exception_ptr counted;
+    const auto current = std::current_exception();
+    if (current == nullptr || current == counted) return;
+    counted = current;
+    NoteShader(1);
+}
+
+// Counts one real compilation that succeeded, or the failure of one. Reuse of a finished variant is not a compilation.
 template <typename Compile>
 auto CountedCompile(Compile&& compile) {
     try {
         auto result = compile();
         NoteShader(0);
         return result;
+    } catch (const ConvertedSampleRequired&) {
+        throw;
     } catch (const std::exception&) {
-        NoteShader(1);
+        NoteFailureOnce();
         throw;
     }
 }
@@ -1934,7 +1951,11 @@ template <typename Impl>
 auto recompileReporting(const RecompileRequest& request, Impl&& impl) -> decltype(impl()) {
     try {
         return impl();
+    } catch (const ConvertedSampleRequired&) {
+        throw;
     } catch (const std::exception& e) {
+        // Preparation and decoder failures happen before any compile: they are failed attempts too.
+        NoteFailureOnce();
         constexpr auto requestSerializer = RequestSerializer{};
         const auto inputInfo = "\nRecompileRequest:\n" + requestSerializer.Serialize(request);
         throw std::runtime_error(std::string("ShaderRecompiler::Recompile: ") + e.what() + inputInfo);

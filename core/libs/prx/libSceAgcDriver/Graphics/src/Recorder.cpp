@@ -529,7 +529,6 @@ std::atomic<std::uint64_t> writeBacksOverLabels{0};
 // Completion labels that entered the pending count at a write-back (see NoteWrittenBack).
 std::atomic<std::uint64_t> completionLabelsCountedLate{0};
 std::atomic<std::uint64_t> workSinceSubmit{0};
-std::atomic<bool> guestDrawPending{false};
 
 // APS5_COUNT_ALL_COMPLETION_LABELS=1: a completion label also stored on the GPU counts as pending
 // from its registration, as before (see Recorder::AfterCompletions).
@@ -1285,8 +1284,10 @@ std::uint64_t Recorder::RecordedWorkSinceSubmit() {
     return workSinceSubmit.load(std::memory_order_relaxed);
 }
 
-void Recorder::CountGuestDraw() {
-    guestDrawPending.store(true, std::memory_order_relaxed);
+void Recorder::NoteGuestWork() {
+    // Nothing is done with the report off; the answer cannot change after startup.
+    static const bool reporting = LibcRunReportEnabled_nid_no_patch();
+    if (reporting && open != nullptr) open->guestWork = true;
 }
 
 void Recorder::CountRecordedWork() {
@@ -3637,8 +3638,6 @@ void Recorder::Submit() {
     if (activeRecorder == this) workSinceSubmit.store(0, std::memory_order_relaxed);
     dropStaleHoldKept();
     if (open == nullptr) return;
-    // Taken only when a batch is really submitted, so a draw is not forgotten by a submit that had nothing open.
-    const bool carriesGuestDraw = activeRecorder == this && guestDrawPending.exchange(false, std::memory_order_relaxed);
     GuestMemory::AssertGpuLockHeld("Recorder::Submit");
     if (!open->keyStores.empty()) recordKeyStores(false);
     if (open->renderPass.open) endOpenRenderPass(PassBreak::NewBatch);
@@ -3710,7 +3709,7 @@ void Recorder::Submit() {
         if (idle != VK_SUCCESS && idle != VK_ERROR_DEVICE_LOST) std::terminate();
     }
     Check(result, "vkQueueSubmit recorder");
-    if (carriesGuestDraw) LibcRunReportMilestone_nid_no_patch(2);
+    if (batch->guestWork) LibcRunReportMilestone_nid_no_patch(2);
     batch->submitted = true;
     batch->serial = ++submissions;
     batch->submittedAt = std::chrono::steady_clock::now();

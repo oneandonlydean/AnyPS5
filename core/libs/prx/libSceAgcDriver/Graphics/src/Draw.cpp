@@ -1820,7 +1820,10 @@ void CompactIndirectListRestart(const Context& context, const Pm4::DrawParameter
 // The draw commands of one draw: the vertex and index buffer binds, then the direct draw, the
 // GPU-side indirect draw from `argumentBuffer` or the CPU-read records with the driver's rules.
 void recordDrawCommands(const Context& context, VkCommandBuffer commands, const State& state, const Pm4::DrawParameters& draw, const DrawInputs& inputs, const IndirectRecord* indirect, VkBuffer argumentBuffer, VkDeviceSize argumentOffset, const DrawTraceContext* trace, std::uint32_t& subdraw, std::optional<std::uint32_t> pieceFirstIndex = std::nullopt) {
-    if (context.recorder != nullptr) context.recorder->NoteSampledDraw(commands);
+    if (context.recorder != nullptr) {
+        context.recorder->NoteSampledDraw(commands);
+        context.recorder->NoteGuestWork();
+    }
     const auto recorded = [&](std::uint32_t index) {
         if (trace != nullptr && context.recorder != nullptr) {
             context.recorder->NoteDrawTraceToken(trace->token);

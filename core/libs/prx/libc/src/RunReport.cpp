@@ -13,6 +13,7 @@
 #include <fstream>
 #include <random>
 #include <regex>
+#include <set>
 #include <system_error>
 #include <tuple>
 
@@ -1389,11 +1390,20 @@ struct Collector::Tables {
     std::vector<FormatEntry> imageFormats;
     std::vector<DescriptorEntry> descriptors;
     Truncated dropped;
-    std::optional<Stop> pendingStop;
+    std::set<std::string> droppedFunctionKeys, droppedUnsupportedKeys;
+    // A failure that ended the run for certain (the driver reported it as fatal).
+    std::optional<Stop> fatalStop;
+    // Failures noted where they were thrown, each with the message of the exception it threw. The game may catch them.
+    struct Soft {
+        Stop stop;
+        std::string message;
+    };
+    std::vector<Soft> softStops;
 };
 
 Collector::Collector(Settings value) : settings(std::move(value)), game(std::make_shared<GameState>()), tables(std::make_shared<Tables>()) {
     for (auto& nanos : milestoneNanos) nanos = -1;
+    for (auto& count : lost) count = 0;
     if (!Hex32(settings.runId)) settings.runId = GenerateRunId();
     host = CurrentHostIdentifiers();
 }
@@ -1586,6 +1596,8 @@ Report Collector::Snapshot(Exit exit, Stop stop, std::optional<std::int64_t> exi
     report.incomplete = recovered;
     report.stop = std::move(stop);
     report.observed = Observe();
+    // A report that missed observations says so, whether or not it was recovered.
+    if (report.observed.lostObservations) report.incomplete = true;
     return report;
 }
 
@@ -1611,7 +1623,10 @@ bool Collector::WriteCheckpoint(std::chrono::milliseconds wait) {
 void Collector::Work() {
     std::unique_lock guard(mutex);
     while (!stopWorker) {
-        if (changed.wait_for(guard, settings.checkpointInterval, [this] { return stopWorker; })) break;
+        if (changed.wait_for(guard, settings.checkpointInterval, [this] { return stopWorker || checkpointWanted.load(); })) {
+            if (stopWorker) break;
+            checkpointWanted = false;
+        }
         workerBusy = true;
         guard.unlock();
         try {
@@ -1638,7 +1653,9 @@ std::int64_t NanosSince(std::chrono::steady_clock::time_point start) {
 
 // The source of a call site as `core/...:line`, or nothing when the compile-time path is not inside the source tree.
 std::optional<std::string> SourceOf(std::string_view file, int line) {
-    const auto at = file.rfind("core/");
+    // `core/` must start a path segment: `/x/notcore/a.cpp` is not inside the source tree.
+    auto at = file.rfind("core/");
+    while (at != std::string_view::npos && at != 0u && file[at - 1u] != '/' && file[at - 1u] != '\\') at = at == 0u ? std::string_view::npos : file.rfind("core/", at - 1u);
     if (at == std::string_view::npos || line < 1) return std::nullopt;
     const auto relative = std::string(file.substr(at)) + ":" + std::to_string(line);
     if (relative.find("..") != std::string::npos || !std::regex_match(relative, std::regex(R"([A-Za-z0-9_][A-Za-z0-9_./+-]{0,254}:[0-9]{1,9})"))) return std::nullopt;
@@ -1646,9 +1663,19 @@ std::optional<std::string> SourceOf(std::string_view file, int line) {
 }
 
 void Collector::CheckpointSoon() {
-    // Checkpoints at milestones and failures are bounded in number so a hot path cannot turn into file I/O.
+    // Never writes here: the callers are hooks on the render path and under the GPU lock. The worker writes soon after; the number of
+    // requests is bounded so a hot path cannot turn into file I/O. Without a worker the next start of the worker or the finish does.
     if (!started_ || state != 0 || checkpointsRequested.fetch_add(1) >= 64) return;
-    WriteCheckpoint(std::chrono::milliseconds(100));
+    checkpointWanted = true;
+    changed.notify_all();
+}
+
+std::unique_lock<std::timed_mutex> Collector::LockTablesForTest() {
+    return std::unique_lock<std::timed_mutex>(tables->mutex);
+}
+
+void Collector::NoteLost(int section) {
+    lost[section].fetch_add(1, std::memory_order_relaxed);
 }
 
 void Collector::NoteMilestone(int milestone) {
@@ -1667,12 +1694,15 @@ void Collector::NoteFramePresented() {
     lastFrameNanos = now;
 }
 
-void Collector::NoteMissingFunction(std::string_view library, std::string_view name, std::string_view source) {
+void Collector::NoteMissingFunction(std::string_view library, std::string_view name, std::string_view source, std::string_view terminatingMessage) {
     if (!started_) return;
     bool added = false;
     {
         std::unique_lock guard(tables->mutex, std::defer_lock);
-        if (!guard.try_lock_for(std::chrono::milliseconds(200))) return;
+        if (!guard.try_lock_for(settings.tableWait)) {
+            NoteLost(0);
+            return;
+        }
         auto& list = tables->functions;
         const auto found = std::ranges::find_if(list, [&](const FunctionEntry& entry) {
             return entry.name == name && entry.library.value_or("") == library;
@@ -1682,16 +1712,17 @@ void Collector::NoteMissingFunction(std::string_view library, std::string_view n
         } else if (list.size() < TrackedEntries) {
             list.push_back({library.empty() ? std::nullopt : std::optional<std::string>(library), std::string(name), 1});
             added = true;
-        } else {
-            ++tables->dropped.functions;
+        } else if (tables->droppedFunctionKeys.size() < 4096u) {
+            // Entries dropped are counted once each, not once per call.
+            if (tables->droppedFunctionKeys.insert(std::string(library) + "|" + std::string(name)).second) ++tables->dropped.functions;
         }
-        if (!tables->pendingStop) {
-            Stop stop{Kind::MissingFunction, Reason::RuntimeStop, source.empty() ? std::nullopt : std::optional<std::string>(source), std::nullopt};
-            if (Matches(std::string(name), "[A-Za-z0-9_.$]{1,128}")) {
-                stop.message = "The game called a function the runtime does not implement: " + (library.empty() ? std::string() : std::string(library) + ".") + std::string(name) + ".";
-            }
-            tables->pendingStop = std::move(stop);
+        // The game may catch this and go on, so it only names the stop of an abort that ends with this very message.
+        Stop stop{Kind::MissingFunction, Reason::RuntimeStop, source.empty() ? std::nullopt : std::optional<std::string>(source), std::nullopt};
+        const std::string function(name);
+        if (Matches(function, "[A-Za-z0-9_.$]{1,128}")) {
+            stop.message = "The game called a function the runtime does not implement: " + (library.empty() ? std::string() : std::string(library) + ".") + function + ".";
         }
+        if (tables->softStops.size() < 8u) tables->softStops.push_back({std::move(stop), std::string(terminatingMessage)});
     }
     if (added) CheckpointSoon();
 }
@@ -1701,12 +1732,15 @@ void Collector::NoteShader(int what) {
     (what == 0 ? compiled : what == 1 ? failedShaders : cacheHitCount).fetch_add(1, std::memory_order_relaxed);
 }
 
-void Collector::NoteUnsupportedInstruction(std::optional<std::string> encoding, std::optional<std::string> opcode, std::optional<std::int64_t> opcodeValue, std::string_view source) {
+void Collector::NoteUnsupportedInstruction(std::optional<std::string> encoding, std::optional<std::string> opcode, std::optional<std::int64_t> opcodeValue, std::string_view) {
     if (!started_) return;
     bool added = false;
     {
         std::unique_lock guard(tables->mutex, std::defer_lock);
-        if (!guard.try_lock_for(std::chrono::milliseconds(200))) return;
+        if (!guard.try_lock_for(settings.tableWait)) {
+            NoteLost(1);
+            return;
+        }
         auto& list = tables->unsupported;
         const auto found = std::ranges::find_if(list, [&](const UnsupportedEntry& entry) {
             return entry.encoding == encoding && entry.opcode == opcode && entry.opcodeValue == opcodeValue;
@@ -1716,8 +1750,9 @@ void Collector::NoteUnsupportedInstruction(std::optional<std::string> encoding, 
         } else if (list.size() < TrackedEntries) {
             list.push_back({encoding, opcode, opcodeValue, std::nullopt, 1});
             added = true;
-        } else {
-            ++tables->dropped.unsupported;
+        } else if (tables->droppedUnsupportedKeys.size() < 4096u) {
+            const auto key = encoding.value_or("") + "|" + opcode.value_or("") + "|" + (opcodeValue ? std::to_string(*opcodeValue) : std::string());
+            if (tables->droppedUnsupportedKeys.insert(key).second) ++tables->dropped.unsupported;
         }
     }
     if (added) CheckpointSoon();
@@ -1745,7 +1780,10 @@ void Collector::NoteImageFormat(std::int64_t format, std::optional<std::string> 
     bool added = false;
     {
         std::unique_lock guard(tables->mutex, std::defer_lock);
-        if (!guard.try_lock_for(std::chrono::milliseconds(200))) return;
+        if (!guard.try_lock_for(settings.tableWait)) {
+            NoteLost(2);
+            return;
+        }
         auto& list = tables->imageFormats;
         const auto found = std::ranges::find_if(list, [&](const FormatEntry& entry) { return entry.format == format && entry.status == status && entry.usage == usage; });
         if (found != list.end()) {
@@ -1756,10 +1794,6 @@ void Collector::NoteImageFormat(std::int64_t format, std::optional<std::string> 
         } else {
             ++tables->dropped.imageFormats;
         }
-        if (status == Status::Rejected && !tables->pendingStop) {
-            Stop stop{Kind::UnsupportedFormat, Reason::RuntimeStop, std::nullopt, "A guest image format is not supported (format " + std::to_string(format) + ")."};
-            tables->pendingStop = std::move(stop);
-        }
     }
     if (added) CheckpointSoon();
 }
@@ -1767,7 +1801,10 @@ void Collector::NoteImageFormat(std::int64_t format, std::optional<std::string> 
 void Collector::NoteDescriptor(int type, Status status, int usage) {
     if (!started_) return;
     std::unique_lock guard(tables->mutex, std::defer_lock);
-    if (!guard.try_lock_for(std::chrono::milliseconds(200))) return;
+    if (!guard.try_lock_for(settings.tableWait)) {
+        NoteLost(3);
+        return;
+    }
     auto& list = tables->descriptors;
     const auto found = std::ranges::find_if(list, [&](const DescriptorEntry& entry) { return entry.type == type && entry.status == status && entry.usage == usage; });
     if (found != list.end()) ++found->count;
@@ -1777,14 +1814,32 @@ void Collector::NoteDescriptor(int type, Status status, int usage) {
 
 void Collector::NoteStop(Stop stop) {
     std::unique_lock guard(tables->mutex, std::defer_lock);
-    if (!guard.try_lock_for(std::chrono::milliseconds(200))) return;
-    if (!tables->pendingStop) tables->pendingStop = std::move(stop);
+    if (!guard.try_lock_for(settings.tableWait)) return;
+    // Fatal stops are ranked by when they were reported; a later fatal one is not hidden by a failure noted earlier.
+    if (!tables->fatalStop) tables->fatalStop = std::move(stop);
+}
+
+void Collector::NoteSoftStop(Stop stop, std::string terminatingMessage) {
+    std::unique_lock guard(tables->mutex, std::defer_lock);
+    if (!guard.try_lock_for(settings.tableWait)) return;
+    if (tables->softStops.size() < 8u) tables->softStops.push_back({std::move(stop), std::move(terminatingMessage)});
 }
 
 std::optional<Stop> Collector::PendingStop() const {
     std::unique_lock guard(tables->mutex, std::defer_lock);
-    if (!guard.try_lock_for(std::chrono::milliseconds(200))) return std::nullopt;
-    return tables->pendingStop;
+    if (!guard.try_lock_for(settings.tableWait)) return std::nullopt;
+    return tables->fatalStop;
+}
+
+std::optional<Stop> Collector::StopFor(std::string_view terminatingMessage) const {
+    std::unique_lock guard(tables->mutex, std::defer_lock);
+    if (!guard.try_lock_for(settings.tableWait)) return std::nullopt;
+    if (tables->fatalStop) return tables->fatalStop;
+    if (terminatingMessage.empty()) return std::nullopt;
+    for (const auto& soft : tables->softStops) {
+        if (soft.message == terminatingMessage) return soft.stop;
+    }
+    return std::nullopt;
 }
 
 Observations Collector::Observe() const {
@@ -1819,7 +1874,7 @@ Observations Collector::Observe() const {
         }
     }
     std::unique_lock guard(tables->mutex, std::defer_lock);
-    if (guard.try_lock_for(std::chrono::milliseconds(200))) {
+    if (guard.try_lock_for(settings.tableWait)) {
         o.functions = tables->functions;
         o.unsupported = tables->unsupported;
         o.imageFormats.insert(o.imageFormats.end(), tables->imageFormats.begin(), tables->imageFormats.end());
@@ -1829,6 +1884,12 @@ Observations Collector::Observe() const {
         // A stuck writer: say that the lists are unknown rather than that they are empty.
         o.coverage.missing = o.coverage.unsupported = o.coverage.imageFormats = o.coverage.descriptors = false;
     }
+    // An observation a hook had to drop (the table was busy) is never forgotten: the list is marked as missing at least one entry.
+    if (lost[0] != 0 && o.coverage.missing) o.truncated.functions += 1;
+    if (lost[1] != 0 && o.coverage.unsupported) o.truncated.unsupported += 1;
+    if (lost[2] != 0 && o.coverage.imageFormats) o.truncated.imageFormats += 1;
+    if (lost[3] != 0 && o.coverage.descriptors) o.truncated.descriptors += 1;
+    o.lostObservations = lost[0] != 0 || lost[1] != 0 || lost[2] != 0 || lost[3] != 0;
     return o;
 }
 
@@ -2019,15 +2080,23 @@ extern "C" bool LibcRunReportHandoff_nid_no_patch(int exitCode) noexcept {
     return collector->Finalized();
 }
 
-extern "C" void LibcRunReportFinishAbort_nid_no_patch(int kind) noexcept {
+extern "C" void LibcRunReportFinishAbortWith_nid_no_patch(int kind, const char* terminatingMessage) noexcept {
     if (collector == nullptr) return;
     const auto stopKind = kind == static_cast<int>(RunReport::Kind::Assert) ? RunReport::Kind::Assert : kind == static_cast<int>(RunReport::Kind::Crash) ? RunReport::Kind::Crash : RunReport::Kind::Other;
     RunReport::Stop stop{stopKind, RunReport::Reason::Crash, std::nullopt, std::nullopt};
-    // An abort that follows a typed failure (a missing function, a shader or format the runtime cannot handle) is that failure.
+    // A typed failure is the stop of this abort only when it is a fatal one, or the one whose message ended the run.
     if (stopKind == RunReport::Kind::Other) {
-        if (auto pending = collector->PendingStop()) stop = std::move(*pending);
+        if (auto typed = collector->StopFor(terminatingMessage != nullptr ? terminatingMessage : "")) stop = std::move(*typed);
     }
     collector->Finish(RunReport::Exit::Abort, std::move(stop), std::nullopt);
+}
+
+extern "C" void LibcRunReportFinishAbort_nid_no_patch(int kind) noexcept {
+    LibcRunReportFinishAbortWith_nid_no_patch(kind, nullptr);
+}
+
+extern "C" bool LibcRunReportEnabled_nid_no_patch() noexcept {
+    return collector != nullptr;
 }
 
 extern "C" void LibcRunReportMilestone_nid_no_patch(int milestone) noexcept {
@@ -2063,7 +2132,7 @@ extern "C" void LibcRunReportMissingFunction_nid_no_patch(const char* name, cons
         if (collector == nullptr || name == nullptr) return;
         const std::string_view path = file != nullptr ? file : "";
         const auto source = RunReport::SourceOf(path, line);
-        collector->NoteMissingFunction(LibraryOf(path), ExportName(name), source.value_or(""));
+        collector->NoteMissingFunction(LibraryOf(path), ExportName(name), source.value_or(""), std::string(name) + " not implemented");
     } catch (...) {
     }
 }
@@ -2119,7 +2188,8 @@ extern "C" void LibcRunReportUnsupportedFormatStop_nid_no_patch(unsigned format,
     try {
         if (collector == nullptr) return;
         RunReport::Stop stop{RunReport::Kind::UnsupportedFormat, RunReport::Reason::RuntimeStop, RunReport::SourceOf(file != nullptr ? file : "", line), "A guest image format is not supported (format " + std::to_string(format) + ")."};
-        collector->NoteStop(std::move(stop));
+        // The runtime throws "unsupported guest texture format N" and callers may catch it; only that message ends the run with this stop.
+        collector->NoteSoftStop(std::move(stop), "unsupported guest texture format " + std::to_string(format));
     } catch (...) {
     }
 }

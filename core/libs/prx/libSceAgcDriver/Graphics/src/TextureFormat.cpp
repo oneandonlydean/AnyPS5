@@ -117,7 +117,9 @@ const FormatEntry& findFormatEntry(std::uint32_t guestFormat) {
         LibcRunReportUnsupportedFormatStop_nid_no_patch(guestFormat, __FILE__, __LINE__);
         Require(false, "unsupported guest texture format " + std::to_string(guestFormat));
     }
-    formatUse[remapped].fetch_add(1, std::memory_order_relaxed);
+    // Counted only while a report is collected; the answer cannot change after startup.
+    static const bool reporting = LibcRunReportEnabled_nid_no_patch();
+    if (reporting) formatUse[remapped].fetch_add(1, std::memory_order_relaxed);
     return *entry;
 }
 

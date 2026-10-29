@@ -27,6 +27,11 @@ extern "C" void LibcRunReportSetGameProvider_nid_no_patch(bool (*provider)(RunRe
 extern "C" void LibcRunReportQuitRequested_nid_no_patch() noexcept;
 extern "C" void LibcRunReportFinishExit_nid_no_patch(int exitCode) noexcept;
 extern "C" void LibcRunReportFinishAbort_nid_no_patch(int kind) noexcept;
+// The same, with the message of the exception that is ending the run (null when there is none). A failure the runtime noted on the
+// way is the stop of the run only when it is the one this message belongs to.
+extern "C" void LibcRunReportFinishAbortWith_nid_no_patch(int kind, const char* terminatingMessage) noexcept;
+// True while a run report is being collected. Callers that would do work only for the report check this first.
+extern "C" bool LibcRunReportEnabled_nid_no_patch() noexcept;
 // "0", "1" or null: what APS5_REPORT must be in a relaunched process so that the choice made with --aps5-report survives it.
 extern "C" const char* LibcRunReportRelaunchEnvironment_nid_no_patch() noexcept;
 // A relaunch finishes the report before it replaces the process; when the replacement fails this reopens the run.
@@ -136,6 +141,8 @@ struct Observations {
     std::vector<DescriptorEntry> descriptors;
     Coverage coverage;
     Truncated truncated;
+    // A hook had to drop at least one observation (a table was busy); the report is marked incomplete.
+    bool lostObservations = false;
 };
 
 struct BuildInfo {
@@ -191,6 +198,8 @@ struct Settings {
     std::function<void()> duringCheckpointWrite;
     // How long Finish waits for a checkpoint write that is in progress before it leaves the files alone.
     std::chrono::milliseconds lockWait{2000};
+    // How long an observation hook waits for the tables before it gives the observation up (and counts it as lost).
+    std::chrono::milliseconds tableWait{200};
     // Component names that must have registered the same commit for `modified` to be known.
     std::vector<std::string> requiredComponents;
     // Which sections this build collects; a section that is off is reported as not covered, not as empty.
@@ -252,17 +261,23 @@ public:
     // Observation hooks. The milestone and failure calls also write a checkpoint, so a run that dies right after still reports them.
     void NoteMilestone(int milestone);
     void NoteFramePresented();
-    void NoteMissingFunction(std::string_view library, std::string_view name, std::string_view source);
+    void NoteMissingFunction(std::string_view library, std::string_view name, std::string_view source, std::string_view terminatingMessage = {});
     void NoteShader(int what);
     void NoteUnsupportedInstruction(std::optional<std::string> encoding, std::optional<std::string> opcode, std::optional<std::int64_t> opcodeValue, std::string_view source);
     void NoteImageFormat(std::int64_t format, std::optional<std::string> name, Status status, int usage);
     void NoteDescriptor(int type, Status status, int usage);
     void NoteStop(Stop stop);
+    void NoteSoftStop(Stop stop, std::string terminatingMessage);
     void NoteUnsupportedShaderStop(std::optional<std::string> encoding, std::optional<std::string> opcode, std::string_view source);
     void SetDescriptorCounters(const std::atomic<unsigned long long>* counters);
     void SetFormatCounters(const std::atomic<unsigned long long>* counters, unsigned count);
     // The stop a typed failure recorded, used by an abort that has no better explanation.
     std::optional<Stop> PendingStop() const;
+    // The stop for an abort that ends with `terminatingMessage`: a fatal failure first, otherwise a failure noted earlier whose
+    // own message equals it. A failure the game caught and went on from never names a later, unrelated stop.
+    std::optional<Stop> StopFor(std::string_view terminatingMessage) const;
+    // Holds the observation tables, so a test can make the hooks time out.
+    std::unique_lock<std::timed_mutex> LockTablesForTest();
     bool WriteCheckpoint();
     bool WriteCheckpoint(std::chrono::milliseconds wait);
     // Reopens a run that Finish has already finished (a relaunch whose replacement failed).
@@ -280,6 +295,7 @@ private:
     struct Tables;
     Observations Observe() const;
     void CheckpointSoon();
+    void NoteLost(int section);
 
     Settings settings;
     std::filesystem::path directory;
@@ -311,6 +327,8 @@ private:
     std::atomic<std::int64_t> lastFrameNanos{-1};
     std::atomic<std::int64_t> compiled{0}, failedShaders{0}, cacheHitCount{0};
     std::atomic<int> checkpointsRequested{0};
+    std::atomic<bool> checkpointWanted{false};
+    std::atomic<int> lost[4];
     std::atomic<const std::atomic<unsigned long long>*> descriptorCounters{nullptr};
     std::atomic<const std::atomic<unsigned long long>*> formatCounters{nullptr};
     std::atomic<unsigned> formatCounterCount{0};

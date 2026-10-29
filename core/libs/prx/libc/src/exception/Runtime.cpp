@@ -53,6 +53,7 @@ static void RawLog(const char* format, ...) {
 }
 
 [[noreturn]] static void DefaultTerminate() {
+    const char* terminatingWhat = nullptr;
     if (globals.caught && Native(globals.caught->unwind.exception_class)) {
         Header* primary = Primary(globals.caught);
         const char* typeName = primary->type ? primary->type->name() : nullptr;
@@ -69,6 +70,7 @@ static void RawLog(const char* format, ...) {
             } else
 #endif
             what = layout->whatFn(exception);
+            terminatingWhat = what;
         }
         int status = 0;
         char* demangled = abi::__cxa_demangle(typeName, nullptr, nullptr, &status);
@@ -83,7 +85,7 @@ static void RawLog(const char* format, ...) {
     } else {
         RawLog("terminate called without an active exception\n");
     }
-    LibcRunReportFinishAbort_nid_no_patch(static_cast<int>(RunReport::Kind::Other));
+    LibcRunReportFinishAbortWith_nid_no_patch(static_cast<int>(RunReport::Kind::Other), terminatingWhat);
     std::abort();
 }
 

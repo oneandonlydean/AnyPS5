@@ -66,8 +66,10 @@ The pairs the schema enforces: `kind: none`, a clean exit and a reason of `guest
 - `missing.functions` counts calls to a function the runtime does not implement. The library is the folder the stub is compiled in; a call from older code that does not say where it is made has a null library. The name is the exported name without the runtime's suffix; a name that does not fit the schema is not listed and is counted in `truncated.functions`.
 - `shaders.compiled` and `failed` count compilations where they happen (once per variant); reuse of a variant, in memory or from the disk cache, counts as a cache hit.
 - `shaders.unsupported` lists instructions the recompiler could not translate, by encoding family and numeric opcode (the name is null). It also lists instructions met in shaders that were prepared and never used, so an entry does not by itself mean the run stopped on it; the stop says that.
-- `shaders.imageFormats` counts how often each guest format was resolved for use (the use is `other`), plus the formats the runtime rejected. `shaders.descriptors` counts the bindings of shaders as they were prepared for a draw; the count measures use, not distinct shaders.
-- `stop` names a typed failure only when it ended the run: an unimplemented function, a shader instruction the recompiler could not translate (reported as fatal by the driver) or an unsupported image format. Any other abort stays `other`.
+- `shaders.imageFormats` counts guest format lookups, internal ones included, with the use shown as `other`, plus the formats the runtime rejected. It measures how often a format was looked up, not how many images used it. `shaders.descriptors` counts the bindings of shaders as they were prepared for a draw; the count measures use, not distinct shaders.
+- `stop` names a typed failure only when it ended the run: a shader instruction the recompiler could not translate and the driver reported as fatal, or an unimplemented function or unsupported image format whose error message is the one that ended the run. A failure the game caught and went on from never names a later stop; any other abort stays `other`.
+- `truncated` counts entries (a function, an instruction, a format, a binding kind) that were dropped, once each however many calls they made. When a hook had to give up an observation because the collector was busy, the matching count is at least 1 and the report is marked `incomplete`.
+- Nothing in this list is collected, counted or scanned when the report is off.
 
 ## Lists, coverage and truncation
 

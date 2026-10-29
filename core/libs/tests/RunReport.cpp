@@ -834,15 +834,15 @@ void ObservationsTest() {
     for (int index = 0; index < 3; ++index) collector.NoteShader(0);
     collector.NoteShader(1);
     collector.NoteShader(2);
-    collector.NoteMissingFunction("libSceNpTrophy", "sceNpTrophyCreateContext", "core/libs/prx/libSceNpTrophy/a.cpp:10");
-    collector.NoteMissingFunction("libSceNpTrophy", "sceNpTrophyCreateContext", "core/libs/prx/libSceNpTrophy/a.cpp:10");
+    collector.NoteMissingFunction("libSceNpTrophy", "sceNpTrophyCreateContext", "core/libs/prx/libSceNpTrophy/a.cpp:10", "sceNpTrophyCreateContext not implemented");
+    collector.NoteMissingFunction("libSceNpTrophy", "sceNpTrophyCreateContext", "core/libs/prx/libSceNpTrophy/a.cpp:10", "sceNpTrophyCreateContext not implemented");
     collector.NoteMissingFunction("", "legacyCaller", "");
     collector.NoteUnsupportedInstruction("VOP3", "V_CVT_PK_U8_F32", 256, "core/shader/recompiler/Translator/src/Vop3.cpp:812");
     collector.NoteUnsupportedInstruction(std::nullopt, std::nullopt, 4000, "");
     collector.NoteImageFormat(12, "GuestFormat12", RunReport::Status::Rejected, 0);
     collector.NoteDescriptor(4, RunReport::Status::Accepted, 0);
     collector.NoteDescriptor(4, RunReport::Status::Accepted, 0);
-    collector.Finish(RunReport::Exit::Abort, collector.PendingStop().value(), std::nullopt);
+    collector.Finish(RunReport::Exit::Abort, collector.StopFor("sceNpTrophyCreateContext not implemented").value(), std::nullopt);
     const auto text = Read(collector.ReportPath());
     for (const char* part : {"\"stage\": \"presents\"", "\"loaded\":", "\"started\":", "\"firstDraw\":", "\"firstPresent\":", "\"framesPresented\": 5", "\"compiled\": 3", "\"failed\": 1", "\"cacheHits\": 1",
                              "\"library\": \"libSceNpTrophy\",\n        \"name\": \"sceNpTrophyCreateContext\",\n        \"calls\": 2", "\"library\": null,\n        \"name\": \"legacyCaller\"",
@@ -909,18 +909,89 @@ void TypedStopTest() {
     Directory executable, user;
     RunReport::Collector collector(Covered(executable.path, user.path, IdA));
     Require(collector.Start(), "the collector did not start");
+    // A failure the game caught and went on from is not the stop of a later, unrelated abort.
+    collector.NoteMissingFunction("libX", "caught", "core/libs/prx/libX/a.cpp:3", "caught not implemented");
     collector.NoteUnsupportedInstruction("VOP3", "V_CVT_PK_U8_F32", 256, "core/shader/recompiler/Translator/src/Vop3.cpp:812");
-    // Meeting an unsupported instruction is not a stop: the recompiler also meets them in shaders it prepares and never uses.
-    Require(!collector.PendingStop(), "an unsupported instruction alone became the stop");
+    RunReport::Stop rejected{RunReport::Kind::UnsupportedFormat, RunReport::Reason::RuntimeStop, std::nullopt, "A guest image format is not supported (format 99)."};
+    collector.NoteSoftStop(rejected, "unsupported guest texture format 99");
+    Require(!collector.PendingStop(), "a failure that may have been caught became a fatal stop");
+    Require(!collector.StopFor("something else entirely") && !collector.StopFor(""), "an unrelated abort was given a stop it did not have");
+    Require(collector.StopFor("caught not implemented") && collector.StopFor("caught not implemented")->kind == RunReport::Kind::MissingFunction, "the abort that ends with the message of a missing function lost its stop");
+    Require(collector.StopFor("unsupported guest texture format 99")->kind == RunReport::Kind::UnsupportedFormat, "the abort that ends with a rejected format lost its stop");
+    // A fatal failure reported later is not hidden by the ones noted before it.
     collector.NoteUnsupportedShaderStop("VOP3", "V_CVT_PK_U8_F32", "core/shader/recompiler/Translator/src/Vop3.cpp:812");
-    const auto stop = collector.PendingStop();
-    Require(stop && stop->kind == RunReport::Kind::UnsupportedShader && stop->reason == RunReport::Reason::RuntimeStop, "the fatal failure did not become a typed stop");
-    collector.NoteMissingFunction("libX", "later", "core/libs/prx/libX/a.cpp:3");
-    Require(collector.PendingStop()->kind == RunReport::Kind::UnsupportedShader, "a later failure replaced the first stop");
+    const auto stop = collector.StopFor("caught not implemented");
+    Require(stop && stop->kind == RunReport::Kind::UnsupportedShader && stop->reason == RunReport::Reason::RuntimeStop, "the fatal failure did not become the stop");
+    collector.NoteUnsupportedShaderStop("SOP1", "S_OTHER", "core/shader/recompiler/Translator/src/Other.cpp:1");
+    Require(collector.PendingStop()->source == std::optional<std::string>("core/shader/recompiler/Translator/src/Vop3.cpp:812"), "a later fatal failure replaced the first");
     collector.Finish(RunReport::Exit::Abort, *stop, std::nullopt);
     const auto text = Read(collector.ReportPath());
     Require(Contains(text, "\"kind\": \"unsupported-shader\"") && Contains(text, "Shader uses an unsupported VOP3 instruction (V_CVT_PK_U8_F32).") &&
             Contains(text, "\"source\": \"core/shader/recompiler/Translator/src/Vop3.cpp:812\""), "the typed stop is wrong: " + text);
+}
+
+void LostObservationTest() {
+    Directory executable, user;
+    auto settings = Covered(executable.path, user.path, IdA);
+    settings.tableWait = std::chrono::milliseconds(20);
+    RunReport::Collector collector(std::move(settings));
+    Require(collector.Start(), "the collector did not start");
+    collector.NoteMissingFunction("libTest", "first", "", "first not implemented");
+    {
+        auto held = collector.LockTablesForTest();
+        // The tables are busy past the hooks' patience: these observations are lost.
+        collector.NoteMissingFunction("libTest", "second", "", "second not implemented");
+        collector.NoteUnsupportedInstruction("VOP3", "V_X", 7, "");
+        collector.NoteImageFormat(5, std::nullopt, RunReport::Status::Accepted, 0);
+        collector.NoteDescriptor(1, RunReport::Status::Accepted, 0);
+    }
+    collector.Finish(RunReport::Exit::Clean, {}, 0);
+    const auto text = Read(collector.ReportPath());
+    // A later, successful snapshot must still say that observations were lost.
+    Require(Contains(text, "\"functions\": 1,\n    \"unsupported\": 1,\n    \"imageFormats\": 1,\n    \"descriptors\": 1"), "lost observations are not visible in truncated: " + text.substr(text.find("\"truncated\"")));
+    Require(Contains(text, "\"incomplete\": true"), "a report that lost observations is not marked incomplete");
+}
+
+void CheckpointDoesNotBlockHooksTest() {
+    Directory executable, user;
+    std::atomic<bool> armed{false}, release{false};
+    auto settings = Covered(executable.path, user.path, IdA);
+    settings.duringCheckpointWrite = [&] {
+        if (!armed) return;
+        while (!release) std::this_thread::sleep_for(std::chrono::milliseconds(5));
+    };
+    RunReport::Collector collector(std::move(settings));
+    Require(collector.Start(), "the collector did not start");
+    armed = true;
+    // These hooks run under the GPU lock and on the render path: a stalled checkpoint write must not stall them.
+    auto hooks = std::async(std::launch::async, [&] {
+        collector.NoteMilestone(2);
+        collector.NoteMissingFunction("libTest", "f", "", "f not implemented");
+        collector.NoteUnsupportedInstruction("VOP3", "V_X", 7, "");
+    });
+    const bool returned = hooks.wait_for(std::chrono::seconds(2)) == std::future_status::ready;
+    release = true;
+    hooks.wait();
+    Require(returned, "an observation hook waited for a checkpoint write");
+}
+
+void SourceBoundaryTest() {
+    Require(!RunReport::SourceOf("/x/notcore/a.cpp", 3) && !RunReport::SourceOf("/x/mycore/a.cpp", 3), "a path that only ends in core/ was taken for the source tree");
+    Require(RunReport::SourceOf("/x/core/a.cpp", 3) == std::optional<std::string>("core/a.cpp:3") && RunReport::SourceOf("core/a.cpp", 3) == std::optional<std::string>("core/a.cpp:3"), "a source path was refused");
+    Require(RunReport::SourceOf("C:\\x\\core\\a.cpp", 3) == std::nullopt || RunReport::SourceOf("/x/core/b/core/a.cpp", 4) == std::optional<std::string>("core/a.cpp:4"), "the last core/ segment was not used");
+}
+
+void DroppedEntriesAreDistinctTest() {
+    Directory executable, user;
+    RunReport::Collector collector(Covered(executable.path, user.path, IdA));
+    Require(collector.Start(), "the collector did not start");
+    for (int round = 0; round < 2; ++round) {
+        for (int index = 0; index < 600; ++index) collector.NoteMissingFunction("libMany", "function" + std::to_string(1000 + index), "");
+    }
+    collector.Finish(RunReport::Exit::Clean, {}, 0);
+    const auto text = Read(collector.ReportPath());
+    // 600 distinct functions, 200 listed: 400 entries dropped, however many calls they made.
+    Require(Contains(text, "\"functions\": 400,"), "truncated does not count the dropped entries once each: " + text.substr(text.find("\"truncated\"")));
 }
 
 void ObservationPrivacyTest() {
@@ -943,14 +1014,24 @@ void ObservationPrivacyTest() {
 void CheckpointObservationsTest() {
     Directory executable, user;
     {
-        RunReport::Collector abandoned(Covered(executable.path, user.path, IdA));
+        auto settings = Covered(executable.path, user.path, IdA);
+        settings.worker = true;
+        settings.checkpointInterval = std::chrono::milliseconds(10);
+        RunReport::Collector abandoned(std::move(settings));
         Require(abandoned.Start(), "the collector did not start");
         abandoned.NoteMilestone(2);
         abandoned.NoteMissingFunction("libTest", "neverImplemented", "core/libs/prx/libTest/a.cpp:1");
         abandoned.NoteShader(0);
         abandoned.NoteShader(0);
         abandoned.NoteDescriptor(1, RunReport::Status::Rejected, 1);
-        Require(Contains(Read(abandoned.CheckpointPath()), "\"firstDraw\"") && Contains(Read(abandoned.CheckpointPath()), "neverImplemented"), "the checkpoint does not carry the milestone and the failure");
+        // The worker writes the checkpoint soon after a milestone or a failure; the hooks themselves never do.
+        bool written = false;
+        for (int attempt = 0; attempt < 200 && !written; ++attempt) {
+            std::this_thread::sleep_for(std::chrono::milliseconds(10));
+            const auto text = Read(abandoned.CheckpointPath());
+            written = Contains(text, "\"firstDraw\"") && Contains(text, "neverImplemented");
+        }
+        Require(written, "the checkpoint does not carry the milestone and the failure");
     }
     RunReport::Collector next(Covered(executable.path, user.path, IdB));
     Require(next.Start(), "the next collector did not start");
@@ -1074,6 +1155,25 @@ void ChildMissingFunctionTest() {
     }
 }
 
+void ChildCaughtMissingFunctionTest() {
+    Directory directory;
+    const int status = RunChild(CopySelf(directory), directory.path, "caught-missing-function");
+    Require(WIFSIGNALED(status) && WTERMSIG(status) == SIGABRT, "the abort did not keep its signal");
+    const auto text = Report(directory);
+    Require(Contains(text, "\"kind\": \"other\"") && !Contains(text, "missing-function") && Contains(text, "\"name\": \"sceNpCaught\""), "a missing function the game caught became the stop of an unrelated abort: " + text);
+}
+
+void ChildEnabledTest() {
+    Directory directory;
+    const auto copy = CopySelf(directory);
+    RunChild(copy, directory.path, "enabled", "", "APS5_REPORT=1");
+    Require(Read(directory.path / "enabled.txt") == "1", "the runtime does not say the report is on");
+    RunChild(copy, directory.path, "enabled", "", "APS5_REPORT=0");
+    Require(Read(directory.path / "enabled.txt") == "0", "the runtime says the report is on while it is off");
+    RunChild(copy, directory.path, "enabled", "--aps5-report=off", "APS5_REPORT=1");
+    Require(Read(directory.path / "enabled.txt") == "0", "the launch flag did not turn the report off for the hooks");
+}
+
 void ChildAssertTest() {
     Directory directory;
     const int status = RunChild(CopySelf(directory), directory.path, "assert");
@@ -1141,11 +1241,11 @@ void Dump(const fs::path& directory) {
         collector.NoteMilestone(0); collector.NoteMilestone(1); collector.NoteMilestone(2);
         for (int index = 0; index < 4; ++index) { collector.NoteFramePresented(); std::this_thread::sleep_for(std::chrono::milliseconds(5)); }
         collector.NoteShader(0); collector.NoteShader(1); collector.NoteShader(2);
-        collector.NoteMissingFunction("libSceNpTrophy", "sceNpTrophyCreateContext", "core/libs/prx/libSceNpTrophy/a.cpp:10");
+        collector.NoteMissingFunction("libSceNpTrophy", "sceNpTrophyCreateContext", "core/libs/prx/libSceNpTrophy/a.cpp:10", "sceNpTrophyCreateContext not implemented");
         collector.NoteUnsupportedInstruction("VOP3", "V_CVT_PK_U8_F32", 256, "core/shader/recompiler/Translator/src/Vop3.cpp:812");
         collector.NoteImageFormat(12, "GuestFormat12", RunReport::Status::Rejected, 0);
         collector.NoteDescriptor(4, RunReport::Status::Accepted, 0);
-        collector.Finish(RunReport::Exit::Abort, collector.PendingStop().value(), std::nullopt);
+        collector.Finish(RunReport::Exit::Abort, collector.StopFor("sceNpTrophyCreateContext not implemented").value(), std::nullopt);
         fs::copy_file(collector.ReportPath(), directory / "collector-abort.json", fs::copy_options::overwrite_existing);
     }
     {
@@ -1182,6 +1282,15 @@ int main(int argc, char** argv) {
                 LibcTerminate_nid_no_patch(0);
             }
             if (mode == "return") return 5;
+            if (mode == "caught-missing-function") {
+                try { NotImplemented_nid_no_patch("sceNpCaught_nid_postfix"); } catch (const std::exception&) {}
+                LibcRunReportMilestone_nid_no_patch(2);
+                abort_nid_postfix(0, 0, 0, 0, 0, 0);
+            }
+            if (mode == "enabled") {
+                std::ofstream("enabled.txt") << (LibcRunReportEnabled_nid_no_patch() ? "1" : "0");
+                return 0;
+            }
             if (mode == "missing-function-after-milestone") {
                 LibcRunReportMilestone_nid_no_patch(2);
                 LibcRunReportFramePresented_nid_no_patch();
@@ -1250,6 +1359,10 @@ int main(int argc, char** argv) {
         Run("observation-privacy", ObservationPrivacyTest);
         Run("checkpoint-observations", CheckpointObservationsTest);
         Run("coverage-off", CoverageOffTest);
+        Run("lost-observation", LostObservationTest);
+        Run("checkpoint-does-not-block-hooks", CheckpointDoesNotBlockHooksTest);
+        Run("source-boundary", SourceBoundaryTest);
+        Run("dropped-entries-are-distinct", DroppedEntriesAreDistinctTest);
 #ifndef _WIN32
         Run("child-exit", ChildExitTest);
         Run("child-quit", ChildQuitTest);
@@ -1261,6 +1374,8 @@ int main(int argc, char** argv) {
         Run("child-std-terminate", ChildTerminateTest);
         Run("child-assert", ChildAssertTest);
         Run("child-missing-function", ChildMissingFunctionTest);
+        Run("child-caught-missing-function", ChildCaughtMissingFunctionTest);
+        Run("child-enabled", ChildEnabledTest);
 #endif
         std::printf("run report tests: %d passed, %d failed, %d not run\n", passed, failed, notRun);
         if (passed + failed + notRun == 0) {
