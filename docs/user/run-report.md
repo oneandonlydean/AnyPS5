@@ -6,13 +6,19 @@ The file stays on your machine. Nothing is uploaded unless you share it.
 
 ## Switching it off
 
-The report is written by default. Turn it off with the launch flag `--aps5-report=off` or the environment variable `APS5_REPORT=0`. The flag wins over the environment variable, and the environment variable wins over the default (on). There is no ini setting. The flag needs a game converted with a new enough relinker; the environment variable also works with older conversions.
+The report is written by default. Turn it off with the launch flag `--aps5-report=off` or the environment variable `APS5_REPORT=0`. The flag wins over the environment variable, and the environment variable wins over the default (on). There is no ini setting. The flag needs a game converted with a new enough relinker; the environment variable also works with older conversions. The runtime reads the flag from the command line and does not remove it, so the game can see `--aps5-report=...` in its arguments. When the game relaunches itself, the choice is passed on through `APS5_REPORT`.
 
 ## Where it goes
 
 `anyps5-report.json` is written next to the game's executable. If that folder can't be written, it goes to the AnyPS5 data folder under `reports/<run id>/` and the runtime prints where. `run.id` is that same id: 32 lowercase hex characters, random per run.
 
+While a run is in progress, `anyps5-report.<run id>.ckpt` and `.lock` files sit in the same folder; a run killed from outside can leave them there until the next start recovers it. A checkpoint is refreshed every five seconds, so a recovered report's `seconds` can be up to five seconds short.
+
 If a run ends without writing its report (power loss, forced kill, a crash the runtime can't handle), the next start writes a report for it, marked `recovered` and `incomplete`, with `exit: "killed"`. That means the run ended uncleanly for an unknown cause. It is not proof that anything killed the process.
+
+## What `anyps5.modified` means
+
+`false` means the build's git tree had no change to tracked files, no untracked files that git does not ignore, and no change inside a submodule. `true` means any of those. `null` means the build did not come from a git checkout. A mixed set of libraries from different builds is not detected.
 
 ## Unknown is null
 

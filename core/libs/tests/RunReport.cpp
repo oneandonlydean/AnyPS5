@@ -1,23 +1,52 @@
 #include "prx/libc/include/RunReport.hpp"
 #include "prx/libc/include/Shutdown.hpp"
 
+#include <clocale>
 #include <csignal>
 #include <cstdio>
 #include <cstdlib>
 #include <fstream>
+#include <future>
 #include <iostream>
 #include <iterator>
+#include <mutex>
 #include <stdexcept>
 #include <string>
 #include <thread>
 #include <vector>
 
+#ifndef _WIN32
+#include <sys/wait.h>
+#include <unistd.h>
+#endif
+
 namespace fs = std::filesystem;
 
 namespace {
 
+struct NotRun : std::runtime_error {
+    using std::runtime_error::runtime_error;
+};
+
 void Require(bool condition, const std::string& message) {
     if (!condition) throw std::runtime_error(message);
+}
+
+int passed = 0, failed = 0, notRun = 0;
+
+// Every case is counted on its own, so one failure does not hide the others and a run that executed nothing is an error.
+void Run(const char* name, void (*test)()) {
+    try {
+        test();
+        ++passed;
+        std::printf("PASS %s\n", name);
+    } catch (const NotRun& reason) {
+        ++notRun;
+        std::printf("NOT_RUN %s: %s\n", name, reason.what());
+    } catch (const std::exception& error) {
+        ++failed;
+        std::printf("FAIL %s: %s\n", name, error.what());
+    }
 }
 
 std::string Read(const fs::path& path) {
@@ -53,6 +82,11 @@ RunReport::Settings SettingsFor(const fs::path& executable, const fs::path& user
     return settings;
 }
 
+std::string FlagText(const std::vector<std::string>& arguments) {
+    const auto flag = RunReport::FlagFromArguments(arguments);
+    return flag ? std::string(*flag) : "<none>";
+}
+
 void ToggleTests() {
     using RunReport::ResolveToggle;
     const auto flag = [](const char* value) { return std::optional<std::string_view>(value); };
@@ -71,8 +105,8 @@ void ToggleTests() {
     Require(ResolveToggle(std::nullopt, flag("off")).enabled && ResolveToggle(std::nullopt, flag("off")).warnings.size() == 1, "APS5_REPORT=off is not the documented 0|1");
     Require(ResolveToggle(flag("1"), none).enabled && ResolveToggle(flag("1"), none).warnings.size() == 1, "--aps5-report=1 is not the documented on|off");
     const std::vector<std::string> arguments{"game", "--other", "--aps5-report=off", "--aps5-report=on", "--aps5-reports=off"};
-    Require(RunReport::FlagFromArguments(arguments) == std::optional<std::string_view>("on"), "the last --aps5-report flag did not win");
-    Require(!RunReport::FlagFromArguments({"game", "--aps5-reports=off", "aps5-report=off"}).has_value(), "a look-alike argument was taken for the flag");
+    Require(FlagText(arguments) == "on", "the last --aps5-report flag did not win");
+    Require(FlagText({"game", "--aps5-reports=off", "aps5-report=off"}) == "<none>", "a look-alike argument was taken for the flag");
 }
 
 void PrivacyTests() {
@@ -136,8 +170,10 @@ void SerializeTests() {
     const auto crashText = RunReport::Serialize(crash);
     Require(Contains(crashText, "\"kind\": \"assert\"") && Contains(crashText, "\"reason\": \"crash\"") && Contains(crashText, "\"message\": \"A runtime assertion failed.\"") && Contains(crashText, "\"source\": \"core/a.cpp:12\""), "an assertion stop was not described");
     auto controls = SampleReport();
-    controls.game.name = std::string("a\"b\\c\x01");
-    Require(Contains(RunReport::Serialize(controls), "\"a\\\"b\\\\c\\u0001\""), "a name was not escaped");
+    controls.game.name = std::string("a\"b\\c");
+    Require(Contains(RunReport::Serialize(controls), "\"name\": \"a\\\"b\\\\c\""), "a name was not escaped");
+    controls.game.name = std::string("a\x01" "b");
+    Require(Contains(RunReport::Serialize(controls), "\"name\": null"), "a name with a control character was written");
 }
 
 void FinishTests() {
@@ -274,26 +310,310 @@ void WorkerTests() {
     Require(!fs::exists(collector.CheckpointPath()), "the checkpoint survived a finish with a worker");
 }
 
+// ---- regressions of the step 2 review (row 700); each fails on 1c3ac7fa52 ----
+
+void FlagFromTemporaryTest() {
+    // The flag text must outlive the argument vector it came from (the startup path built it from a temporary).
+    const auto flag = RunReport::FlagFromArguments(std::vector<std::string>{"game", "--aps5-report=off"});
+    std::vector<std::string> churn;
+    for (int index = 0; index < 64; ++index) churn.emplace_back(64, 'x');
+    Require(flag && std::string(*flag) == "off", "the flag text did not survive its argument vector");
+}
+
+void FinishWhileProviderBlockedTest() {
+    Directory executable, user;
+    std::mutex metadata;
+    auto settings = SettingsFor(executable.path, user.path, IdA);
+    settings.worker = true;
+    settings.checkpointInterval = std::chrono::milliseconds(10);
+    settings.game = [&metadata] {
+        std::lock_guard guard(metadata);
+        RunReport::GameInfo game;
+        game.titleId = "PPSA12345";
+        return game;
+    };
+    RunReport::Collector collector(std::move(settings));
+    Require(collector.Start(), "the collector did not start");
+    std::unique_lock held(metadata);
+    std::this_thread::sleep_for(std::chrono::milliseconds(100));
+    // The failing thread holds the metadata lock and the checkpoint worker waits for it: Finish must still return.
+    auto done = std::async(std::launch::async, [&collector] { collector.Finish(RunReport::Exit::Abort, {RunReport::Kind::Assert, RunReport::Reason::Crash, std::nullopt}, std::nullopt); });
+    const bool returned = done.wait_for(std::chrono::seconds(8)) == std::future_status::ready;
+    held.unlock();
+    done.wait();
+    Require(returned, "Finish blocked while the game metadata lock was held");
+    Require(Contains(Read(collector.ReportPath()), "\"kind\": \"assert\""), "the report of the assertion was not written");
+    Require(!fs::exists(collector.CheckpointPath()), "the checkpoint survived the finish");
+}
+
+void CleanFinishReadsGameOnceTest() {
+    Directory executable, user;
+    std::atomic<int> calls{0};
+    auto settings = SettingsFor(executable.path, user.path, IdA);
+    settings.game = [&calls] {
+        ++calls;
+        RunReport::GameInfo game;
+        game.titleId = "PPSA12345";
+        game.name = "Example Game";
+        return game;
+    };
+    RunReport::Collector collector(std::move(settings));
+    Require(collector.Start(), "the collector did not start");
+    collector.Finish(RunReport::Exit::Clean, {}, 0);
+    Require(calls == 1 && Contains(Read(collector.ReportPath()), "\"titleId\": \"PPSA12345\""), "a clean finish did not read the game once");
+}
+
+void FallbackRecoveryTest() {
+    Directory root, user;
+    std::ofstream(root.path / "file") << "not a directory";
+    const auto unwritable = root.path / "file" / "below";
+    {
+        RunReport::Collector abandoned(SettingsFor(unwritable, user.path, IdA));
+        Require(abandoned.Start(), "the collector did not fall back to the user folder");
+        Require(fs::exists(user.path / "reports" / IdA / ("anyps5-report." + std::string(IdA) + ".ckpt")), "the fallback run has no checkpoint");
+    }
+    RunReport::Collector next(SettingsFor(unwritable, user.path, IdB));
+    Require(next.Start(), "the next collector did not fall back to the user folder");
+    const auto text = Read(user.path / "reports" / IdA / "anyps5-report.json");
+    Require(Contains(text, "\"recovered\": true") && Contains(text, "\"exit\": \"killed\"") && Contains(text, std::string("\"id\": \"") + IdA + "\""), "the fallback run was not recovered: " + text);
+    Require(!fs::exists(user.path / "reports" / IdA / ("anyps5-report." + std::string(IdA) + ".ckpt")), "the recovered fallback checkpoint survived");
+    next.Finish(RunReport::Exit::Clean, {}, 0);
+}
+
+void RemovalBeforeUnlockTest() {
+#if !defined(_WIN32) && defined(RUN_REPORT_HAS_FINISH_HOOK)
+    Directory executable, user;
+    auto settings = SettingsFor(executable.path, user.path, IdA);
+    bool recoveredDuringFinish = false;
+    settings.beforeCheckpointRemoval = [&] {
+        std::string warnings;
+        recoveredDuringFinish = !RunReport::RecoverAbandonedRuns({executable.path}, warnings).empty();
+    };
+    RunReport::Collector collector(std::move(settings));
+    Require(collector.Start(), "the collector did not start");
+    collector.Finish(RunReport::Exit::Clean, {}, 0);
+    Require(!recoveredDuringFinish && !fs::exists(executable.path / "reports"), "a finishing run's checkpoint was recovered while the run still held its lock");
+#else
+    throw NotRun("this tree has no finish hook");
+#endif
+}
+
+void FinishRecoverStressTest() {
+#ifdef _WIN32
+    throw NotRun("POSIX lock semantics");
+#else
+    Directory executable, user;
+    std::atomic<bool> stop{false};
+    std::atomic<int> falsePositives{0};
+    std::thread recoverer([&] {
+        while (!stop) {
+            std::string warnings;
+            falsePositives += static_cast<int>(RunReport::RecoverAbandonedRuns({executable.path}, warnings).size());
+        }
+    });
+    for (int round = 0; round < 400; ++round) {
+        RunReport::Collector collector(SettingsFor(executable.path, user.path, round % 2 ? IdA : IdB));
+        if (!collector.Start()) continue;
+        collector.Finish(RunReport::Exit::Clean, {}, 0);
+    }
+    stop = true;
+    recoverer.join();
+    Require(falsePositives == 0, "a run that finished cleanly was recovered as killed " + std::to_string(falsePositives.load()) + " times");
+#endif
+}
+
+void ParentLinkTest() {
+#ifdef _WIN32
+    throw NotRun("symbolic links need a privilege here");
+#else
+    Directory directory;
+    fs::create_directories(directory.path / "real");
+    fs::create_directory_symlink(directory.path / "real", directory.path / "link");
+    std::string error;
+    const bool wrote = RunReport::WriteAtomically(directory.path / "link" / "anyps5-report.json", "x\n", "aaaaaaaa", error);
+    Require(!wrote && !fs::exists(directory.path / "real" / "anyps5-report.json"), "a write went through a symbolic link in the parent folder");
+    // A planted link for the fallback folder is not used either.
+    Directory user, other;
+    fs::create_directory_symlink(other.path, user.path / "reports");
+    std::ofstream(directory.path / "file") << "not a directory";
+    RunReport::Collector collector(SettingsFor(directory.path / "file" / "below", user.path, IdA));
+    Require(!collector.Start(), "a collector used the reports folder that was a link");
+    std::size_t entries = 0;
+    for (const auto& entry : fs::directory_iterator(other.path)) { static_cast<void>(entry); ++entries; }
+    Require(entries == 0, "something was written through the planted reports link");
+#endif
+}
+
+std::string CheckpointBody(const std::string& id, const std::string& name, const std::string& generated = "2026-10-29T12:00:00Z") {
+    auto report = SampleReport();
+    report.generated = generated;
+    report.runId = id;
+    report.exit = RunReport::Exit::Killed;
+    report.exitCode.reset();
+    report.recovered = report.incomplete = true;
+    report.stop = {RunReport::Kind::Other, RunReport::Reason::UncleanUnknown, std::nullopt};
+    report.game.name = name;
+    RunReport::HostIdentifiers none;
+    return RunReport::Serialize(report, none);
+}
+
+void PlantCheckpoint(const fs::path& directory, const std::string& id, const std::string& body) {
+    std::ofstream(directory / ("anyps5-report." + id + ".ckpt"), std::ios::binary) << body;
+}
+
+void RecoveryValidationTest() {
+    Directory executable, user;
+    PlantCheckpoint(executable.path, IdA, "{\"private\": \"alice@example.com /home/alice\"}\n");
+    PlantCheckpoint(executable.path, IdB, CheckpointBody(IdA, "Example Game"));
+    PlantCheckpoint(executable.path, "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", std::string(RunReport::MaxBytes + 10u, ' '));
+    PlantCheckpoint(executable.path, "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb", CheckpointBody("bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb", "Example Game").substr(0, 200));
+    PlantCheckpoint(executable.path, "cccccccccccccccccccccccccccccccc", [] { auto body = CheckpointBody("cccccccccccccccccccccccccccccccc", "Example Game"); body.replace(body.find("2026-10-29T12:00:00Z"), 20u, "not a time"); return body; }());
+    RunReport::Collector collector(SettingsFor(executable.path, user.path, "dddddddddddddddddddddddddddddddd"));
+    Require(collector.Start(), "the collector did not start");
+    std::size_t published = 0;
+    if (fs::exists(executable.path / "reports")) {
+        for (const auto& entry : fs::recursive_directory_iterator(executable.path / "reports")) {
+            if (entry.is_regular_file()) ++published;
+        }
+    }
+    std::string names;
+    if (fs::exists(executable.path / "reports")) {
+        for (const auto& entry : fs::recursive_directory_iterator(executable.path / "reports")) names += entry.path().string() + " ";
+    }
+    Require(published == 0, "an invalid checkpoint was published as a recovered report (" + std::to_string(published) + " files): " + names);
+    collector.Finish(RunReport::Exit::Clean, {}, 0);
+}
+
+void RecoverySanitizesTest() {
+    Directory executable, user;
+    constexpr const char* IdC = "cccccccccccccccccccccccccccccccc";
+    PlantCheckpoint(executable.path, IdC, CheckpointBody(IdC, "Example Game"));
+    PlantCheckpoint(executable.path, IdA, CheckpointBody(IdA, "see fe80::1 and bob@example.com"));
+    RunReport::Collector collector(SettingsFor(executable.path, user.path, IdB));
+    Require(collector.Start(), "the collector did not start");
+    const auto good = Read(executable.path / "reports" / IdC / "anyps5-report.json");
+    Require(Contains(good, "\"recovered\": true") && Contains(good, "\"name\": \"Example Game\""), "a valid checkpoint was not recovered: " + good);
+    const auto filtered = Read(executable.path / "reports" / IdA / "anyps5-report.json");
+    Require(Contains(filtered, "\"recovered\": true") && !Contains(filtered, "fe80") && !Contains(filtered, "example.com"), "a recovered report kept private text: " + filtered);
+    collector.Finish(RunReport::Exit::Clean, {}, 0);
+}
+
+void RecoveryRejectsLinkTest() {
+#ifdef _WIN32
+    throw NotRun("symbolic links need a privilege here");
+#else
+    Directory executable, user, elsewhere;
+    const auto real = elsewhere.path / "real.ckpt";
+    std::ofstream(real, std::ios::binary) << CheckpointBody(IdA, "Example Game");
+    fs::create_symlink(real, executable.path / ("anyps5-report." + std::string(IdA) + ".ckpt"));
+    RunReport::Collector collector(SettingsFor(executable.path, user.path, IdB));
+    Require(collector.Start(), "the collector did not start");
+    Require(!fs::exists(executable.path / "reports" / IdA / "anyps5-report.json"), "a checkpoint that is a symbolic link was recovered");
+    collector.Finish(RunReport::Exit::Clean, {}, 0);
+#endif
+}
+
+void PrivacyIsolatedTest() {
+    RunReport::HostIdentifiers host;
+    host.words = {"ab", "canaryuser", "canary-host-7"};
+    for (const char* unsafe : {"User ab", "ab", "played by AB.", "connect 2001:db8::1", "ping fe80::1", "loopback ::1", "any ::", "mail alice@example.com", "read /opt/private/report",
+                               "open /run/user/1000/x", "go to ~/Documents/saves", "account 123456789012", "see file:///etc/passwd", "set %USERPROFILE%\\x", "(/srv/data)", "http://example.org/x"}) {
+        Require(!RunReport::SafeText(unsafe, host).has_value(), std::string("an unsafe text was kept: ") + unsafe);
+    }
+    for (const char* safe : {"Tabby and abacus", "Mission: Impossible: Redux", "Face Off: Dead", "Part 1/2", "Strike & Fire", "Game 2049", "Alpha: Omega"}) {
+        Require(RunReport::SafeText(safe, host).has_value(), std::string("a safe text was dropped: ") + safe);
+    }
+}
+
+void PrivacySweepTest() {
+#ifdef _WIN32
+    throw NotRun("environment canaries are POSIX here");
+#else
+    ::setenv("USER", "canaryuser9", 1);
+    ::setenv("LOGNAME", "canaryuser9", 1);
+    ::setenv("HOME", "/home/canaryuser9", 1);
+    ::setenv("HOSTNAME", "canary-host-9", 1);
+    Directory executable, user;
+    auto settings = SettingsFor(executable.path, user.path, IdA);
+    settings.worker = true;
+    settings.checkpointInterval = std::chrono::milliseconds(10);
+    settings.game = [] {
+        RunReport::GameInfo game;
+        game.titleId = "PPSA12345";
+        game.contentVersion = "01.002.000";
+        game.name = "Save of canaryuser9";
+        return game;
+    };
+    RunReport::Collector collector(std::move(settings));
+    Require(collector.Start(), "the collector did not start");
+    std::this_thread::sleep_for(std::chrono::milliseconds(80));
+    const auto checkpoint = Read(collector.CheckpointPath());
+    collector.Finish(RunReport::Exit::Abort, {RunReport::Kind::Other, RunReport::Reason::Crash, std::string("canary-host-9 at /home/canaryuser9/x")}, std::nullopt);
+    const auto report = Read(collector.ReportPath());
+    for (const auto& text : {checkpoint, report}) {
+        for (const char* canary : {"canaryuser9", "canary-host-9", "/home/", "@", "::"}) {
+            Require(!Contains(text, canary), std::string("the output contains the canary ") + canary + ": " + text);
+        }
+    }
+    Require(Contains(report, "\"source\": null") && Contains(report, "\"name\": null"), "the private fields were not dropped: " + report);
+#endif
+}
+
+void NumericLocaleTest() {
+#ifdef _WIN32
+    throw NotRun("locale names differ");
+#else
+    const char* locales[] = {"de_DE.UTF-8", "de_DE.utf8", "fr_FR.UTF-8", "de_DE", "fr_FR"};
+    const std::string previous = std::setlocale(LC_NUMERIC, nullptr) ? std::setlocale(LC_NUMERIC, nullptr) : "C";
+    bool changed = false;
+    for (const char* name : locales) {
+        if (std::setlocale(LC_NUMERIC, name) != nullptr) {
+            changed = true;
+            break;
+        }
+    }
+    if (!changed) throw NotRun("no comma-decimal locale is installed here");
+    const auto text = RunReport::Serialize(SampleReport());
+    std::setlocale(LC_NUMERIC, previous.c_str());
+    Require(Contains(text, "\"seconds\": 12.500"), "the numeric locale changed the written number: " + text);
+#endif
 }
 
 #ifndef _WIN32
-int RunChild(const fs::path& executable, const fs::path& directory, const std::string& mode) {
-    const auto command = "cd '" + directory.string() + "' && APS5_REPORT=1 '" + executable.string() + "' --child " + mode + " 2>/dev/null";
+int RunChild(const fs::path& executable, const fs::path& directory, const std::string& mode, const std::string& arguments = "", const std::string& environment = "APS5_REPORT=1") {
+    const auto command = "cd '" + directory.string() + "' && " + environment + " exec '" + executable.string() + "' --child " + mode + " " + arguments + " 2>/dev/null";
     return std::system(command.c_str());
 }
 
-void ChildProcessTests(const fs::path& self) {
-    Directory directory;
+fs::path Self;
+
+fs::path CopySelf(const Directory& directory) {
     const auto copy = directory.path / "game";
-    fs::copy_file(self, copy);
-    RunChild(copy, directory.path, "exit");
-    auto text = Read(directory.path / "anyps5-report.json");
+    fs::copy_file(Self, copy);
+    return copy;
+}
+
+std::string Report(const Directory& directory) {
+    return Read(directory.path / "anyps5-report.json");
+}
+
+void ChildExitTest() {
+    Directory directory;
+    RunChild(CopySelf(directory), directory.path, "exit");
+    const auto text = Report(directory);
     Require(Contains(text, "\"exit\": \"clean\"") && Contains(text, "\"exitCode\": 7") && Contains(text, "\"reason\": \"guest-exit\"") && Contains(text, "\"kind\": \"none\"") && Contains(text, "\"recovered\": false"), "exit() through the runtime did not write a clean report: " + text);
-    fs::remove(directory.path / "anyps5-report.json");
-    RunChild(copy, directory.path, "terminate");
-    text = Read(directory.path / "anyps5-report.json");
+}
+
+void ChildQuitTest() {
+    Directory directory;
+    RunChild(CopySelf(directory), directory.path, "terminate");
+    const auto text = Report(directory);
     Require(Contains(text, "\"exitCode\": 0") && Contains(text, "\"reason\": \"quit-requested\""), "a quit request through _exit did not write a quit-requested report: " + text);
-    fs::remove(directory.path / "anyps5-report.json");
+}
+
+void ChildKillTest() {
+    Directory directory;
+    const auto copy = CopySelf(directory);
     RunChild(copy, directory.path, "kill");
     Require(!fs::exists(directory.path / "anyps5-report.json"), "a killed run wrote a report");
     std::string checkpoint;
@@ -305,7 +625,61 @@ void ChildProcessTests(const fs::path& self) {
     RunChild(copy, directory.path, "exit");
     const auto recovered = Read(directory.path / "reports" / killedId / "anyps5-report.json");
     Require(Contains(recovered, "\"recovered\": true") && Contains(recovered, "\"exit\": \"killed\"") && Contains(recovered, "\"incomplete\": true"), "the next start did not recover the killed run's report: " + recovered);
-    Require(Contains(Read(directory.path / "anyps5-report.json"), "\"exitCode\": 7"), "the run after a killed one did not write its own report");
+    Require(Contains(Report(directory), "\"exitCode\": 7"), "the run after a killed one did not write its own report");
+}
+
+void ChildReturnTest() {
+    Directory directory;
+    const auto copy = CopySelf(directory);
+    RunChild(copy, directory.path, "return");
+    const auto text = Report(directory);
+    Require(Contains(text, "\"exit\": \"clean\"") && Contains(text, "\"recovered\": false"), "returning from the entry did not write a clean report: " + text);
+    for (const auto& entry : fs::directory_iterator(directory.path)) {
+        Require(entry.path().extension() != ".ckpt" && entry.path().extension() != ".lock", "a clean run left " + entry.path().filename().string());
+    }
+    RunChild(copy, directory.path, "return");
+    Require(!fs::exists(directory.path / "reports"), "the next start reported the clean run as killed");
+}
+
+void ChildFlagTest() {
+    Directory directory;
+    const auto copy = CopySelf(directory);
+    const int status = RunChild(copy, directory.path, "exit", "--aps5-report=off", "APS5_REPORT=1");
+    Require(WIFEXITED(status) && WEXITSTATUS(status) == 7, "the run with --aps5-report=off did not exit with its own status");
+    Require(!fs::exists(directory.path / "anyps5-report.json"), "--aps5-report=off still wrote a report");
+    RunChild(copy, directory.path, "exit", "--aps5-report=on", "APS5_REPORT=0");
+    Require(fs::exists(directory.path / "anyps5-report.json"), "--aps5-report=on did not write a report");
+}
+
+void ChildRelaunchEnvironmentTest() {
+    Directory directory;
+    const auto copy = CopySelf(directory);
+    RunChild(copy, directory.path, "relaunch-env", "--aps5-report=off", "APS5_REPORT=1");
+    Require(Contains(Read(directory.path / "relaunch.txt"), "0"), "the choice made with --aps5-report=off is not passed on to a relaunch");
+}
+
+void ChildAbortTest() {
+    Directory directory;
+    const int status = RunChild(CopySelf(directory), directory.path, "abort");
+    Require(WIFSIGNALED(status) && WTERMSIG(status) == SIGABRT, "abort() did not keep its signal");
+    const auto text = Report(directory);
+    Require(Contains(text, "\"exit\": \"abort\"") && Contains(text, "\"reason\": \"crash\""), "abort() did not write an abort report: " + text);
+}
+
+void ChildTerminateTest() {
+    Directory directory;
+    const int status = RunChild(CopySelf(directory), directory.path, "std-terminate");
+    Require(WIFSIGNALED(status) && WTERMSIG(status) == SIGABRT, "std::terminate did not keep its signal");
+    const auto text = Report(directory);
+    Require(Contains(text, "\"exit\": \"abort\"") && Contains(text, "\"reason\": \"crash\""), "std::terminate did not write an abort report: " + text);
+}
+
+void ChildAssertTest() {
+    Directory directory;
+    const int status = RunChild(CopySelf(directory), directory.path, "assert");
+    Require(WIFSIGNALED(status) && WTERMSIG(status) == SIGABRT, "a runtime assertion did not keep its signal");
+    const auto text = Report(directory);
+    Require(Contains(text, "\"kind\": \"assert\"") && Contains(text, "\"exit\": \"abort\""), "a runtime assertion did not write an assert report: " + text);
 }
 
 void Dump(const fs::path& directory) {
@@ -340,6 +714,13 @@ void Dump(const fs::path& directory) {
 }
 #endif
 
+}
+
+#ifndef _WIN32
+extern "C" [[noreturn]] void LibcRuntimeAssertion(const char*, int, const char*, const char*);
+extern "C" [[noreturn]] void abort_nid_postfix(unsigned long, unsigned long, unsigned long, unsigned long, unsigned long, unsigned long);
+#endif
+
 int main(int argc, char** argv) {
     try {
 #ifndef _WIN32
@@ -351,6 +732,15 @@ int main(int argc, char** argv) {
                 LibcRunReportQuitRequested_nid_no_patch();
                 LibcTerminate_nid_no_patch(0);
             }
+            if (mode == "return") return 5;
+            if (mode == "abort") abort_nid_postfix(0, 0, 0, 0, 0, 0);
+            if (mode == "std-terminate") std::terminate();
+            if (mode == "assert") LibcRuntimeAssertion("file", 1, "function", "condition");
+            if (mode == "relaunch-env") {
+                const char* choice = LibcRunReportRelaunchEnvironment_nid_no_patch();
+                std::ofstream("relaunch.txt") << (choice != nullptr ? choice : "unset");
+                return 0;
+            }
             std::raise(SIGKILL);
             return 3;
         }
@@ -358,22 +748,48 @@ int main(int argc, char** argv) {
             Dump(argv[2]);
             return 0;
         }
+        Self = fs::absolute(argv[0]);
 #endif
-        ToggleTests();
-        PrivacyTests();
-        SerializeTests();
-        FinishTests();
-        ConcurrentFinishTests();
-        FallbackTests();
-        AtomicTests();
-        RecoveryTests();
-        CanaryTests();
-        WorkerTests();
+        Run("toggle", ToggleTests);
+        Run("privacy", PrivacyTests);
+        Run("serialize", SerializeTests);
+        Run("finish", FinishTests);
+        Run("concurrent-finish", ConcurrentFinishTests);
+        Run("fallback", FallbackTests);
+        Run("atomic", AtomicTests);
+        Run("recovery", RecoveryTests);
+        Run("canary", CanaryTests);
+        Run("worker", WorkerTests);
+        Run("flag-from-temporary", FlagFromTemporaryTest);
+        Run("finish-while-provider-blocked", FinishWhileProviderBlockedTest);
+        Run("clean-finish-reads-game-once", CleanFinishReadsGameOnceTest);
+        Run("fallback-recovery", FallbackRecoveryTest);
+        Run("removal-before-unlock", RemovalBeforeUnlockTest);
+        Run("finish-recover-stress", FinishRecoverStressTest);
+        Run("parent-link", ParentLinkTest);
+        Run("recovery-validation", RecoveryValidationTest);
+        Run("recovery-sanitizes", RecoverySanitizesTest);
+        Run("recovery-rejects-link", RecoveryRejectsLinkTest);
+        Run("privacy-isolated", PrivacyIsolatedTest);
+        Run("privacy-sweep", PrivacySweepTest);
+        Run("numeric-locale", NumericLocaleTest);
 #ifndef _WIN32
-        ChildProcessTests(fs::absolute(argv[0]));
+        Run("child-exit", ChildExitTest);
+        Run("child-quit", ChildQuitTest);
+        Run("child-kill-and-recover", ChildKillTest);
+        Run("child-return-from-entry", ChildReturnTest);
+        Run("child-flag", ChildFlagTest);
+        Run("child-relaunch-environment", ChildRelaunchEnvironmentTest);
+        Run("child-abort", ChildAbortTest);
+        Run("child-std-terminate", ChildTerminateTest);
+        Run("child-assert", ChildAssertTest);
 #endif
-        std::puts("run report tests passed: toggle precedence, privacy filter, serialization, finish once, fallback folder, atomic replace, recovery of abandoned runs, canaries, checkpoint worker, exit/_exit/kill in child processes");
-        return 0;
+        std::printf("run report tests: %d passed, %d failed, %d not run\n", passed, failed, notRun);
+        if (passed + failed + notRun == 0) {
+            std::fputs("no test ran\n", stderr);
+            return 1;
+        }
+        return failed == 0 ? 0 : 1;
     } catch (const std::exception& error) {
         std::cerr << error.what() << '\n';
         return 1;

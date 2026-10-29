@@ -1,6 +1,7 @@
 #ifndef CORE_LIBS_PRX_LIBC_INCLUDE_RUNREPORT_HPP
 #define CORE_LIBS_PRX_LIBC_INCLUDE_RUNREPORT_HPP
 
+#include <atomic>
 #include <chrono>
 #include <condition_variable>
 #include <cstdint>
@@ -14,6 +15,8 @@
 #include <thread>
 #include <vector>
 
+#define RUN_REPORT_HAS_FINISH_HOOK 1
+
 struct RunReportGame {
     char titleId[16];
     char contentVersion[32];
@@ -24,6 +27,8 @@ extern "C" void LibcRunReportSetGameProvider_nid_no_patch(bool (*provider)(RunRe
 extern "C" void LibcRunReportQuitRequested_nid_no_patch() noexcept;
 extern "C" void LibcRunReportFinishExit_nid_no_patch(int exitCode) noexcept;
 extern "C" void LibcRunReportFinishAbort_nid_no_patch(int kind) noexcept;
+// "0", "1" or null: what APS5_REPORT must be in a relaunched process so that the choice made with --aps5-report survives it.
+extern "C" const char* LibcRunReportRelaunchEnvironment_nid_no_patch() noexcept;
 
 namespace RunReport {
 
@@ -86,20 +91,28 @@ struct Settings {
     bool worker = true;
     BuildInfo build;
     std::function<GameInfo()> game;
+    // Called by Finish after the report is on disk and before the checkpoint is removed (tests only).
+    std::function<void()> beforeCheckpointRemoval;
 };
 
 std::string GenerateRunId();
 std::string FormatUtc(std::chrono::system_clock::time_point time);
 std::string Serialize(const Report& report);
+std::string Serialize(const Report& report, const HostIdentifiers& host);
 std::optional<std::string> SafeText(std::string_view text, const HostIdentifiers& host);
 HostIdentifiers CurrentHostIdentifiers();
 Toggle ResolveToggle(std::optional<std::string_view> flag, std::optional<std::string_view> environment);
-std::optional<std::string_view> FlagFromArguments(const std::vector<std::string>& arguments);
+std::optional<std::string> FlagFromArguments(const std::vector<std::string>& arguments);
 std::vector<std::string> CommandLineArguments();
 std::filesystem::path ExecutableDirectory();
 std::filesystem::path UserStateDirectory();
 bool WriteAtomically(const std::filesystem::path& target, std::string_view bytes, std::string_view uniqueName, std::string& error);
-std::vector<std::filesystem::path> RecoverAbandonedRuns(const std::vector<std::filesystem::path>& directories, std::string& warnings);
+bool ReadBounded(const std::filesystem::path& path, std::size_t limit, std::string& bytes);
+// Checkpoints directly in `directories` are recovered to <directory>/reports/<id>/; those in the run-id folders directly
+// below `nestedRoots` are recovered in place, next to the checkpoint.
+std::vector<std::filesystem::path> RecoverAbandonedRuns(const std::vector<std::filesystem::path>& directories, std::string& warnings, const std::vector<std::filesystem::path>& nestedRoots = {});
+// Rebuilds the report of a run from its checkpoint, or nothing when the bytes are not a checkpoint of run `id`.
+std::optional<Report> ParseCheckpoint(std::string_view bytes, std::string_view id, const HostIdentifiers& host);
 
 class FileLock {
 public:
@@ -107,10 +120,15 @@ public:
     ~FileLock();
     FileLock(const FileLock&) = delete;
     FileLock& operator=(const FileLock&) = delete;
+    // False when the lock file was removed and recreated between opening it and locking it.
+    bool IsCurrent() const;
+    // Deletes the lock file while the lock is still held, then releases it.
+    void RemoveAndRelease();
 private:
     FileLock() = default;
     struct Handle;
     std::unique_ptr<Handle> handle;
+    std::filesystem::path path;
 };
 
 class Collector {
@@ -130,6 +148,7 @@ public:
 
 private:
     void Work();
+    void RefreshGame();
 
     Settings settings;
     std::filesystem::path directory;
@@ -139,12 +158,18 @@ private:
     std::unique_ptr<FileLock> lock;
     std::chrono::steady_clock::time_point started;
     std::mutex mutex;
+    std::timed_mutex writeMutex;
+    mutable std::mutex gameMutex;
     std::condition_variable changed;
     std::thread worker;
     bool stopWorker = false;
-    int state = 0;
+    bool workerBusy = false;
+    std::atomic<int> state{0};
     bool quitRequested = false;
     bool started_ = false;
+    GameInfo gameCache;
+    bool gameKnown = false;
+    int gameAttempts = 0;
     HostIdentifiers host;
 };
 

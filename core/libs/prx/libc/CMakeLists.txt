@@ -164,6 +164,21 @@ if(BUILD_TESTING)
     configure_windows_unwind(run_report_tests)
     add_test(NAME run_report COMMAND run_report_tests)
     set_tests_properties(run_report PROPERTIES TIMEOUT 60)
+    find_package(Python3 QUIET COMPONENTS Interpreter)
+    if(Python3_Interpreter_FOUND)
+        execute_process(COMMAND ${Python3_EXECUTABLE} -c "import jsonschema" RESULT_VARIABLE runReportHasJsonschema OUTPUT_QUIET ERROR_QUIET)
+        if(runReportHasJsonschema EQUAL 0)
+            add_test(NAME run_report_schema COMMAND ${Python3_EXECUTABLE} ${CMAKE_SOURCE_DIR}/tools/tests/validate_run_report_dump.py $<TARGET_FILE:run_report_tests>)
+            set_tests_properties(run_report_schema PROPERTIES TIMEOUT 60)
+        endif()
+    endif()
+    if(GIT_FOUND)
+        add_test(NAME run_report_revision COMMAND ${CMAKE_COMMAND} -DGIT=${GIT_EXECUTABLE}
+                -DSCRIPT=${CMAKE_CURRENT_SOURCE_DIR}/run_report_revision.cmake
+                -DWORK=${CMAKE_CURRENT_BINARY_DIR}/run_report_revision_test
+                -P ${CMAKE_CURRENT_SOURCE_DIR}/tests_run_report_revision.cmake)
+        set_tests_properties(run_report_revision PROPERTIES TIMEOUT 120)
+    endif()
     if(WIN32)
         set_tests_properties(run_report PROPERTIES ENVIRONMENT_MODIFICATION
             "PATH=path_list_prepend:$<TARGET_FILE_DIR:libc>")

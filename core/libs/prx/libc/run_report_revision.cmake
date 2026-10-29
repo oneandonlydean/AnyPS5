@@ -11,7 +11,8 @@ if(GIT)
         if(failed EQUAL 0 AND tag MATCHES "^v[0-9A-Za-z][0-9A-Za-z._-]*$")
             set(release ${tag})
         endif()
-        execute_process(COMMAND "${GIT}" -C "${SOURCE}" status --porcelain --untracked-files=no
+        # Untracked files that are not ignored and any change inside a submodule count as modified: a build with them is not the commit.
+        execute_process(COMMAND "${GIT}" -C "${SOURCE}" status --porcelain --untracked-files=normal --ignore-submodules=none
                 OUTPUT_VARIABLE changes RESULT_VARIABLE failed ERROR_QUIET)
         if(failed EQUAL 0 AND changes STREQUAL "")
             set(modified 0)
