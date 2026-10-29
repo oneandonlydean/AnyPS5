@@ -14,6 +14,7 @@
 #include <random>
 #include <regex>
 #include <system_error>
+#include <tuple>
 
 #ifdef _WIN32
 #ifndef NOMINMAX
@@ -420,7 +421,11 @@ Report Sanitized(Report report, const HostIdentifiers& host) {
         if (*value && NamesHost(**value, host)) value->reset();
     }
     if (report.game.name) report.game.name = SafeText(*report.game.name, host);
-    if (report.stop.source) report.stop.source = SafeText(*report.stop.source, host);
+    if (report.stop.source) {
+        report.stop.source = SafeText(*report.stop.source, host);
+        if (report.stop.source && (report.stop.source->find("..") != std::string::npos || !std::regex_match(*report.stop.source, std::regex(R"([A-Za-z0-9_][A-Za-z0-9_./+-]{0,254}:[0-9]{1,9})")))) report.stop.source.reset();
+    }
+    if (report.stop.message) report.stop.message = SafeText(*report.stop.message, host);
     if (report.os && *report.os != "linux" && *report.os != "windows" && *report.os != "macos") report.os.reset();
     if (!Hex32(report.runId)) report.runId = std::string(32u, '0');
     return report;
@@ -428,8 +433,97 @@ Report Sanitized(Report report, const HostIdentifiers& host) {
 
 }
 
-std::string Serialize(const Report& original, const HostIdentifiers& host) {
-    const Report report = Sanitized(original, host);
+
+namespace {
+
+const char* StatusName(Status status) {
+    return status == Status::Accepted ? "accepted" : status == Status::Rejected ? "rejected" : "unknown";
+}
+
+const char* FormatUsageName(int usage) {
+    static constexpr const char* names[] = {"sampled", "storage", "color-target", "depth-target", "transfer", "other"};
+    return names[usage >= 0 && usage < 6 ? usage : 5];
+}
+
+const char* DescriptorTypeName(int type) {
+    static constexpr const char* names[] = {"UniformBuffer", "StorageBuffer", "UniformTexelBuffer", "StorageTexelBuffer", "SampledImage", "StorageImage", "Sampler"};
+    return names[type >= 0 && type < 7 ? type : 0];
+}
+
+const char* DescriptorUsageName(int usage) {
+    static constexpr const char* names[] = {"read", "write", "atomic", "other"};
+    return names[usage >= 0 && usage < 4 ? usage : 3];
+}
+
+bool Matches(const std::string& text, const char* pattern) {
+    return std::regex_match(text, std::regex(pattern));
+}
+
+std::int64_t CountOf(const FunctionEntry& entry) { return entry.calls; }
+template <typename Entry> std::int64_t CountOf(const Entry& entry) { return entry.count; }
+
+// Drops entries that do not fit the schema or that name the host, orders lists by count (ties by their text) and applies the list caps.
+// Dropped entries are counted in `truncated`, so a list never looks complete when it is not.
+void NormalizeObservations(Observations& o, const HostIdentifiers& host) {
+    const auto clean = [&](auto& list, std::int64_t& dropped, std::size_t cap, auto valid, auto order) {
+        const auto before = list.size();
+        std::erase_if(list, [&](auto& entry) { return CountOf(entry) < 1 || !valid(entry); });
+        dropped += static_cast<std::int64_t>(before - list.size());
+        std::stable_sort(list.begin(), list.end(), order);
+        if (list.size() > cap) {
+            dropped += static_cast<std::int64_t>(list.size() - cap);
+            list.resize(cap);
+        }
+    };
+    const auto optionalOk = [&](std::optional<std::string>& value, const char* pattern) {
+        if (value && (!Matches(*value, pattern) || NamesHost(*value, host))) value.reset();
+    };
+    for (auto& entry : o.functions) optionalOk(entry.library, "[A-Za-z0-9_.-]{1,64}");
+    clean(o.functions, o.truncated.functions, MaxListedFunctions,
+          [&](const FunctionEntry& entry) { return Matches(entry.name, "[A-Za-z0-9_.$]{1,128}") && !NamesHost(entry.name, host); },
+          [](const FunctionEntry& a, const FunctionEntry& b) { return a.calls != b.calls ? a.calls > b.calls : std::tie(a.library, a.name) < std::tie(b.library, b.name); });
+    for (auto& entry : o.unsupported) {
+        optionalOk(entry.encoding, "[A-Za-z0-9_]{1,32}");
+        optionalOk(entry.opcode, "[A-Za-z0-9_]{1,64}");
+        if (entry.opcodeValue && (*entry.opcodeValue < 0 || *entry.opcodeValue > 4294967295LL)) entry.opcodeValue.reset();
+        if (entry.modifiers) {
+            bool ok = entry.modifiers->size() <= 16u;
+            for (const auto& modifier : *entry.modifiers) ok = ok && Matches(modifier, "[a-z0-9][a-z0-9-]{0,31}") && !NamesHost(modifier, host);
+            if (!ok) entry.modifiers.reset();
+        }
+    }
+    clean(o.unsupported, o.truncated.unsupported, MaxListedFunctions, [](const UnsupportedEntry&) { return true; },
+          [](const UnsupportedEntry& a, const UnsupportedEntry& b) {
+              return a.count != b.count ? a.count > b.count : std::tie(a.encoding, a.opcode, a.opcodeValue) < std::tie(b.encoding, b.opcode, b.opcodeValue);
+          });
+    for (auto& entry : o.imageFormats) optionalOk(entry.name, "[A-Za-z0-9_]{1,64}");
+    clean(o.imageFormats, o.truncated.imageFormats, MaxListedFormats, [](const FormatEntry& entry) { return entry.format >= 0 && entry.format <= 4294967295LL; },
+          [](const FormatEntry& a, const FormatEntry& b) { return a.count != b.count ? a.count > b.count : std::tie(a.format, a.usage) < std::tie(b.format, b.usage); });
+    clean(o.descriptors, o.truncated.descriptors, MaxListedFormats, [](const DescriptorEntry& entry) { return entry.type >= 0 && entry.type < 7; },
+          [](const DescriptorEntry& a, const DescriptorEntry& b) { return a.count != b.count ? a.count > b.count : std::tie(a.type, a.usage, a.status) < std::tie(b.type, b.usage, b.status); });
+    // A section that was not collected is never written as if it were empty (the schema ties the two together).
+    if (!o.coverage.milestones) {
+        o.loaded = o.started = o.firstDraw = o.firstPresent = std::nullopt;
+        o.framesPresented = 0;
+        o.averageFps = o.fpsWindowSeconds = std::nullopt;
+    }
+    if (!o.coverage.missing) o.functions.clear(), o.truncated.functions = 0;
+    if (!o.coverage.shaders) o.shadersCompiled = o.shadersFailed = 0, o.cacheHits.reset();
+    if (!o.coverage.unsupported) o.unsupported.clear(), o.truncated.unsupported = 0;
+    if (!o.coverage.imageFormats) o.imageFormats.clear(), o.truncated.imageFormats = 0;
+    if (!o.coverage.descriptors) o.descriptors.clear(), o.truncated.descriptors = 0;
+    if (o.averageFps && !(*o.averageFps >= 0.0 && *o.averageFps <= 1.0e6)) o.averageFps.reset();
+    if (o.fpsWindowSeconds && !(*o.fpsWindowSeconds >= 0.001 && *o.fpsWindowSeconds <= 1.0e9)) o.fpsWindowSeconds.reset();
+    if (o.framesPresented <= 1 || !o.fpsWindowSeconds) o.averageFps.reset(), o.fpsWindowSeconds.reset();
+    if (o.framesPresented < 0) o.framesPresented = 0;
+    for (auto* seconds : {&o.loaded, &o.started, &o.firstDraw, &o.firstPresent}) {
+        if (*seconds && !(**seconds >= 0.0 && **seconds <= 1.0e9)) seconds->reset();
+    }
+    for (auto* counter : {&o.shadersCompiled, &o.shadersFailed}) if (*counter < 0) *counter = 0;
+    if (o.cacheHits && *o.cacheHits < 0) o.cacheHits = 0;
+}
+
+std::string RenderReport(const Report& report) {
     JsonWriter json;
     json.BeginObject();
     json.String("format", std::string_view("anyps5-report"));
@@ -458,45 +552,120 @@ std::string Serialize(const Report& original, const HostIdentifiers& host) {
     json.Number("seconds", report.seconds);
     json.String("exit", std::string_view(ExitName(report.exit)));
     json.Int("exitCode", report.exitCode);
-    json.String("stage", std::string_view("unknown"));
+    const auto& o = report.observed;
+    const char* stage = o.firstPresent ? "presents" : o.firstDraw ? "first-draw" : o.started ? "starts" : o.loaded ? "loads" : "unknown";
+    json.String("stage", std::string_view(stage));
     json.BeginObject("milestones");
+    if (o.loaded) json.Number("loaded", *o.loaded);
+    if (o.started) json.Number("started", *o.started);
+    if (o.firstDraw) json.Number("firstDraw", *o.firstDraw);
+    if (o.firstPresent) json.Number("firstPresent", *o.firstPresent);
     json.EndObject();
-    json.Int("framesPresented", std::int64_t{0});
-    json.Null("averageFps");
-    json.Null("fpsWindowSeconds");
+    json.Int("framesPresented", o.framesPresented);
+    if (o.averageFps) json.Number("averageFps", *o.averageFps); else json.Null("averageFps");
+    if (o.fpsWindowSeconds) json.Number("fpsWindowSeconds", *o.fpsWindowSeconds); else json.Null("fpsWindowSeconds");
     json.Bool("recovered", report.recovered);
     json.Bool("incomplete", report.incomplete);
     json.EndObject();
     json.BeginObject("coverage");
-    for (const char* key : {"milestones", "missing", "shaders", "unsupported", "imageFormats", "descriptors"}) json.Bool(key, false);
+    json.Bool("milestones", o.coverage.milestones);
+    json.Bool("missing", o.coverage.missing);
+    json.Bool("shaders", o.coverage.shaders);
+    json.Bool("unsupported", o.coverage.unsupported);
+    json.Bool("imageFormats", o.coverage.imageFormats);
+    json.Bool("descriptors", o.coverage.descriptors);
     json.EndObject();
     json.BeginObject("truncated");
-    for (const char* key : {"functions", "unsupported", "imageFormats", "descriptors"}) json.Int(key, std::int64_t{0});
+    json.Int("functions", o.truncated.functions);
+    json.Int("unsupported", o.truncated.unsupported);
+    json.Int("imageFormats", o.truncated.imageFormats);
+    json.Int("descriptors", o.truncated.descriptors);
     json.EndObject();
     json.BeginObject("missing");
     json.BeginArray("functions");
+    for (const auto& entry : o.functions) {
+        json.BeginObject();
+        json.String("library", entry.library);
+        json.String("name", std::string_view(entry.name));
+        json.Int("calls", entry.calls);
+        json.EndObject();
+    }
     json.EndArray();
     json.EndObject();
     json.BeginObject("shaders");
-    json.Int("compiled", std::int64_t{0});
-    json.Int("failed", std::int64_t{0});
+    json.Int("compiled", o.shadersCompiled);
+    json.Int("failed", o.shadersFailed);
+    if (o.cacheHits) json.Int("cacheHits", o.cacheHits);
     json.BeginArray("unsupported");
+    for (const auto& entry : o.unsupported) {
+        json.BeginObject();
+        json.String("encoding", entry.encoding);
+        json.String("opcode", entry.opcode);
+        json.Int("opcodeValue", entry.opcodeValue);
+        if (entry.modifiers) {
+            json.BeginArray("modifiers");
+            for (const auto& modifier : *entry.modifiers) json.String(nullptr, std::string_view(modifier));
+            json.EndArray();
+        } else {
+            json.Null("modifiers");
+        }
+        json.Int("count", entry.count);
+        json.EndObject();
+    }
     json.EndArray();
     json.BeginArray("imageFormats");
+    for (const auto& entry : o.imageFormats) {
+        json.BeginObject();
+        json.Int("format", entry.format);
+        json.String("name", entry.name);
+        json.String("status", std::string_view(StatusName(entry.status)));
+        json.String("usage", std::string_view(FormatUsageName(entry.usage)));
+        json.Int("count", entry.count);
+        json.EndObject();
+    }
     json.EndArray();
     json.BeginArray("descriptors");
+    for (const auto& entry : o.descriptors) {
+        json.BeginObject();
+        json.String("type", std::string_view(DescriptorTypeName(entry.type)));
+        json.String("status", std::string_view(StatusName(entry.status)));
+        json.String("usage", std::string_view(DescriptorUsageName(entry.usage)));
+        json.Int("count", entry.count);
+        json.EndObject();
+    }
     json.EndArray();
     json.EndObject();
     json.BeginObject("stop");
     json.String("kind", std::string_view(KindName(report.stop.kind)));
     json.String("reason", std::string_view(ReasonName(report.stop.reason)));
-    json.String("message", std::string_view(StopMessage(report.stop)));
+    json.String("message", report.stop.message ? std::string_view(*report.stop.message) : std::string_view(StopMessage(report.stop)));
     json.String("source", report.stop.source);
     json.EndObject();
     json.EndObject();
-    auto text = json.Take();
-    if (text.size() > MaxBytes) throw std::runtime_error("run report: the serialized report exceeds 65,536 bytes");
-    return text;
+    return json.Take();
+}
+
+}
+
+std::string Serialize(const Report& original, const HostIdentifiers& host) {
+    Report report = Sanitized(original, host);
+    NormalizeObservations(report.observed, host);
+    for (;;) {
+        auto text = RenderReport(report);
+        if (text.size() <= MaxBytes) return text;
+        // Over the size limit: the lowest-ranked entry of the longest list goes first; the build, game and stop details never do.
+        auto& o = report.observed;
+        const std::size_t sizes[4] = {o.functions.size(), o.unsupported.size(), o.imageFormats.size(), o.descriptors.size()};
+        std::size_t longest = 0;
+        for (std::size_t index = 1; index < 4; ++index) if (sizes[index] > sizes[longest]) longest = index;
+        if (sizes[longest] == 0) throw std::runtime_error("run report: the serialized report exceeds 65,536 bytes");
+        switch (longest) {
+            case 0: o.functions.pop_back(); ++o.truncated.functions; break;
+            case 1: o.unsupported.pop_back(); ++o.truncated.unsupported; break;
+            case 2: o.imageFormats.pop_back(); ++o.truncated.imageFormats; break;
+            default: o.descriptors.pop_back(); ++o.truncated.descriptors; break;
+        }
+    }
 }
 
 namespace {
@@ -874,6 +1043,143 @@ std::optional<std::string> NullableText(const Json& object, std::string_view key
 
 }
 
+namespace {
+
+bool IsNull(const Json& object, std::string_view key) {
+    const auto* value = object.type == Json::Type::Object ? object.Find(key) : nullptr;
+    return value != nullptr && value->type == Json::Type::Null;
+}
+
+std::optional<std::int64_t> IntegerOf(const Json& object, std::string_view key) {
+    const auto* value = Member(object, key, Json::Type::Number);
+    if (value == nullptr || value->number != std::floor(value->number) || value->number < -9.0e15 || value->number > 9.0e15) return std::nullopt;
+    return static_cast<std::int64_t>(value->number);
+}
+
+std::optional<std::string> TextOf(const Json& object, std::string_view key) {
+    const auto* value = Member(object, key, Json::Type::String);
+    return value != nullptr ? std::optional<std::string>(value->text) : std::nullopt;
+}
+
+int IndexOf(const std::string& text, std::initializer_list<const char*> names) {
+    int index = 0;
+    for (const char* name : names) {
+        if (text == name) return index;
+        ++index;
+    }
+    return -1;
+}
+
+bool StatusOf(const Json& object, Status& status) {
+    const auto text = TextOf(object, "status");
+    if (!text) return false;
+    const int index = IndexOf(*text, {"accepted", "rejected", "unknown"});
+    if (index < 0) return false;
+    status = static_cast<Status>(index);
+    return true;
+}
+
+// Reads back what the writer put in a checkpoint. Anything missing, mistyped or unknown fails the whole checkpoint.
+bool ParseObservations(const Json& root, const Json& run, Observations& o) {
+    const auto* milestones = Member(run, "milestones", Json::Type::Object);
+    const auto framesPresented = IntegerOf(run, "framesPresented");
+    if (milestones == nullptr || !framesPresented) return false;
+    const auto seconds = [&](const char* key) -> std::optional<double> {
+        const auto* value = Member(*milestones, key, Json::Type::Number);
+        return value != nullptr ? std::optional<double>(value->number) : std::nullopt;
+    };
+    o.loaded = seconds("loaded");
+    o.started = seconds("started");
+    o.firstDraw = seconds("firstDraw");
+    o.firstPresent = seconds("firstPresent");
+    o.framesPresented = *framesPresented;
+    if (const auto* fps = Member(run, "averageFps", Json::Type::Number)) o.averageFps = fps->number;
+    else if (!IsNull(run, "averageFps")) return false;
+    if (const auto* window = Member(run, "fpsWindowSeconds", Json::Type::Number)) o.fpsWindowSeconds = window->number;
+    else if (!IsNull(run, "fpsWindowSeconds")) return false;
+    const auto* coverage = Member(root, "coverage", Json::Type::Object);
+    const auto* truncated = Member(root, "truncated", Json::Type::Object);
+    const auto* missing = Member(root, "missing", Json::Type::Object);
+    const auto* shaders = Member(root, "shaders", Json::Type::Object);
+    if (coverage == nullptr || truncated == nullptr || missing == nullptr || shaders == nullptr) return false;
+    const auto flag = [&](const char* key, bool& out) {
+        const auto* value = Member(*coverage, key, Json::Type::Bool);
+        if (value == nullptr) return false;
+        out = value->boolean;
+        return true;
+    };
+    if (!flag("milestones", o.coverage.milestones) || !flag("missing", o.coverage.missing) || !flag("shaders", o.coverage.shaders) ||
+        !flag("unsupported", o.coverage.unsupported) || !flag("imageFormats", o.coverage.imageFormats) || !flag("descriptors", o.coverage.descriptors)) return false;
+    const auto functions = IntegerOf(*truncated, "functions"), unsupported = IntegerOf(*truncated, "unsupported");
+    const auto formats = IntegerOf(*truncated, "imageFormats"), descriptors = IntegerOf(*truncated, "descriptors");
+    if (!functions || !unsupported || !formats || !descriptors) return false;
+    o.truncated = {*functions, *unsupported, *formats, *descriptors};
+    const auto compiled = IntegerOf(*shaders, "compiled"), failed = IntegerOf(*shaders, "failed");
+    if (!compiled || !failed) return false;
+    o.shadersCompiled = *compiled;
+    o.shadersFailed = *failed;
+    if (shaders->Find("cacheHits") != nullptr) {
+        o.cacheHits = IntegerOf(*shaders, "cacheHits");
+        if (!o.cacheHits) return false;
+    }
+    const auto* functionList = Member(*missing, "functions", Json::Type::Array);
+    const auto* unsupportedList = Member(*shaders, "unsupported", Json::Type::Array);
+    const auto* formatList = Member(*shaders, "imageFormats", Json::Type::Array);
+    const auto* descriptorList = Member(*shaders, "descriptors", Json::Type::Array);
+    if (functionList == nullptr || unsupportedList == nullptr || formatList == nullptr || descriptorList == nullptr) return false;
+    for (const auto& item : functionList->items) {
+        const auto name = TextOf(item, "name"), calls = std::optional<std::string>(), library = TextOf(item, "library");
+        const auto count = IntegerOf(item, "calls");
+        if (!name || !count || (!library && !IsNull(item, "library"))) return false;
+        o.functions.push_back({library, *name, *count});
+    }
+    for (const auto& item : unsupportedList->items) {
+        UnsupportedEntry entry;
+        entry.encoding = TextOf(item, "encoding");
+        entry.opcode = TextOf(item, "opcode");
+        entry.opcodeValue = IntegerOf(item, "opcodeValue");
+        const auto count = IntegerOf(item, "count");
+        if (!count || (!entry.encoding && !IsNull(item, "encoding")) || (!entry.opcode && !IsNull(item, "opcode")) || (!entry.opcodeValue && !IsNull(item, "opcodeValue"))) return false;
+        entry.count = *count;
+        if (const auto* modifiers = Member(item, "modifiers", Json::Type::Array)) {
+            entry.modifiers = std::vector<std::string>();
+            for (const auto& modifier : modifiers->items) {
+                if (modifier.type != Json::Type::String) return false;
+                entry.modifiers->push_back(modifier.text);
+            }
+        } else if (!IsNull(item, "modifiers")) {
+            return false;
+        }
+        o.unsupported.push_back(std::move(entry));
+    }
+    for (const auto& item : formatList->items) {
+        FormatEntry entry;
+        const auto format = IntegerOf(item, "format"), count = IntegerOf(item, "count");
+        const auto usage = TextOf(item, "usage");
+        entry.name = TextOf(item, "name");
+        if (!format || !count || !usage || !StatusOf(item, entry.status) || (!entry.name && !IsNull(item, "name"))) return false;
+        entry.usage = IndexOf(*usage, {"sampled", "storage", "color-target", "depth-target", "transfer", "other"});
+        if (entry.usage < 0) return false;
+        entry.format = *format;
+        entry.count = *count;
+        o.imageFormats.push_back(std::move(entry));
+    }
+    for (const auto& item : descriptorList->items) {
+        DescriptorEntry entry;
+        const auto type = TextOf(item, "type"), usage = TextOf(item, "usage");
+        const auto count = IntegerOf(item, "count");
+        if (!type || !usage || !count || !StatusOf(item, entry.status)) return false;
+        entry.type = IndexOf(*type, {"UniformBuffer", "StorageBuffer", "UniformTexelBuffer", "StorageTexelBuffer", "SampledImage", "StorageImage", "Sampler"});
+        entry.usage = IndexOf(*usage, {"read", "write", "atomic", "other"});
+        if (entry.type < 0 || entry.usage < 0) return false;
+        entry.count = *count;
+        o.descriptors.push_back(entry);
+    }
+    return true;
+}
+
+}
+
 std::optional<Report> ParseCheckpoint(std::string_view bytes, std::string_view id, const HostIdentifiers& host) {
     Json root;
     if (bytes.empty() || bytes.size() > MaxBytes || !JsonReader(bytes).Parse(root)) return std::nullopt;
@@ -909,6 +1215,7 @@ std::optional<Report> ParseCheckpoint(std::string_view bytes, std::string_view i
         if (const auto* name = Member(*game, "name", Json::Type::String)) report.game.name = SafeText(name->text, host);
     }
     if (const auto* system = Member(root, "system", Json::Type::Object)) report.os = NullableText(*system, "os", "linux|windows|macos");
+    if (!ParseObservations(root, *run, report.observed)) return std::nullopt;
     // Our writer is deterministic, so a genuine checkpoint is byte for byte what the fields read back would serialize to.
     // Anything else (a missing object, an extra key, a value the filters would change) is rejected whole, never republished in part.
     if (Serialize(report, host) != bytes) return std::nullopt;
@@ -1072,7 +1379,21 @@ struct Collector::GameState {
     int pending = 0;
 };
 
-Collector::Collector(Settings value) : settings(std::move(value)), game(std::make_shared<GameState>()) {
+// Capacity of each table while the run is going; the lists written to the report are cut to their own caps later.
+constexpr std::size_t TrackedEntries = 512;
+
+struct Collector::Tables {
+    std::timed_mutex mutex;
+    std::vector<FunctionEntry> functions;
+    std::vector<UnsupportedEntry> unsupported;
+    std::vector<FormatEntry> imageFormats;
+    std::vector<DescriptorEntry> descriptors;
+    Truncated dropped;
+    std::optional<Stop> pendingStop;
+};
+
+Collector::Collector(Settings value) : settings(std::move(value)), game(std::make_shared<GameState>()), tables(std::make_shared<Tables>()) {
+    for (auto& nanos : milestoneNanos) nanos = -1;
     if (!Hex32(settings.runId)) settings.runId = GenerateRunId();
     host = CurrentHostIdentifiers();
 }
@@ -1264,13 +1585,18 @@ Report Collector::Snapshot(Exit exit, Stop stop, std::optional<std::int64_t> exi
     report.recovered = recovered;
     report.incomplete = recovered;
     report.stop = std::move(stop);
+    report.observed = Observe();
     return report;
 }
 
 bool Collector::WriteCheckpoint() {
+    return WriteCheckpoint(settings.lockWait);
+}
+
+bool Collector::WriteCheckpoint(std::chrono::milliseconds wait) {
     try {
         std::unique_lock guard(writeMutex, std::defer_lock);
-        if (!guard.try_lock_for(settings.lockWait)) return false;
+        if (!guard.try_lock_for(wait)) return false;
         // A finish that has begun owns the files: a late checkpoint would be taken for a killed run.
         if (started_ && state != 0) return false;
         if (settings.duringCheckpointWrite) settings.duringCheckpointWrite();
@@ -1300,6 +1626,184 @@ void Collector::Work() {
     workerBusy = false;
     workerRunning = false;
     changed.notify_all();
+}
+
+namespace {
+
+std::int64_t NanosSince(std::chrono::steady_clock::time_point start) {
+    return std::chrono::duration_cast<std::chrono::nanoseconds>(std::chrono::steady_clock::now() - start).count();
+}
+
+}
+
+// The source of a call site as `core/...:line`, or nothing when the compile-time path is not inside the source tree.
+std::optional<std::string> SourceOf(std::string_view file, int line) {
+    const auto at = file.rfind("core/");
+    if (at == std::string_view::npos || line < 1) return std::nullopt;
+    const auto relative = std::string(file.substr(at)) + ":" + std::to_string(line);
+    if (relative.find("..") != std::string::npos || !std::regex_match(relative, std::regex(R"([A-Za-z0-9_][A-Za-z0-9_./+-]{0,254}:[0-9]{1,9})"))) return std::nullopt;
+    return relative;
+}
+
+void Collector::CheckpointSoon() {
+    // Checkpoints at milestones and failures are bounded in number so a hot path cannot turn into file I/O.
+    if (!started_ || state != 0 || checkpointsRequested.fetch_add(1) >= 64) return;
+    WriteCheckpoint(std::chrono::milliseconds(100));
+}
+
+void Collector::NoteMilestone(int milestone) {
+    if (milestone < 0 || milestone > 3 || !started_) return;
+    std::int64_t unset = -1;
+    if (milestoneNanos[milestone].compare_exchange_strong(unset, NanosSince(started))) CheckpointSoon();
+}
+
+void Collector::NoteFramePresented() {
+    if (!started_) return;
+    const auto now = NanosSince(started);
+    if (frames.fetch_add(1, std::memory_order_relaxed) == 0) {
+        firstFrameNanos = now;
+        NoteMilestone(3);
+    }
+    lastFrameNanos = now;
+}
+
+void Collector::NoteMissingFunction(std::string_view library, std::string_view name, std::string_view source) {
+    if (!started_) return;
+    bool added = false;
+    {
+        std::unique_lock guard(tables->mutex, std::defer_lock);
+        if (!guard.try_lock_for(std::chrono::milliseconds(200))) return;
+        auto& list = tables->functions;
+        const auto found = std::ranges::find_if(list, [&](const FunctionEntry& entry) {
+            return entry.name == name && entry.library.value_or("") == library;
+        });
+        if (found != list.end()) {
+            ++found->calls;
+        } else if (list.size() < TrackedEntries) {
+            list.push_back({library.empty() ? std::nullopt : std::optional<std::string>(library), std::string(name), 1});
+            added = true;
+        } else {
+            ++tables->dropped.functions;
+        }
+        if (!tables->pendingStop) {
+            Stop stop{Kind::MissingFunction, Reason::RuntimeStop, source.empty() ? std::nullopt : std::optional<std::string>(source), std::nullopt};
+            if (Matches(std::string(name), "[A-Za-z0-9_.$]{1,128}")) {
+                stop.message = "The game called a function the runtime does not implement: " + (library.empty() ? std::string() : std::string(library) + ".") + std::string(name) + ".";
+            }
+            tables->pendingStop = std::move(stop);
+        }
+    }
+    if (added) CheckpointSoon();
+}
+
+void Collector::NoteShader(int what) {
+    if (!started_) return;
+    (what == 0 ? compiled : what == 1 ? failedShaders : cacheHitCount).fetch_add(1, std::memory_order_relaxed);
+}
+
+void Collector::NoteUnsupportedInstruction(std::optional<std::string> encoding, std::optional<std::string> opcode, std::optional<std::int64_t> opcodeValue, std::string_view source) {
+    if (!started_) return;
+    bool added = false;
+    {
+        std::unique_lock guard(tables->mutex, std::defer_lock);
+        if (!guard.try_lock_for(std::chrono::milliseconds(200))) return;
+        auto& list = tables->unsupported;
+        const auto found = std::ranges::find_if(list, [&](const UnsupportedEntry& entry) {
+            return entry.encoding == encoding && entry.opcode == opcode && entry.opcodeValue == opcodeValue;
+        });
+        if (found != list.end()) {
+            ++found->count;
+        } else if (list.size() < TrackedEntries) {
+            list.push_back({encoding, opcode, opcodeValue, std::nullopt, 1});
+            added = true;
+        } else {
+            ++tables->dropped.unsupported;
+        }
+        if (!tables->pendingStop) {
+            Stop stop{Kind::UnsupportedShader, Reason::RuntimeStop, source.empty() ? std::nullopt : std::optional<std::string>(source), std::nullopt};
+            stop.message = encoding && opcode ? "Shader uses an unsupported " + *encoding + " instruction (" + *opcode + ")." : "Shader uses an instruction the runtime does not support.";
+            tables->pendingStop = std::move(stop);
+        }
+    }
+    if (added) CheckpointSoon();
+}
+
+void Collector::NoteImageFormat(std::int64_t format, std::optional<std::string> name, Status status, int usage) {
+    if (!started_) return;
+    bool added = false;
+    {
+        std::unique_lock guard(tables->mutex, std::defer_lock);
+        if (!guard.try_lock_for(std::chrono::milliseconds(200))) return;
+        auto& list = tables->imageFormats;
+        const auto found = std::ranges::find_if(list, [&](const FormatEntry& entry) { return entry.format == format && entry.status == status && entry.usage == usage; });
+        if (found != list.end()) {
+            ++found->count;
+        } else if (list.size() < TrackedEntries) {
+            list.push_back({format, std::move(name), status, usage, 1});
+            added = true;
+        } else {
+            ++tables->dropped.imageFormats;
+        }
+        if (status == Status::Rejected && !tables->pendingStop) {
+            Stop stop{Kind::UnsupportedFormat, Reason::RuntimeStop, std::nullopt, "A guest image format is not supported (format " + std::to_string(format) + ")."};
+            tables->pendingStop = std::move(stop);
+        }
+    }
+    if (added) CheckpointSoon();
+}
+
+void Collector::NoteDescriptor(int type, Status status, int usage) {
+    if (!started_) return;
+    std::unique_lock guard(tables->mutex, std::defer_lock);
+    if (!guard.try_lock_for(std::chrono::milliseconds(200))) return;
+    auto& list = tables->descriptors;
+    const auto found = std::ranges::find_if(list, [&](const DescriptorEntry& entry) { return entry.type == type && entry.status == status && entry.usage == usage; });
+    if (found != list.end()) ++found->count;
+    else if (list.size() < TrackedEntries) list.push_back({type, status, usage, 1});
+    else ++tables->dropped.descriptors;
+}
+
+void Collector::NoteStop(Stop stop) {
+    std::unique_lock guard(tables->mutex, std::defer_lock);
+    if (!guard.try_lock_for(std::chrono::milliseconds(200))) return;
+    if (!tables->pendingStop) tables->pendingStop = std::move(stop);
+}
+
+std::optional<Stop> Collector::PendingStop() const {
+    std::unique_lock guard(tables->mutex, std::defer_lock);
+    if (!guard.try_lock_for(std::chrono::milliseconds(200))) return std::nullopt;
+    return tables->pendingStop;
+}
+
+Observations Collector::Observe() const {
+    Observations o;
+    o.coverage = settings.coverage;
+    const auto seconds = [](std::int64_t nanos) { return std::optional<double>(static_cast<double>(nanos) / 1.0e9); };
+    if (milestoneNanos[0] >= 0) o.loaded = seconds(milestoneNanos[0]);
+    if (milestoneNanos[1] >= 0) o.started = seconds(milestoneNanos[1]);
+    if (milestoneNanos[2] >= 0) o.firstDraw = seconds(milestoneNanos[2]);
+    if (milestoneNanos[3] >= 0) o.firstPresent = seconds(milestoneNanos[3]);
+    o.framesPresented = frames;
+    if (o.framesPresented >= 2 && firstFrameNanos >= 0 && lastFrameNanos > firstFrameNanos) {
+        const double window = static_cast<double>(lastFrameNanos - firstFrameNanos) / 1.0e9;
+        o.fpsWindowSeconds = window;
+        o.averageFps = static_cast<double>(o.framesPresented - 1) / window;
+    }
+    o.shadersCompiled = compiled;
+    o.shadersFailed = failedShaders;
+    if (settings.coverage.shaders) o.cacheHits = cacheHitCount.load();
+    std::unique_lock guard(tables->mutex, std::defer_lock);
+    if (guard.try_lock_for(std::chrono::milliseconds(200))) {
+        o.functions = tables->functions;
+        o.unsupported = tables->unsupported;
+        o.imageFormats = tables->imageFormats;
+        o.descriptors = tables->descriptors;
+        o.truncated = tables->dropped;
+    } else {
+        // A stuck writer: say that the lists are unknown rather than that they are empty.
+        o.coverage.missing = o.coverage.unsupported = o.coverage.imageFormats = o.coverage.descriptors = false;
+    }
+    return o;
 }
 
 void Collector::NoteQuitRequested() noexcept {
@@ -1489,7 +1993,89 @@ extern "C" bool LibcRunReportHandoff_nid_no_patch(int exitCode) noexcept {
 extern "C" void LibcRunReportFinishAbort_nid_no_patch(int kind) noexcept {
     if (collector == nullptr) return;
     const auto stopKind = kind == static_cast<int>(RunReport::Kind::Assert) ? RunReport::Kind::Assert : kind == static_cast<int>(RunReport::Kind::Crash) ? RunReport::Kind::Crash : RunReport::Kind::Other;
-    collector->Finish(RunReport::Exit::Abort, RunReport::Stop{stopKind, RunReport::Reason::Crash, std::nullopt}, std::nullopt);
+    RunReport::Stop stop{stopKind, RunReport::Reason::Crash, std::nullopt, std::nullopt};
+    // An abort that follows a typed failure (a missing function, a shader or format the runtime cannot handle) is that failure.
+    if (stopKind == RunReport::Kind::Other) {
+        if (auto pending = collector->PendingStop()) stop = std::move(*pending);
+    }
+    collector->Finish(RunReport::Exit::Abort, std::move(stop), std::nullopt);
+}
+
+extern "C" void LibcRunReportMilestone_nid_no_patch(int milestone) noexcept {
+    if (collector != nullptr) collector->NoteMilestone(milestone);
+}
+
+extern "C" void LibcRunReportFramePresented_nid_no_patch() noexcept {
+    if (collector != nullptr) collector->NoteFramePresented();
+}
+
+namespace {
+
+// The library a source file belongs to: the folder after `prx/` in core/libs/prx/<library>/...
+std::string LibraryOf(std::string_view file) {
+    const auto at = file.rfind("prx/");
+    if (at == std::string_view::npos) return {};
+    const auto rest = file.substr(at + 4u);
+    return std::string(rest.substr(0, rest.find('/')));
+}
+
+// The exported name, without the suffix the runtime adds to its own symbols.
+std::string_view ExportName(std::string_view name) {
+    for (const std::string_view suffix : {"_nid_postfix", "_nid_no_patch"}) {
+        if (name.ends_with(suffix)) return name.substr(0, name.size() - suffix.size());
+    }
+    return name;
+}
+
+}
+
+extern "C" void LibcRunReportMissingFunction_nid_no_patch(const char* name, const char* file, int line) noexcept {
+    try {
+        if (collector == nullptr || name == nullptr) return;
+        const std::string_view path = file != nullptr ? file : "";
+        const auto source = RunReport::SourceOf(path, line);
+        collector->NoteMissingFunction(LibraryOf(path), ExportName(name), source.value_or(""));
+    } catch (...) {
+    }
+}
+
+extern "C" void LibcRunReportShader_nid_no_patch(int what) noexcept {
+    if (collector != nullptr) collector->NoteShader(what);
+}
+
+extern "C" void LibcRunReportUnsupportedInstruction_nid_no_patch(const char* encoding, const char* opcode, long long opcodeValue, const char* file, int line) noexcept {
+    try {
+        if (collector == nullptr) return;
+        const auto source = RunReport::SourceOf(file != nullptr ? file : "", line);
+        collector->NoteUnsupportedInstruction(encoding != nullptr ? std::optional<std::string>(encoding) : std::nullopt, opcode != nullptr ? std::optional<std::string>(opcode) : std::nullopt,
+                                              opcodeValue >= 0 ? std::optional<std::int64_t>(opcodeValue) : std::nullopt, source.value_or(""));
+    } catch (...) {
+    }
+}
+
+extern "C" void LibcRunReportImageFormat_nid_no_patch(unsigned format, const char* name, int status, int usage) noexcept {
+    try {
+        if (collector == nullptr) return;
+        collector->NoteImageFormat(format, name != nullptr ? std::optional<std::string>(name) : std::nullopt,
+                                   static_cast<RunReport::Status>(status >= 0 && status < 3 ? status : 2), usage >= 0 && usage < 6 ? usage : 5);
+    } catch (...) {
+    }
+}
+
+extern "C" void LibcRunReportDescriptor_nid_no_patch(int type, int status, int usage) noexcept {
+    try {
+        if (collector != nullptr) collector->NoteDescriptor(type, static_cast<RunReport::Status>(status >= 0 && status < 3 ? status : 2), usage);
+    } catch (...) {
+    }
+}
+
+extern "C" void LibcRunReportUnsupportedFormatStop_nid_no_patch(unsigned format, const char* file, int line) noexcept {
+    try {
+        if (collector == nullptr) return;
+        RunReport::Stop stop{RunReport::Kind::UnsupportedFormat, RunReport::Reason::RuntimeStop, RunReport::SourceOf(file != nullptr ? file : "", line), "A guest image format is not supported (format " + std::to_string(format) + ")."};
+        collector->NoteStop(std::move(stop));
+    } catch (...) {
+    }
 }
 
 extern "C" const char* LibcRunReportRelaunchEnvironment_nid_no_patch() noexcept {

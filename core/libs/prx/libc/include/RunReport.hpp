@@ -39,9 +39,30 @@ extern "C" void LibcRunReportBeginWorker_nid_no_patch() noexcept;
 // Every runtime library built from the same checkout registers itself; a library from another build makes `modified` unknown.
 extern "C" void LibcRunReportRegisterComponent_nid_no_patch(const char* name, const char* commit, int modified) noexcept;
 
+// What the runtime observed while the game ran. Each call is cheap and safe to make from any thread; none of them blocks on I/O.
+// milestone: 0 loaded, 1 started, 2 first draw submitted, 3 first frame presented.
+extern "C" void LibcRunReportMilestone_nid_no_patch(int milestone) noexcept;
+// One guest frame was accepted for presentation.
+extern "C" void LibcRunReportFramePresented_nid_no_patch() noexcept;
+// A function the runtime does not implement was called. `file` is the compile-time path of the call site and is reduced to a
+// source-tree relative name; the library is taken from it.
+extern "C" void LibcRunReportMissingFunction_nid_no_patch(const char* name, const char* file, int line) noexcept;
+// what: 0 compiled, 1 failed, 2 cache hit.
+extern "C" void LibcRunReportShader_nid_no_patch(int what) noexcept;
+// A shader instruction the recompiler cannot translate. Anything unknown is null (encoding, opcode) or -1 (opcodeValue).
+extern "C" void LibcRunReportUnsupportedInstruction_nid_no_patch(const char* encoding, const char* opcode, long long opcodeValue, const char* file, int line) noexcept;
+// status: 0 accepted, 1 rejected, 2 unknown. usage: 0 sampled, 1 storage, 2 color-target, 3 depth-target, 4 transfer, 5 other.
+extern "C" void LibcRunReportImageFormat_nid_no_patch(unsigned format, const char* name, int status, int usage) noexcept;
+// type: 0 UniformBuffer .. 6 Sampler in schema order. status as above. usage: 0 read, 1 write, 2 atomic, 3 other.
+extern "C" void LibcRunReportDescriptor_nid_no_patch(int type, int status, int usage) noexcept;
+// A guest image format the runtime cannot handle ended the run.
+extern "C" void LibcRunReportUnsupportedFormatStop_nid_no_patch(unsigned format, const char* file, int line) noexcept;
+
 namespace RunReport {
 
 inline constexpr std::size_t MaxBytes = 65536;
+inline constexpr std::size_t MaxListedFunctions = 200;
+inline constexpr std::size_t MaxListedFormats = 100;
 inline constexpr std::size_t MaxTextCharacters = 300;
 
 enum class Kind { None, MissingFunction, UnsupportedShader, UnsupportedFormat, Crash, Assert, Other };
@@ -52,6 +73,63 @@ struct Stop {
     Kind kind = Kind::None;
     Reason reason = Reason::GuestExit;
     std::optional<std::string> source;
+    // A message built from typed fields; the default for the kind and reason is used when it is empty.
+    std::optional<std::string> message;
+};
+
+enum class Stage { Unknown, Loads, Starts, FirstDraw, Presents };
+enum class Status { Accepted, Rejected, Unknown };
+
+struct FunctionEntry {
+    std::optional<std::string> library;
+    std::string name;
+    std::int64_t calls = 0;
+};
+
+struct UnsupportedEntry {
+    std::optional<std::string> encoding;
+    std::optional<std::string> opcode;
+    std::optional<std::int64_t> opcodeValue;
+    std::optional<std::vector<std::string>> modifiers;
+    std::int64_t count = 0;
+};
+
+struct FormatEntry {
+    std::int64_t format = 0;
+    std::optional<std::string> name;
+    Status status = Status::Unknown;
+    int usage = 5;
+    std::int64_t count = 0;
+};
+
+struct DescriptorEntry {
+    int type = 0;
+    Status status = Status::Unknown;
+    int usage = 3;
+    std::int64_t count = 0;
+};
+
+struct Coverage {
+    bool milestones = false, missing = false, shaders = false, unsupported = false, imageFormats = false, descriptors = false;
+};
+
+struct Truncated {
+    std::int64_t functions = 0, unsupported = 0, imageFormats = 0, descriptors = 0;
+};
+
+// Everything the run observed, in the order of the report.
+struct Observations {
+    std::optional<double> loaded, started, firstDraw, firstPresent;
+    std::int64_t framesPresented = 0;
+    std::optional<double> averageFps, fpsWindowSeconds;
+    std::int64_t shadersCompiled = 0, shadersFailed = 0;
+    std::optional<std::int64_t> cacheHits;
+    std::vector<FunctionEntry> functions;
+    std::vector<UnsupportedEntry> unsupported;
+    std::vector<FormatEntry> imageFormats;
+    std::vector<DescriptorEntry> descriptors;
+    Coverage coverage;
+    Truncated truncated;
 };
 
 struct BuildInfo {
@@ -78,6 +156,7 @@ struct Report {
     bool recovered = false;
     bool incomplete = false;
     Stop stop;
+    Observations observed;
 };
 
 struct HostIdentifiers {
@@ -108,9 +187,13 @@ struct Settings {
     std::chrono::milliseconds lockWait{2000};
     // Component names that must have registered the same commit for `modified` to be known.
     std::vector<std::string> requiredComponents;
+    // Which sections this build collects; a section that is off is reported as not covered, not as empty.
+    Coverage coverage;
 };
 
 void RegisterComponent(std::string_view name, std::string_view commit, int modified);
+// A call site as `core/...:line` (the part of the compile-time path inside the source tree), or nothing.
+std::optional<std::string> SourceOf(std::string_view file, int line);
 std::string GenerateRunId();
 std::string FormatUtc(std::chrono::system_clock::time_point time);
 std::string Serialize(const Report& report);
@@ -160,7 +243,19 @@ public:
     const std::filesystem::path& ReportPath() const noexcept { return reportPath; }
     const std::filesystem::path& CheckpointPath() const noexcept { return checkpointPath; }
     Report Snapshot(Exit exit, Stop stop, std::optional<std::int64_t> exitCode, bool recovered) const;
+    // Observation hooks. The milestone and failure calls also write a checkpoint, so a run that dies right after still reports them.
+    void NoteMilestone(int milestone);
+    void NoteFramePresented();
+    void NoteMissingFunction(std::string_view library, std::string_view name, std::string_view source);
+    void NoteShader(int what);
+    void NoteUnsupportedInstruction(std::optional<std::string> encoding, std::optional<std::string> opcode, std::optional<std::int64_t> opcodeValue, std::string_view source);
+    void NoteImageFormat(std::int64_t format, std::optional<std::string> name, Status status, int usage);
+    void NoteDescriptor(int type, Status status, int usage);
+    void NoteStop(Stop stop);
+    // The stop a typed failure recorded, used by an abort that has no better explanation.
+    std::optional<Stop> PendingStop() const;
     bool WriteCheckpoint();
+    bool WriteCheckpoint(std::chrono::milliseconds wait);
     // Reopens a run that Finish has already finished (a relaunch whose replacement failed).
     bool Resume();
     // True when the last Finish wrote the report and released the run's files.
@@ -173,6 +268,9 @@ private:
     void Work();
     void RefreshGame(bool force = false);
     BuildInfo Provenance() const;
+    struct Tables;
+    Observations Observe() const;
+    void CheckpointSoon();
 
     Settings settings;
     std::filesystem::path directory;
@@ -197,6 +295,13 @@ private:
     bool reportPublished = false;
     std::string publishedBytes;
     std::atomic<bool> finalized{false};
+    std::shared_ptr<Tables> tables;
+    std::atomic<std::int64_t> milestoneNanos[4];
+    std::atomic<std::int64_t> frames{0};
+    std::atomic<std::int64_t> firstFrameNanos{-1};
+    std::atomic<std::int64_t> lastFrameNanos{-1};
+    std::atomic<std::int64_t> compiled{0}, failedShaders{0}, cacheHitCount{0};
+    std::atomic<int> checkpointsRequested{0};
     HostIdentifiers host;
 };
 

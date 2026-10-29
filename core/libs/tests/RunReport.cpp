@@ -810,6 +810,160 @@ void HandoffOutcomeTest() {
     Require(!finalized, "a handoff that left a checkpoint write in progress was reported as finalized, so a relaunch would close its descriptors");
 }
 
+// ---- step 3: what the run observed ----
+
+RunReport::Settings Covered(const fs::path& executable, const fs::path& user, const char* id) {
+    auto settings = SettingsFor(executable, user, id);
+    settings.coverage = {true, true, true, true, true, true};
+    return settings;
+}
+
+void ObservationsTest() {
+    Directory executable, user;
+    RunReport::Collector collector(Covered(executable.path, user.path, IdA));
+    Require(collector.Start(), "the collector did not start");
+    collector.NoteMilestone(0);
+    collector.NoteMilestone(1);
+    collector.NoteMilestone(1);
+    collector.NoteMilestone(2);
+    for (int index = 0; index < 5; ++index) {
+        collector.NoteFramePresented();
+        std::this_thread::sleep_for(std::chrono::milliseconds(20));
+    }
+    for (int index = 0; index < 3; ++index) collector.NoteShader(0);
+    collector.NoteShader(1);
+    collector.NoteShader(2);
+    collector.NoteMissingFunction("libSceNpTrophy", "sceNpTrophyCreateContext", "core/libs/prx/libSceNpTrophy/a.cpp:10");
+    collector.NoteMissingFunction("libSceNpTrophy", "sceNpTrophyCreateContext", "core/libs/prx/libSceNpTrophy/a.cpp:10");
+    collector.NoteMissingFunction("", "legacyCaller", "");
+    collector.NoteUnsupportedInstruction("VOP3", "V_CVT_PK_U8_F32", 256, "core/shader/recompiler/Translator/src/Vop3.cpp:812");
+    collector.NoteUnsupportedInstruction(std::nullopt, std::nullopt, 4000, "");
+    collector.NoteImageFormat(12, "GuestFormat12", RunReport::Status::Rejected, 0);
+    collector.NoteDescriptor(4, RunReport::Status::Accepted, 0);
+    collector.NoteDescriptor(4, RunReport::Status::Accepted, 0);
+    collector.Finish(RunReport::Exit::Abort, collector.PendingStop().value(), std::nullopt);
+    const auto text = Read(collector.ReportPath());
+    for (const char* part : {"\"stage\": \"presents\"", "\"loaded\":", "\"started\":", "\"firstDraw\":", "\"firstPresent\":", "\"framesPresented\": 5", "\"compiled\": 3", "\"failed\": 1", "\"cacheHits\": 1",
+                             "\"library\": \"libSceNpTrophy\",\n        \"name\": \"sceNpTrophyCreateContext\",\n        \"calls\": 2", "\"library\": null,\n        \"name\": \"legacyCaller\"",
+                             "\"encoding\": \"VOP3\"", "\"opcodeValue\": 4000", "\"format\": 12", "\"status\": \"rejected\"", "\"type\": \"SampledImage\"", "\"count\": 2",
+                             "\"kind\": \"missing-function\"", "\"reason\": \"runtime-stop\"", "\"missing\": true", "\"descriptors\": true"}) {
+        Require(Contains(text, part), std::string("the report lacks ") + part + ": " + text);
+    }
+    Require(!Contains(text, "\"averageFps\": null") && !Contains(text, "\"fpsWindowSeconds\": null"), "five presented frames gave no frame rate: " + text);
+}
+
+void FramesTest() {
+    Directory executable, user;
+    RunReport::Collector collector(Covered(executable.path, user.path, IdA));
+    Require(collector.Start(), "the collector did not start");
+    collector.NoteFramePresented();
+    collector.Finish(RunReport::Exit::Clean, {}, 0);
+    auto text = Read(collector.ReportPath());
+    Require(Contains(text, "\"framesPresented\": 1") && Contains(text, "\"averageFps\": null") && Contains(text, "\"stage\": \"presents\""), "one frame must give a null frame rate: " + text);
+    Directory second, other;
+    RunReport::Collector none(Covered(second.path, other.path, IdB));
+    Require(none.Start(), "the collector did not start");
+    none.NoteMilestone(2);
+    none.Finish(RunReport::Exit::Clean, {}, 0);
+    text = Read(none.ReportPath());
+    Require(Contains(text, "\"framesPresented\": 0") && Contains(text, "\"stage\": \"first-draw\"") && !Contains(text, "firstPresent"), "a run without frames is wrong: " + text);
+}
+
+void ListOrderAndCapTest() {
+    Directory executable, user;
+    RunReport::Collector collector(Covered(executable.path, user.path, IdA));
+    Require(collector.Start(), "the collector did not start");
+    for (int index = 0; index < 300; ++index) {
+        const auto name = "fn" + std::to_string(1000 + index);
+        for (int call = 0; call <= index % 5; ++call) collector.NoteMissingFunction("libTest", name, "");
+    }
+    collector.Finish(RunReport::Exit::Clean, {}, 0);
+    const auto text = Read(collector.ReportPath());
+    std::size_t listed = 0;
+    for (std::size_t at = text.find("\"calls\":"); at != std::string::npos; at = text.find("\"calls\":", at + 1)) ++listed;
+    Require(listed == 200, "the function list was not capped at 200: " + std::to_string(listed));
+    Require(Contains(text, "\"functions\": 100,\n    \"unsupported\": 0"), "the 100 dropped functions were not counted: " + text.substr(text.find("\"truncated\"")));
+    Require(text.find("\"calls\": 5") < text.find("\"calls\": 1"), "the list is not ordered by count");
+    // ties break by name
+    Require(text.find("fn1004") < text.find("fn1009"), "equal counts are not ordered by name");
+}
+
+void SizeLimitTest() {
+    Directory executable, user;
+    RunReport::Collector collector(Covered(executable.path, user.path, IdA));
+    Require(collector.Start(), "the collector did not start");
+    for (int index = 0; index < 400; ++index) {
+        collector.NoteMissingFunction("libTestLibraryNameThatIsLong", "aVeryLongFunctionNameThatTakesUpSpace" + std::string(80, 'x') + std::to_string(index), "");
+        collector.NoteUnsupportedInstruction("VOP3", "V_LONG_OPCODE_NAME_" + std::string(40, 'Z') + std::to_string(index), index, "");
+        collector.NoteImageFormat(index, "GuestFormatWithAVeryLongName" + std::string(30, 'q') + std::to_string(index), RunReport::Status::Accepted, index % 6);
+    }
+    collector.Finish(RunReport::Exit::Clean, {}, 0);
+    const auto text = Read(collector.ReportPath());
+    Require(!text.empty() && text.size() <= RunReport::MaxBytes, "the report is over the size limit: " + std::to_string(text.size()));
+    Require(Contains(text, "\"kind\": \"none\"") && Contains(text, "\"titleId\"") && Contains(text, "\"commit\""), "the stop or build details were cut");
+    Require(!Contains(text, "\"functions\": 0,\n    \"unsupported\": 0"), "entries were cut without being counted");
+}
+
+void TypedStopTest() {
+    Directory executable, user;
+    RunReport::Collector collector(Covered(executable.path, user.path, IdA));
+    Require(collector.Start(), "the collector did not start");
+    collector.NoteUnsupportedInstruction("VOP3", "V_CVT_PK_U8_F32", 256, "core/shader/recompiler/Translator/src/Vop3.cpp:812");
+    const auto stop = collector.PendingStop();
+    Require(stop && stop->kind == RunReport::Kind::UnsupportedShader && stop->reason == RunReport::Reason::RuntimeStop, "the failure did not become a typed stop");
+    collector.NoteMissingFunction("libX", "later", "core/libs/prx/libX/a.cpp:3");
+    Require(collector.PendingStop()->kind == RunReport::Kind::UnsupportedShader, "a later failure replaced the first stop");
+    collector.Finish(RunReport::Exit::Abort, *stop, std::nullopt);
+    const auto text = Read(collector.ReportPath());
+    Require(Contains(text, "\"kind\": \"unsupported-shader\"") && Contains(text, "Shader uses an unsupported VOP3 instruction (V_CVT_PK_U8_F32).") &&
+            Contains(text, "\"source\": \"core/shader/recompiler/Translator/src/Vop3.cpp:812\""), "the typed stop is wrong: " + text);
+}
+
+void ObservationPrivacyTest() {
+    Directory executable, user;
+    auto settings = Covered(executable.path, user.path, IdA);
+    RunReport::Collector collector(std::move(settings));
+    Require(collector.Start(), "the collector did not start");
+    collector.NoteMissingFunction("lib/../bad", "ok_name", "");
+    collector.NoteMissingFunction("libOk", "has space", "");
+    collector.NoteMissingFunction("libOk", "/home/someone/f", "");
+    collector.NoteUnsupportedInstruction("VOP 3", "op code", 5000000000LL, "/home/someone/a.cpp:3");
+    collector.NoteImageFormat(7, "name with space", RunReport::Status::Unknown, 99);
+    collector.Finish(RunReport::Exit::Clean, {}, 0);
+    const auto text = Read(collector.ReportPath());
+    Require(!Contains(text, "has space") && !Contains(text, "/home/") && !Contains(text, "bad") && !Contains(text, "op code") && !Contains(text, "name with space"), "an invalid or private value was written: " + text);
+    Require(Contains(text, "\"name\": \"ok_name\"") && Contains(text, "\"library\": null"), "the valid name was lost or its invalid library kept: " + text);
+    Require(Contains(text, "\"usage\": \"other\""), "an out-of-range usage was not mapped to other");
+}
+
+void CheckpointObservationsTest() {
+    Directory executable, user;
+    {
+        RunReport::Collector abandoned(Covered(executable.path, user.path, IdA));
+        Require(abandoned.Start(), "the collector did not start");
+        abandoned.NoteMilestone(2);
+        abandoned.NoteMissingFunction("libTest", "neverImplemented", "core/libs/prx/libTest/a.cpp:1");
+        abandoned.NoteShader(0);
+        abandoned.NoteShader(0);
+        abandoned.NoteDescriptor(1, RunReport::Status::Rejected, 1);
+        Require(Contains(Read(abandoned.CheckpointPath()), "\"firstDraw\"") && Contains(Read(abandoned.CheckpointPath()), "neverImplemented"), "the checkpoint does not carry the milestone and the failure");
+    }
+    RunReport::Collector next(Covered(executable.path, user.path, IdB));
+    Require(next.Start(), "the next collector did not start");
+    const auto text = Read(executable.path / "reports" / IdA / "anyps5-report.json");
+    Require(Contains(text, "\"recovered\": true") && Contains(text, "\"stage\": \"first-draw\"") && Contains(text, "neverImplemented"), "the recovered report lost what the run had observed: " + text);
+    next.Finish(RunReport::Exit::Clean, {}, 0);
+}
+
+void CoverageOffTest() {
+    Directory executable, user;
+    RunReport::Collector collector(SettingsFor(executable.path, user.path, IdA));
+    Require(collector.Start(), "the collector did not start");
+    collector.Finish(RunReport::Exit::Clean, {}, 0);
+    const auto text = Read(collector.ReportPath());
+    Require(Contains(text, "\"milestones\": false,\n    \"missing\": false,\n    \"shaders\": false") && !Contains(text, "cacheHits"), "a section the build does not collect is marked as covered: " + text);
+}
+
 #ifndef _WIN32
 int RunChild(const fs::path& executable, const fs::path& directory, const std::string& mode, const std::string& arguments = "", const std::string& environment = "APS5_REPORT=1") {
     const auto command = "cd '" + directory.string() + "' && " + environment + " exec '" + executable.string() + "' --child " + mode + " " + arguments + " 2>/dev/null";
@@ -942,6 +1096,55 @@ void Dump(const fs::path& directory) {
     unknown.game = {};
     unknown.os.reset();
     write("unknown.json", unknown);
+    auto rich = SampleReport();
+    rich.exit = RunReport::Exit::Abort;
+    rich.exitCode = 134;
+    rich.stop = {RunReport::Kind::UnsupportedShader, RunReport::Reason::RuntimeStop, std::string("core/shader/recompiler/Translator/src/Vop3.cpp:812"), std::string("Shader uses an unsupported VOP3 instruction (V_CVT_PK_U8_F32).")};
+    auto& o = rich.observed;
+    o.loaded = 1.2; o.started = 1.5; o.firstDraw = 40.8; o.firstPresent = 41.0;
+    o.framesPresented = 600; o.averageFps = 59.9; o.fpsWindowSeconds = 10.0;
+    o.shadersCompiled = 4090; o.shadersFailed = 1; o.cacheHits = 5120;
+    o.coverage = {true, true, true, true, true, true};
+    o.functions = {{std::string("libSceNpTrophy"), "sceNpTrophyCreateContext", 3}, {std::nullopt, "legacyCaller", 1}};
+    o.unsupported = {{std::string("VOP3"), std::string("V_CVT_PK_U8_F32"), 256, std::vector<std::string>{"clamp"}, 150}, {std::nullopt, std::nullopt, 4000, std::nullopt, 2}};
+    o.imageFormats = {{1, std::string("GuestFormat1"), RunReport::Status::Rejected, 0, 100}, {2, std::nullopt, RunReport::Status::Unknown, 5, 3}};
+    o.descriptors = {{0, RunReport::Status::Accepted, 0, 900}, {6, RunReport::Status::Unknown, 3, 2}};
+    write("rich.json", rich);
+    auto zero = SampleReport();
+    zero.observed.coverage = {true, true, true, true, true, true};
+    zero.observed.loaded = 1.0; zero.observed.started = 1.2; zero.observed.firstDraw = 3.0;
+    write("zero-present.json", zero);
+    auto many = rich;
+    many.observed.functions.clear();
+    for (int index = 0; index < 400; ++index) many.observed.functions.push_back({std::string("libMany"), "function" + std::to_string(1000 + index), 1 + index % 7});
+    write("truncated.json", many);
+    // Reports the collector itself writes, not only the ones built by hand above.
+    Directory executable, userFolder;
+    {
+        RunReport::Collector collector(Covered(executable.path, userFolder.path, IdA));
+        collector.Start();
+        collector.NoteMilestone(0); collector.NoteMilestone(1); collector.NoteMilestone(2);
+        for (int index = 0; index < 4; ++index) { collector.NoteFramePresented(); std::this_thread::sleep_for(std::chrono::milliseconds(5)); }
+        collector.NoteShader(0); collector.NoteShader(1); collector.NoteShader(2);
+        collector.NoteMissingFunction("libSceNpTrophy", "sceNpTrophyCreateContext", "core/libs/prx/libSceNpTrophy/a.cpp:10");
+        collector.NoteUnsupportedInstruction("VOP3", "V_CVT_PK_U8_F32", 256, "core/shader/recompiler/Translator/src/Vop3.cpp:812");
+        collector.NoteImageFormat(12, "GuestFormat12", RunReport::Status::Rejected, 0);
+        collector.NoteDescriptor(4, RunReport::Status::Accepted, 0);
+        collector.Finish(RunReport::Exit::Abort, collector.PendingStop().value(), std::nullopt);
+        fs::copy_file(collector.ReportPath(), directory / "collector-abort.json", fs::copy_options::overwrite_existing);
+    }
+    {
+        {
+            RunReport::Collector abandoned(Covered(executable.path, userFolder.path, IdB));
+            abandoned.Start();
+            abandoned.NoteMilestone(2);
+            abandoned.NoteMissingFunction("libTest", "neverImplemented", "core/libs/prx/libTest/a.cpp:1");
+        }
+        RunReport::Collector next(Covered(executable.path, userFolder.path, "cccccccccccccccccccccccccccccccc"));
+        next.Start();
+        fs::copy_file(executable.path / "reports" / IdB / "anyps5-report.json", directory / "collector-recovered.json", fs::copy_options::overwrite_existing);
+        next.Finish(RunReport::Exit::Clean, {}, 0);
+    }
 }
 #endif
 
@@ -1016,6 +1219,14 @@ int main(int argc, char** argv) {
         Run("resume-retracts-report", ResumeRetractsReportTest);
         Run("resume-keeps-newer-report", ResumeKeepsNewerReportTest);
         Run("handoff-outcome", HandoffOutcomeTest);
+        Run("observations", ObservationsTest);
+        Run("frames", FramesTest);
+        Run("list-order-and-cap", ListOrderAndCapTest);
+        Run("size-limit", SizeLimitTest);
+        Run("typed-stop", TypedStopTest);
+        Run("observation-privacy", ObservationPrivacyTest);
+        Run("checkpoint-observations", CheckpointObservationsTest);
+        Run("coverage-off", CoverageOffTest);
 #ifndef _WIN32
         Run("child-exit", ChildExitTest);
         Run("child-quit", ChildQuitTest);
