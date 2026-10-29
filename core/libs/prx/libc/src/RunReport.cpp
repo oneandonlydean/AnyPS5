@@ -688,15 +688,13 @@ Report Sanitized(Report report, const HostIdentifiers& host) {
         if (value && (value->empty() || !SafeText(*value, names).has_value() || SerialLike(*value))) value.reset();
     };
     text(report.machine.osVersion, versionNames);
-    // The brand string of most Intel and some other CPUs ends in " @ 3.50GHz"; the clock is no identity, and the "@" would read as an address.
+    // The brand string of most Intel and some other CPUs ends in " @ 3.50GHz". The clock is no identity, and the "@" would read as an address.
+    // Only an annotation that stands apart (a space on both sides of the "@") is cut, and what is left goes through the same filter as any
+    // other value below; "alice@3.5GHz" is not an annotation, keeps its "@" and is dropped.
     if (report.machine.cpu) {
-        auto& cpu = *report.machine.cpu;
-        static const std::regex clock(R"(\s*@\s*[0-9]{1,2}([.,][0-9]{1,3})?\s*[GMgm][Hh][Zz]\s*)");
-        const auto at = cpu.rfind('@');
-        if (at != std::string::npos && std::regex_match(cpu.begin() + static_cast<std::ptrdiff_t>(at), cpu.end(), clock)) {
-            cpu.erase(at);
-            while (!cpu.empty() && cpu.back() == ' ') cpu.pop_back();
-        }
+        static const std::regex clock(R"((.*[^ @]) +@ +[0-9]{1,2}([.,][0-9]{1,3})? ?[GMgm][Hh][Zz])");
+        std::smatch parts;
+        if (std::regex_match(*report.machine.cpu, parts, clock) && parts[1].str().find('@') == std::string::npos) report.machine.cpu = parts[1].str();
     }
     text(report.machine.cpu, machineNames);
     if (report.machine.ramGiB && (*report.machine.ramGiB < 1 || *report.machine.ramGiB > 1048576)) report.machine.ramGiB.reset();
