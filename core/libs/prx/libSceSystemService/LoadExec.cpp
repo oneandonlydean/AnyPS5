@@ -1,5 +1,6 @@
 #include "LoadExec.hpp"
 #include "prx/libc/include/General.hpp"
+#include "prx/libc/include/RunReport.hpp"
 #include "prx/libc/include/Shutdown.hpp"
 #include <array>
 #include <algorithm>
@@ -133,6 +134,7 @@ Handle Duplicate(HANDLE source, DWORD access) {
     try {
         LibcStartExit_nid_postfix();
         LibcRunShutdown_nid_postfix();
+        LibcRunReportFinishExit_nid_no_patch(0);
         std::fflush(nullptr);
         if (ResumeThread(thread.get()) == static_cast<DWORD>(-1))
             throw std::system_error(GetLastError(), std::system_category(), "LoadExec: starting the converted executable");
@@ -161,6 +163,7 @@ Handle Duplicate(HANDLE source, DWORD access) {
     pointers.push_back(nullptr);
     LibcStartExit_nid_postfix();
     LibcRunShutdown_nid_postfix();
+    LibcRunReportFinishExit_nid_no_patch(0);
     std::fflush(nullptr);
     if (const int host = HostStandardError_nid_no_patch(); host >= 0 && dup2(host, 2) != 2)
         throw std::system_error(errno, std::generic_category(), "LoadExec: giving the host standard error back to descriptor 2");
@@ -190,6 +193,7 @@ Handle Duplicate(HANDLE source, DWORD access) {
         throw std::runtime_error("LoadExec: preparing the replacement");
     LibcStartExit_nid_postfix();
     LibcRunShutdown_nid_postfix();
+    LibcRunReportFinishExit_nid_no_patch(0);
     std::fflush(nullptr);
     if (const int host = HostStandardError_nid_no_patch(); host >= 0 && dup2(host, 2) != 2)
         throw std::system_error(errno, std::generic_category(), "LoadExec: giving the host standard error back to descriptor 2");

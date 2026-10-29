@@ -1,6 +1,7 @@
 #include "prx/libc/include/exceptions/Unwind.hpp"
 #include "prx/libc/include/Api.hpp"
 #include "prx/libc/include/exceptions/Runtime.hpp"
+#include "prx/libc/include/RunReport.hpp"
 #include <algorithm>
 #include <cstdarg>
 #include <cstdio>
@@ -82,12 +83,14 @@ static void RawLog(const char* format, ...) {
     } else {
         RawLog("terminate called without an active exception\n");
     }
+    LibcRunReportFinishAbort_nid_no_patch(static_cast<int>(RunReport::Kind::Other));
     std::abort();
 }
 
 inline std::atomic<void(*)()> terminateHandler {DefaultTerminate};
 [[noreturn]] void InvokeTerminate(void (*handler)()) {
     try { if (handler) handler(); } catch (...) {}
+    LibcRunReportFinishAbort_nid_no_patch(static_cast<int>(RunReport::Kind::Other));
     std::abort();
 }
 [[noreturn]] void Terminate() { InvokeTerminate(terminateHandler.load(std::memory_order_acquire)); }
