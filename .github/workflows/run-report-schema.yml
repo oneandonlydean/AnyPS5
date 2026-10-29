@@ -8,6 +8,10 @@ on:
       - docs/run-report-fixtures/**
       - tools/requirements-run-report.txt
       - tools/tests/test_run_report_schema.py
+      - tools/tests/test_run_report_docs.py
+      - docs/user/USAGE.md
+      - docs/user/run-report.md
+      - .github/DISCUSSION_TEMPLATE/game-bring-up.yml
 
 permissions:
   contents: read

@@ -592,6 +592,11 @@ void PrivacySweepEverythingTest() {
     collector.NoteMissingFunction("lib/home/canaryuser9", "fn_ok", "C:\\Users\\canaryuser9\\core\\a.cpp", "fn_ok not implemented");
     collector.NoteUnsupportedInstruction("VOPcanaryuser9", "OP_canary-host-9", 12, "/home/canaryuser9/x.cpp");
     collector.NoteImageFormat(3, "fmt_canaryuser9", RunReport::Status::Rejected, 0);
+    collector.NoteMissingFunction("lib_192.0.2.123", "account_123456789012", "", "account_123456789012 not implemented");
+    collector.NoteMissingFunction("libOk", "fn_ok", "", "fn_ok not implemented");
+    collector.NoteUnsupportedInstruction("acct123456789012", "OP_ok", 13, "");
+    collector.NoteUnsupportedInstruction("VOP3", "acct123456789012", 14, "");
+    collector.NoteImageFormat(4, "acct123456789012", RunReport::Status::Accepted, 0);
     collector.NoteUnsupportedShaderStop("canaryuser9", "canary-host-9", "/home/canaryuser9/y.cpp");
     collector.NoteMilestone(2);
     std::this_thread::sleep_for(std::chrono::milliseconds(100));
@@ -600,9 +605,10 @@ void PrivacySweepEverythingTest() {
     const auto report = Read(collector.ReportPath());
     for (const auto& text : {checkpoint, report}) {
         Require(!text.empty(), "an output is empty");
-        for (const char* canary : {"canaryuser9", "canary-host-9", "/home/", "C:\\", "Users", "@"}) {
+        for (const char* canary : {"canaryuser9", "canary-host-9", "/home/", "C:\\", "Users", "@", "192.0.2.123", "123456789012"}) {
             Require(!Contains(text, canary), std::string("the output contains the canary ") + canary + ": " + text);
         }
+        Require(Contains(text, "\"fn_ok\"") && Contains(text, "\"OP_ok\""), "the clean entries next to the canaries were lost: " + text);
     }
     // A recovered report is built from the checkpoint and must be as clean.
     {
@@ -614,16 +620,40 @@ void PrivacySweepEverythingTest() {
             RunReport::Collector abandoned(std::move(abandonedSettings));
             Require(abandoned.Start(), "the collector did not start");
             abandoned.NoteMissingFunction("libcanaryuser9", "fn_canaryuser9_call", "", "x");
+            abandoned.NoteMissingFunction("lib_192.0.2.123", "account_123456789012", "", "y");
+            abandoned.NoteMissingFunction("libOk", "fn_ok", "", "z");
+            abandoned.NoteImageFormat(4, "acct123456789012", RunReport::Status::Accepted, 0);
             abandoned.NoteMilestone(2);
             std::this_thread::sleep_for(std::chrono::milliseconds(100));
         }
         RunReport::Collector next(Covered(other.path, userOther.path, "cccccccccccccccccccccccccccccccc"));
         Require(next.Start(), "the next collector did not start");
         const auto recovered = Read(other.path / "reports" / IdB / "anyps5-report.json");
-        Require(!Contains(recovered, "canaryuser9") && !Contains(recovered, "canary-host-9"), "the recovered report contains a canary: " + recovered);
+        Require(!Contains(recovered, "canaryuser9") && !Contains(recovered, "canary-host-9") && !Contains(recovered, "192.0.2.123") && !Contains(recovered, "123456789012"), "the recovered report contains a canary: " + recovered);
+        // A positive check on the recovered report itself: it is a real report with the clean entries and the stage.
+        Require(Contains(recovered, "\"recovered\": true") && Contains(recovered, "\"stage\": \"first-draw\"") && Contains(recovered, "\"fn_ok\""), "the recovered report lost its clean content: " + recovered);
         next.Finish(RunReport::Exit::Clean, {}, 0);
     }
 #endif
+}
+
+void StructuredFieldCanaryTest() {
+    // Names, addresses and account numbers fit the patterns of the structured fields but must not get into them.
+    RunReport::HostIdentifiers host;
+    host.words = {"canaryuser9"};
+    auto report = SampleReport();
+    report.game.contentVersion = "192.0.2.123";
+    report.build.release = "v123456789012";
+    auto& o = report.observed;
+    o.coverage = {true, true, true, true, true, true};
+    o.functions = {{std::string("lib_192.0.2.123"), "account_123456789012", 3}, {std::string("libOk"), "fn_ok", 2}, {std::string("libacct123456789012"), "fn_other", 1}};
+    o.unsupported = {{std::string("VOP3"), std::string("acct123456789012"), 5, std::vector<std::string>{"acct123456789012"}, 4}, {std::string("VOP2"), std::string("OP_OK"), 6, std::vector<std::string>{"clamp"}, 2},
+                     {std::string("acct123456789012"), std::string("OP_X"), 7, std::nullopt, 1}};
+    o.imageFormats = {{1, std::string("acct123456789012"), RunReport::Status::Accepted, 0, 3}, {2, std::string("GuestFormat2"), RunReport::Status::Accepted, 0, 2}};
+    const auto text = RunReport::Serialize(report, host);
+    for (const char* canary : {"192.0.2.123", "123456789012", "canaryuser9"}) Require(!Contains(text, canary), std::string("a structured field kept the canary ") + canary + ": " + text);
+    for (const char* kept : {"\"fn_ok\"", "\"libOk\"", "\"OP_OK\"", "\"clamp\"", "\"GuestFormat2\""}) Require(Contains(text, kept), std::string("a clean structured value was lost: ") + kept);
+    Require(Contains(text, "\"contentVersion\": null") && Contains(text, "\"release\": null"), "a version or release with an address or account number was kept");
 }
 
 void NumericLocaleTest() {
@@ -1357,6 +1387,14 @@ void ChildEnabledTest() {
     Require(Read(directory.path / "enabled.txt") == "0", "the launch flag did not turn the report off for the hooks");
 }
 
+void LibraryFromSourceTest() {
+    Directory directory;
+    RunChild(CopySelf(directory), directory.path, "library-path");
+    const auto text = Report(directory);
+    Require(Contains(text, "\"library\": \"libA\""), "the library is not the one in the core/libs/prx/ path: " + text);
+    Require(!Contains(text, "libB") && !Contains(text, "/home/x"), "a deeper prx/ folder or a host path got into the report: " + text);
+}
+
 void ChildAssertTest() {
     Directory directory;
     const int status = RunChild(CopySelf(directory), directory.path, "assert");
@@ -1465,6 +1503,11 @@ int main(int argc, char** argv) {
                 LibcTerminate_nid_no_patch(0);
             }
             if (mode == "return") return 5;
+            if (mode == "library-path") {
+                LibcRunReportMissingFunction_nid_no_patch("fnX_nid_postfix", "/home/x/core/libs/prx/libA/sub/prx/libB/c.cpp", 5);
+                LibcRunReportFinishExit_nid_no_patch(0);
+                return 0;
+            }
             if (mode == "caught-missing-function") {
                 try { NotImplemented_nid_no_patch("sceNpCaught_nid_postfix"); } catch (const std::exception&) {}
                 LibcRunReportMilestone_nid_no_patch(2);
@@ -1522,6 +1565,7 @@ int main(int argc, char** argv) {
         Run("privacy-isolated", PrivacyIsolatedTest);
         Run("privacy-sweep", PrivacySweepTest);
         Run("privacy-sweep-everything", PrivacySweepEverythingTest);
+        Run("structured-field-canary", StructuredFieldCanaryTest);
         Run("numeric-locale", NumericLocaleTest);
         Run("ancestor-link", AncestorLinkTest);
         Run("metadata-host-token", MetadataHostTokenTest);
@@ -1565,6 +1609,7 @@ int main(int argc, char** argv) {
         Run("child-abort", ChildAbortTest);
         Run("child-std-terminate", ChildTerminateTest);
         Run("child-assert", ChildAssertTest);
+        Run("child-library-from-source", LibraryFromSourceTest);
         Run("child-missing-function", ChildMissingFunctionTest);
         Run("child-caught-missing-function", ChildCaughtMissingFunctionTest);
         Run("child-enabled", ChildEnabledTest);

@@ -42,9 +42,38 @@ class MilestoneDocsTests(unittest.TestCase):
         text = (ROOT / "docs/user/USAGE.md").read_text(encoding="utf-8")
         self.assertRegex(text, r"run report is not supported on Windows yet")
 
+    def test_docs_do_not_infer_not_reached_from_a_lower_stage(self):
+        for name, path in DOCS.items():
+            text = path.read_text(encoding="utf-8")
+            self.assertNotRegex(text, r"Only a stage lower", name)
+            self.assertNotRegex(text, r"is not one the game failed to reach", name)
+
+    def test_privacy_is_described_as_a_filter(self):
+        usage = (ROOT / "docs/user/USAGE.md").read_text(encoding="utf-8")
+        template = (ROOT / ".github/DISCUSSION_TEMPLATE/game-bring-up.yml").read_text(encoding="utf-8")
+        self.assertRegex(usage, r"a filter, not a guarantee")
+        self.assertRegex(template, r"a filter and not a guarantee")
+        self.assertNotRegex(usage + template, r"holds no user name")
+
+    def test_recovery_is_documented_as_strict(self):
+        text = (ROOT / "docs/user/run-report.md").read_text(encoding="utf-8")
+        self.assertRegex(text, r"dropped whole")
+
+    def test_template_is_valid_yaml_when_a_parser_is_available(self):
+        try:
+            import yaml
+        except ImportError:
+            self.skipTest("PyYAML is not installed")
+        document = yaml.safe_load((ROOT / ".github/DISCUSSION_TEMPLATE/game-bring-up.yml").read_text(encoding="utf-8"))
+        self.assertIn("report", [block.get("id") for block in document["body"]])
+
+    def test_template_tells_users_to_attach_a_large_report(self):
+        text = (ROOT / ".github/DISCUSSION_TEMPLATE/game-bring-up.yml").read_text(encoding="utf-8")
+        self.assertRegex(text, r"attach the file")
+
     def test_usage_says_the_same(self):
         text = (ROOT / "docs/user/USAGE.md").read_text(encoding="utf-8")
-        self.assertRegex(text, r"is not one the game failed to reach")
+        self.assertRegex(text, r"either one the run did not reach or one this system does not record")
 
 
 class TemplateTests(unittest.TestCase):

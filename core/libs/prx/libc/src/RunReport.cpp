@@ -420,8 +420,9 @@ Report Sanitized(Report report, const HostIdentifiers& host) {
     // A value that fits its pattern can still be a host identifier (a version or release tag that is a user name).
     // The commit is forty hex digits and cannot carry a name, but a short hex-looking name ("dead", "face") would match inside it, so it is
     // not compared with the host's names.
+    // These get the full text filter too (names, addresses, account numbers), not only the pattern.
     for (auto* value : {&report.build.release, &report.game.titleId, &report.game.contentVersion, &report.os}) {
-        if (*value && NamesHost(**value, host)) value->reset();
+        if (*value && !SafeText(**value, host).has_value()) value->reset();
     }
     if (report.game.name) report.game.name = SafeText(*report.game.name, host);
     if (report.stop.source) {
@@ -479,11 +480,12 @@ void NormalizeObservations(Observations& o, const HostIdentifiers& host) {
         }
     };
     const auto optionalOk = [&](std::optional<std::string>& value, const char* pattern) {
-        if (value && (!Matches(*value, pattern) || NamesHost(*value, host))) value.reset();
+        // A structured field is checked like free text: names, addresses and account numbers fit the patterns but are not allowed.
+        if (value && (!Matches(*value, pattern) || !SafeText(*value, host).has_value())) value.reset();
     };
     for (auto& entry : o.functions) optionalOk(entry.library, "[A-Za-z0-9_.-]{1,64}");
     clean(o.functions, o.truncated.functions, MaxListedFunctions,
-          [&](const FunctionEntry& entry) { return Matches(entry.name, "[A-Za-z0-9_.$]{1,128}") && !NamesHost(entry.name, host); },
+          [&](const FunctionEntry& entry) { return Matches(entry.name, "[A-Za-z0-9_.$]{1,128}") && SafeText(entry.name, host).has_value(); },
           [](const FunctionEntry& a, const FunctionEntry& b) { return a.calls != b.calls ? a.calls > b.calls : std::tie(a.library, a.name) < std::tie(b.library, b.name); });
     for (auto& entry : o.unsupported) {
         optionalOk(entry.encoding, "[A-Za-z0-9_]{1,32}");
@@ -491,7 +493,7 @@ void NormalizeObservations(Observations& o, const HostIdentifiers& host) {
         if (entry.opcodeValue && (*entry.opcodeValue < 0 || *entry.opcodeValue > 4294967295LL)) entry.opcodeValue.reset();
         if (entry.modifiers) {
             bool ok = entry.modifiers->size() <= 16u;
-            for (const auto& modifier : *entry.modifiers) ok = ok && Matches(modifier, "[a-z0-9][a-z0-9-]{0,31}") && !NamesHost(modifier, host);
+            for (const auto& modifier : *entry.modifiers) ok = ok && Matches(modifier, "[a-z0-9][a-z0-9-]{0,31}") && SafeText(modifier, host).has_value();
             if (!ok) entry.modifiers.reset();
         }
     }
@@ -2238,12 +2240,13 @@ extern "C" void LibcRunReportFramePresented_nid_no_patch() noexcept {
 
 namespace {
 
-// The library a source file belongs to: the folder after `prx/` in core/libs/prx/<library>/...
-std::string LibraryOf(std::string_view file) {
-    const auto at = file.rfind("prx/");
-    if (at == std::string_view::npos) return {};
-    const auto rest = file.substr(at + 4u);
-    return std::string(rest.substr(0, rest.find('/')));
+// The library a source belongs to: the folder after core/libs/prx/ in a source-tree relative path (as SourceOf returns it).
+std::string LibraryOf(std::string_view source) {
+    constexpr std::string_view root = "core/libs/prx/";
+    if (!source.starts_with(root)) return {};
+    const auto rest = source.substr(root.size());
+    const auto end = rest.find('/');
+    return end == std::string_view::npos ? std::string() : std::string(rest.substr(0, end));
 }
 
 // The exported name, without the suffix the runtime adds to its own symbols.
@@ -2261,7 +2264,7 @@ extern "C" void LibcRunReportMissingFunction_nid_no_patch(const char* name, cons
         if (collector == nullptr || name == nullptr) return;
         const std::string_view path = file != nullptr ? file : "";
         const auto source = RunReport::SourceOf(path, line);
-        collector->NoteMissingFunction(LibraryOf(path), ExportName(name), source.value_or(""), std::string(name) + " not implemented");
+        collector->NoteMissingFunction(source ? LibraryOf(*source) : std::string(), ExportName(name), source.value_or(""), std::string(name) + " not implemented");
     } catch (...) {
     }
 }

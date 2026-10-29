@@ -14,6 +14,8 @@ The report is written by default. Turn it off with the launch flag `--aps5-repor
 
 While a run is in progress, `anyps5-report.<run id>.ckpt` and `.lock` files sit in the same folder; a run killed from outside can leave them there until the next start recovers it. A checkpoint is refreshed every five seconds, so a recovered report's `seconds` can be up to five seconds short.
 
+A recovered report is read back strictly. A checkpoint is turned into a report only when it is exactly what the runtime would have written; one that is damaged, from another run, or that the privacy filter would change is dropped whole (it is renamed to `anyps5-report.<run id>.invalid` and no report is made for that run), never published in part.
+
 If a run ends without writing its report (power loss, forced kill, a crash the runtime can't handle), the next start writes a report for it, marked `recovered` and `incomplete`, with `exit: "killed"`. That means the run ended uncleanly for an unknown cause. It is not proof that anything killed the process.
 
 ## What `anyps5.modified` means
@@ -68,7 +70,7 @@ The pairs the schema enforces: `kind: none`, a clean exit and a reason of `guest
 | Windows | never recorded | recorded | recorded |
 | macOS | recorded | recorded | recorded |
 
-`coverage.milestones` is true on every system; it means the stage, the milestones the system records and the frame counts were collected. Read a missing `loaded` or `started` on Linux or Windows as "this system does not record it", never as "not reached": a report with `stage: first-draw` and no `loaded` is a run that drew. Only a stage lower than the one a milestone belongs to says it was not reached.
+`coverage.milestones` is true on every system; it means the stage, the milestones the system records and the frame counts were collected. Read a missing `loaded` or `started` on Linux or Windows as "this system does not record it", never as "not reached": a report with `stage: first-draw` and no `loaded` is a run that drew. The report says only what was observed: any other milestone that is missing may mean the run did not reach it, and it may mean the system does not record it, so read the table before you read a gap. `firstDraw` in particular is not set by compute work that is submitted and waited for on its own.
 
 ## What the runtime counts
 
