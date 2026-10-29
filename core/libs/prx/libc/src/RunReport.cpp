@@ -688,6 +688,16 @@ Report Sanitized(Report report, const HostIdentifiers& host) {
         if (value && (value->empty() || !SafeText(*value, names).has_value() || SerialLike(*value))) value.reset();
     };
     text(report.machine.osVersion, versionNames);
+    // The brand string of most Intel and some other CPUs ends in " @ 3.50GHz"; the clock is no identity, and the "@" would read as an address.
+    if (report.machine.cpu) {
+        auto& cpu = *report.machine.cpu;
+        static const std::regex clock(R"(\s*@\s*[0-9]{1,2}([.,][0-9]{1,3})?\s*[GMgm][Hh][Zz]\s*)");
+        const auto at = cpu.rfind('@');
+        if (at != std::string::npos && std::regex_match(cpu.begin() + static_cast<std::ptrdiff_t>(at), cpu.end(), clock)) {
+            cpu.erase(at);
+            while (!cpu.empty() && cpu.back() == ' ') cpu.pop_back();
+        }
+    }
     text(report.machine.cpu, machineNames);
     if (report.machine.ramGiB && (*report.machine.ramGiB < 1 || *report.machine.ramGiB > 1048576)) report.machine.ramGiB.reset();
     if (report.machine.gpu) {
@@ -1006,9 +1016,12 @@ int OpenFolderNoFollow(const fs::path& folder) {
     for (const auto& part : absolute.relative_path()) {
         if (!part.empty() && part != ".") parts.push_back(part);
     }
-#ifdef O_PATH
+#if defined(O_PATH)
     // A folder on the way only has to be passed through: O_PATH needs search permission and no read permission.
     constexpr int passThrough = O_PATH;
+#elif defined(O_SEARCH)
+    // macOS has no O_PATH; O_SEARCH asks for search permission only, where O_RDONLY would also need read permission on every folder above.
+    constexpr int passThrough = O_SEARCH;
 #else
     constexpr int passThrough = O_RDONLY;
 #endif
@@ -1019,9 +1032,7 @@ int OpenFolderNoFollow(const fs::path& folder) {
         const bool last = index + 1u == parts.size();
         // The last folder is the one the files are made in, and it is flushed, so it is opened for reading when it may be.
         int next = ::openat(current, parts[index].c_str(), (last ? O_RDONLY : passThrough) | O_DIRECTORY | O_NOFOLLOW | O_CLOEXEC);
-#ifdef O_PATH
-        if (next < 0 && last && errno == EACCES) next = ::openat(current, parts[index].c_str(), O_PATH | O_DIRECTORY | O_NOFOLLOW | O_CLOEXEC);
-#endif
+        if (next < 0 && last && errno == EACCES) next = ::openat(current, parts[index].c_str(), passThrough | O_DIRECTORY | O_NOFOLLOW | O_CLOEXEC);
         if (next < 0 && index == 0 && rootLinks < 8) {
             struct stat entry {};
             char target[PATH_MAX];
