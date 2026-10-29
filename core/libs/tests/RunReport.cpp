@@ -488,13 +488,15 @@ void RecoverySanitizesTest() {
     Directory executable, user;
     constexpr const char* IdC = "cccccccccccccccccccccccccccccccc";
     PlantCheckpoint(executable.path, IdC, CheckpointBody(IdC, "Example Game"));
-    PlantCheckpoint(executable.path, IdA, CheckpointBody(IdA, "see fe80::1 and bob@example.com"));
+    auto dirty = CheckpointBody(IdA, "Example Game");
+    dirty.replace(dirty.find("Example Game"), 12u, "see fe80::1 and bob@example.com");
+    PlantCheckpoint(executable.path, IdA, dirty);
     RunReport::Collector collector(SettingsFor(executable.path, user.path, IdB));
     Require(collector.Start(), "the collector did not start");
     const auto good = Read(executable.path / "reports" / IdC / "anyps5-report.json");
     Require(Contains(good, "\"recovered\": true") && Contains(good, "\"name\": \"Example Game\""), "a valid checkpoint was not recovered: " + good);
-    const auto filtered = Read(executable.path / "reports" / IdA / "anyps5-report.json");
-    Require(Contains(filtered, "\"recovered\": true") && !Contains(filtered, "fe80") && !Contains(filtered, "example.com"), "a recovered report kept private text: " + filtered);
+    // A checkpoint whose text the filters would change is not one this runtime wrote: it is rejected whole, not republished in part.
+    Require(!fs::exists(executable.path / "reports" / IdA / "anyps5-report.json"), "a checkpoint with private text was republished");
     collector.Finish(RunReport::Exit::Clean, {}, 0);
 }
 
@@ -577,6 +579,143 @@ void NumericLocaleTest() {
     std::setlocale(LC_NUMERIC, previous.c_str());
     Require(Contains(text, "\"seconds\": 12.500"), "the numeric locale changed the written number: " + text);
 #endif
+}
+
+
+void AncestorLinkTest() {
+#ifdef _WIN32
+    throw NotRun("symbolic links need a privilege here");
+#else
+    Directory directory;
+    fs::create_directories(directory.path / "real" / "sub");
+    fs::create_directory_symlink(directory.path / "real", directory.path / "link");
+    std::string error;
+    const bool wrote = RunReport::WriteAtomically(directory.path / "link" / "sub" / "anyps5-report.json", "x\n", "aaaaaaaa", error);
+    Require(!wrote && !fs::exists(directory.path / "real" / "sub" / "anyps5-report.json"), "a write went through a symbolic link above the parent folder");
+    Require(RunReport::WriteAtomically(directory.path / "real" / "sub" / "anyps5-report.json", "x\n", "bbbbbbbb", error), "a write through real folders failed: " + error);
+    std::string bytes;
+    Require(!RunReport::ReadBounded(directory.path / "link" / "sub" / "anyps5-report.json", 100, bytes), "a read went through a symbolic link above the parent folder");
+    Require(RunReport::ReadBounded(directory.path / "real" / "sub" / "anyps5-report.json", 100, bytes) && bytes == "x\n", "a read through real folders failed");
+#endif
+}
+
+void MetadataHostTokenTest() {
+    RunReport::HostIdentifiers host;
+    host.words = {"ab", "canaryuser", "vcanaryrel"};
+    auto report = SampleReport();
+    report.game.contentVersion = "ab";
+    report.build.release = "vcanaryrel";
+    report.game.titleId = "PPSA12345";
+    const auto text = RunReport::Serialize(report, host);
+    Require(Contains(text, "\"contentVersion\": null") && Contains(text, "\"release\": null"), "a version or release that names the host was kept: " + text);
+    Require(Contains(text, "\"titleId\": \"PPSA12345\""), "a harmless title id was dropped");
+    report.build.commit = "abc1234";
+    Require(Contains(RunReport::Serialize(report, host), "\"commit\": null"), "a commit that is not 40 hex digits was kept");
+}
+
+void PathDelimiterTest() {
+    RunReport::HostIdentifiers host;
+    for (const char* unsafe : {"file:/opt/x", "a:/opt/x", "a|/opt/x", "x;/srv/y"}) {
+        Require(!RunReport::SafeText(unsafe, host).has_value(), std::string("an unsafe text was kept: ") + unsafe);
+    }
+}
+
+void FinishWithStalledWriteTest() {
+    Directory executable, user;
+    std::atomic<bool> armed{false}, stuck{false}, release{false};
+    auto settings = SettingsFor(executable.path, user.path, IdA);
+    settings.worker = true;
+    settings.checkpointInterval = std::chrono::milliseconds(10);
+    settings.lockWait = std::chrono::milliseconds(150);
+    settings.duringCheckpointWrite = [&] {
+        if (!armed) return;
+        stuck = true;
+        while (!release) std::this_thread::sleep_for(std::chrono::milliseconds(5));
+    };
+    RunReport::Collector collector(std::move(settings));
+    Require(collector.Start(), "the collector did not start");
+    armed = true;
+    for (int attempt = 0; attempt < 400 && !stuck; ++attempt) std::this_thread::sleep_for(std::chrono::milliseconds(5));
+    Require(stuck, "the checkpoint worker never reached the write");
+    collector.Finish(RunReport::Exit::Clean, {}, 0);
+    const bool wrote = fs::exists(collector.ReportPath());
+    const bool kept = fs::exists(collector.CheckpointPath());
+    release = true;
+    Require(!wrote && kept, "Finish went on to replace the files while a checkpoint write was in progress");
+}
+
+void ResumeTest() {
+    Directory executable, user;
+    RunReport::Collector collector(SettingsFor(executable.path, user.path, IdA));
+    Require(collector.Start(), "the collector did not start");
+    collector.Finish(RunReport::Exit::Clean, {}, 0);
+    Require(collector.Finished() && !fs::exists(collector.CheckpointPath()), "the first finish did not finish");
+    Require(collector.Resume(), "the finished run could not be reopened");
+    Require(!collector.Finished() && fs::exists(collector.CheckpointPath()) && fs::exists(executable.path / ("anyps5-report." + std::string(IdA) + ".lock")), "a reopened run has no checkpoint and lock");
+    std::string warnings;
+    Require(RunReport::RecoverAbandonedRuns({executable.path}, warnings).empty(), "a reopened run was recovered while it was running");
+    collector.Finish(RunReport::Exit::Abort, {RunReport::Kind::Other, RunReport::Reason::Crash, std::nullopt}, std::nullopt);
+    Require(Contains(Read(collector.ReportPath()), "\"exit\": \"abort\"") && !fs::exists(collector.CheckpointPath()), "the second finish did not replace the report");
+}
+
+void StrictCheckpointTest() {
+    Directory executable, user;
+    constexpr const char* IdC = "cccccccccccccccccccccccccccccccc";
+    const auto good = CheckpointBody(IdA, "Example Game");
+    RunReport::HostIdentifiers host;
+    Require(RunReport::ParseCheckpoint(good, IdA, host).has_value(), "a genuine checkpoint was rejected");
+    auto missing = CheckpointBody(IdC, "Example Game");
+    const auto at = missing.find("  \"coverage\": {");
+    Require(at != std::string::npos, "the sample has no coverage object");
+    missing.erase(at, missing.find("},\n", at) + 3u - at);
+    auto extra = CheckpointBody(IdB, "Example Game");
+    extra.insert(extra.find("\"format\""), "\"extra\": 1,\n  ");
+    PlantCheckpoint(executable.path, IdC, missing);
+    PlantCheckpoint(executable.path, IdB, extra);
+    Require(!RunReport::ParseCheckpoint(missing, IdC, host) && !RunReport::ParseCheckpoint(extra, IdB, host), "a checkpoint that is not in the frozen shape was accepted");
+    RunReport::Collector collector(SettingsFor(executable.path, user.path, IdA));
+    Require(collector.Start(), "the collector did not start");
+    Require(!fs::exists(executable.path / "reports"), "part of an invalid checkpoint was republished");
+    collector.Finish(RunReport::Exit::Clean, {}, 0);
+}
+
+void EarlyIdentityTest() {
+    Directory executable, user;
+    auto settings = SettingsFor(executable.path, user.path, IdA);
+    settings.game = [] {
+        RunReport::GameInfo game;
+        game.titleId = "PPSA12345";
+        game.name = "Example Game";
+        return game;
+    };
+    RunReport::Collector collector(std::move(settings));
+    Require(collector.Start(), "the collector did not start");
+    Require(Contains(Read(collector.CheckpointPath()), "\"titleId\": \"PPSA12345\""), "the first checkpoint does not name the game");
+    collector.Finish(RunReport::Exit::Abort, {RunReport::Kind::Assert, RunReport::Reason::Crash, std::nullopt}, std::nullopt);
+    Require(Contains(Read(collector.ReportPath()), "\"titleId\": \"PPSA12345\"") && Contains(Read(collector.ReportPath()), "\"name\": \"Example Game\""), "a run that failed early was reported without its game");
+}
+
+void ComponentProvenanceTest() {
+    const std::string commit(40, 'a');
+    const auto modifiedOf = [&](const std::string& name) {
+        Directory executable, user;
+        auto settings = SettingsFor(executable.path, user.path, IdA);
+        settings.build.commit = commit;
+        settings.build.modified = false;
+        settings.requiredComponents = {name};
+        RunReport::Collector collector(std::move(settings));
+        Require(collector.Start(), "the collector did not start");
+        collector.Finish(RunReport::Exit::Clean, {}, 0);
+        const auto text = Read(collector.ReportPath());
+        return Contains(text, "\"modified\": null") ? std::string("null") : Contains(text, "\"modified\": true") ? std::string("true") : std::string("false");
+    };
+    Require(modifiedOf("unregistered-lib") == "null", "a missing component did not make modified unknown");
+    RunReport::RegisterComponent("same-lib", commit, 0);
+    Require(modifiedOf("same-lib") == "false", "a matching clean component changed modified");
+    RunReport::RegisterComponent("other-lib", std::string(40, 'b'), 0);
+    Require(modifiedOf("other-lib") == "null", "a component from another commit did not make modified unknown");
+    RunReport::RegisterComponent("dirty-lib", commit, 1);
+    Require(modifiedOf("dirty-lib") == "true", "a modified component did not make modified true");
 }
 
 #ifndef _WIN32
@@ -773,6 +912,14 @@ int main(int argc, char** argv) {
         Run("privacy-isolated", PrivacyIsolatedTest);
         Run("privacy-sweep", PrivacySweepTest);
         Run("numeric-locale", NumericLocaleTest);
+        Run("ancestor-link", AncestorLinkTest);
+        Run("metadata-host-token", MetadataHostTokenTest);
+        Run("path-delimiters", PathDelimiterTest);
+        Run("finish-with-stalled-write", FinishWithStalledWriteTest);
+        Run("resume", ResumeTest);
+        Run("strict-checkpoint", StrictCheckpointTest);
+        Run("early-identity", EarlyIdentityTest);
+        Run("component-provenance", ComponentProvenanceTest);
 #ifndef _WIN32
         Run("child-exit", ChildExitTest);
         Run("child-quit", ChildQuitTest);

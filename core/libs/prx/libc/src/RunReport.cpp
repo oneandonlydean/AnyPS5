@@ -230,27 +230,36 @@ std::string FormatUtc(std::chrono::system_clock::time_point time) {
     return text;
 }
 
-std::optional<std::string> SafeText(std::string_view text, const HostIdentifiers& host) {
-    std::size_t characters = 0;
-    if (text.empty() || !ValidUtf8(text, characters) || characters > MaxTextCharacters) return std::nullopt;
-    if (std::ranges::any_of(text, [](unsigned char character) { return character < 0x20u || character == 0x7fu; })) return std::nullopt;
+namespace {
+
+bool NamesHost(std::string_view text, const HostIdentifiers& host) {
     const auto lowered = Lower(text);
     for (const auto& word : host.words) {
         if (word.empty()) continue;
         const auto needle = Lower(word);
         if (needle.size() >= 3u) {
-            if (lowered.find(needle) != std::string::npos) return std::nullopt;
+            if (lowered.find(needle) != std::string::npos) return true;
             continue;
         }
         // A one or two character name cannot be searched for as a substring without dropping most texts, so match it as a whole word.
         for (std::size_t at = lowered.find(needle); at != std::string::npos; at = lowered.find(needle, at + 1u)) {
             const bool startsWord = at == 0u || !std::isalnum(static_cast<unsigned char>(lowered[at - 1u]));
             const bool endsWord = at + needle.size() >= lowered.size() || !std::isalnum(static_cast<unsigned char>(lowered[at + needle.size()]));
-            if (startsWord && endsWord) return std::nullopt;
+            if (startsWord && endsWord) return true;
         }
     }
+    return false;
+}
+
+}
+
+std::optional<std::string> SafeText(std::string_view text, const HostIdentifiers& host) {
+    std::size_t characters = 0;
+    if (text.empty() || !ValidUtf8(text, characters) || characters > MaxTextCharacters) return std::nullopt;
+    if (std::ranges::any_of(text, [](unsigned char character) { return character < 0x20u || character == 0x7fu; })) return std::nullopt;
+    if (NamesHost(text, host)) return std::nullopt;
     static const std::regex addresses(R"((\b\d{1,3}(\.\d{1,3}){3}\b)|(([0-9A-Fa-f]{2}[:-]){5}[0-9A-Fa-f]{2})|((^|[^0-9A-Za-z:])(([0-9A-Fa-f]{1,4})?:){2,7}[0-9A-Fa-f]{0,4}($|[^0-9A-Za-z:]))|(\d{8,}))");
-    static const std::regex paths(R"((^|[\s"'(=,;<>\[{])(/[^\s/]|~/|%[A-Za-z_]+%|[A-Za-z]:[\\/]|\\\\|file:))");
+    static const std::regex paths(R"((^|[\s"'(=,;:|<>\[{])(/[^\s/]|~/|%[A-Za-z_]+%|[A-Za-z]:[\\/]|\\\\|file:))");
     const std::string owned(text);
     if (owned.find('@') != std::string::npos || owned.find("://") != std::string::npos) return std::nullopt;
     if (std::regex_search(owned, addresses) || std::regex_search(owned, paths)) return std::nullopt;
@@ -402,10 +411,14 @@ Report Sanitized(Report report, const HostIdentifiers& host) {
         return value && std::regex_match(*value, std::regex(pattern));
     };
     if (!std::regex_match(report.generated, std::regex(R"(\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}Z)"))) report.generated = "1970-01-01T00:00:00Z";
-    if (!matches(report.build.commit, "[0-9a-f]{7,64}")) report.build.commit.reset();
+    if (!matches(report.build.commit, "[0-9a-f]{40}")) report.build.commit.reset();
     if (!matches(report.build.release, "v[0-9A-Za-z][0-9A-Za-z._-]{0,62}")) report.build.release.reset();
     if (!matches(report.game.titleId, "[A-Z]{4}[0-9]{5}")) report.game.titleId.reset();
     if (!matches(report.game.contentVersion, "[0-9A-Za-z._-]{1,32}")) report.game.contentVersion.reset();
+    // A value that fits its pattern can still be a host identifier (a version or release tag that is a user name).
+    for (auto* value : {&report.build.commit, &report.build.release, &report.game.titleId, &report.game.contentVersion, &report.os}) {
+        if (*value && NamesHost(**value, host)) value->reset();
+    }
     if (report.game.name) report.game.name = SafeText(*report.game.name, host);
     if (report.stop.source) report.stop.source = SafeText(*report.stop.source, host);
     if (report.os && *report.os != "linux" && *report.os != "windows" && *report.os != "macos") report.os.reset();
@@ -496,6 +509,31 @@ bool ReparseOrMissing(const fs::path& path, bool& reparse, bool& directory) {
     directory = (attributes & FILE_ATTRIBUTE_DIRECTORY) != 0;
     return true;
 }
+
+// Every folder from the drive root down to `folder` must exist, be a folder and not be a link or junction.
+bool FolderChainIsReal(const fs::path& folder) {
+    auto absolute = fs::absolute(folder);
+    for (auto at = absolute; ; at = at.parent_path()) {
+        if (at == at.root_path()) return true;
+        bool reparse = false, directory = false;
+        if (!ReparseOrMissing(at, reparse, directory) || reparse || !directory) return false;
+        if (at.parent_path() == at) return true;
+    }
+}
+#else
+// Opens `folder` one component at a time with O_NOFOLLOW, so a link anywhere in the chain (not only in the last name) fails the open.
+int OpenFolderNoFollow(const fs::path& folder) {
+    const auto absolute = fs::absolute(folder).lexically_normal();
+    int current = ::open("/", O_RDONLY | O_DIRECTORY | O_CLOEXEC);
+    for (const auto& part : absolute.relative_path()) {
+        if (current < 0) return -1;
+        if (part.empty() || part == ".") continue;
+        const int next = ::openat(current, part.c_str(), O_RDONLY | O_DIRECTORY | O_NOFOLLOW | O_CLOEXEC);
+        ::close(current);
+        current = next;
+    }
+    return current;
+}
 #endif
 
 }
@@ -506,7 +544,7 @@ bool WriteAtomically(const fs::path& target, std::string_view bytes, std::string
     const auto temporaryName = "." + leaf + "." + std::string(uniqueName) + ".tmp";
 #ifdef _WIN32
     bool reparse = false, directory = false;
-    if (!ReparseOrMissing(parent, reparse, directory) || reparse || !directory) {
+    if (!FolderChainIsReal(parent)) {
         error = "the destination folder is missing, a link or not a folder";
         return false;
     }
@@ -542,7 +580,7 @@ bool WriteAtomically(const fs::path& target, std::string_view bytes, std::string
     return true;
 #else
     // Every step goes through one descriptor of the parent folder opened without following a link, so a link in the parent cannot redirect the write.
-    const int folder = ::open(parent.c_str(), O_RDONLY | O_DIRECTORY | O_NOFOLLOW | O_CLOEXEC);
+    const int folder = OpenFolderNoFollow(parent);
     if (folder < 0) {
         error = "the destination folder is missing, a link or not a folder";
         return false;
@@ -585,15 +623,18 @@ bool WriteAtomically(const fs::path& target, std::string_view bytes, std::string
         error = "replacing the destination failed";
         return false;
     }
-    ::fsync(folder);
+    // Without this flush the rename can be lost on a power cut; a file system that cannot flush a folder says EINVAL or ENOTSUP.
+    const bool flushed = ::fsync(folder) == 0 || errno == EINVAL || errno == ENOTSUP;
     ::close(folder);
-    return true;
+    if (!flushed) error = "flushing the destination folder failed";
+    return flushed;
 #endif
 }
 
 bool ReadBounded(const fs::path& path, std::size_t limit, std::string& bytes) {
     bytes.clear();
 #ifdef _WIN32
+    if (!FolderChainIsReal(path.parent_path())) return false;
     HANDLE file = CreateFileW(path.c_str(), GENERIC_READ, FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE, nullptr, OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL | FILE_FLAG_OPEN_REPARSE_POINT, nullptr);
     if (file == INVALID_HANDLE_VALUE) return false;
     BY_HANDLE_FILE_INFORMATION information{};
@@ -609,7 +650,10 @@ bool ReadBounded(const fs::path& path, std::size_t limit, std::string& bytes) {
     return ok && bytes.size() <= limit;
 #else
     // One no-follow descriptor is checked and read, so the file cannot be swapped between the check and the read.
-    const int descriptor = ::open(path.c_str(), O_RDONLY | O_NOFOLLOW | O_CLOEXEC | O_NONBLOCK);
+    const int folder = OpenFolderNoFollow(path.parent_path().empty() ? fs::path(".") : path.parent_path());
+    if (folder < 0) return false;
+    const int descriptor = ::openat(folder, path.filename().c_str(), O_RDONLY | O_NOFOLLOW | O_CLOEXEC | O_NONBLOCK);
+    ::close(folder);
     if (descriptor < 0) return false;
     struct stat information{};
     bool ok = ::fstat(descriptor, &information) == 0 && S_ISREG(information.st_mode) && information.st_uid == geteuid();
@@ -855,7 +899,7 @@ std::optional<Report> ParseCheckpoint(std::string_view bytes, std::string_view i
     report.incomplete = true;
     report.stop = Stop{Kind::Other, Reason::UncleanUnknown, std::nullopt};
     if (const auto* build = Member(root, "anyps5", Json::Type::Object)) {
-        report.build.commit = NullableText(*build, "commit", "[0-9a-f]{7,64}");
+        report.build.commit = NullableText(*build, "commit", "[0-9a-f]{40}");
         report.build.release = NullableText(*build, "release", "v[0-9A-Za-z][0-9A-Za-z._-]{0,62}");
         if (const auto* modified = Member(*build, "modified", Json::Type::Bool)) report.build.modified = modified->boolean;
     }
@@ -865,6 +909,9 @@ std::optional<Report> ParseCheckpoint(std::string_view bytes, std::string_view i
         if (const auto* name = Member(*game, "name", Json::Type::String)) report.game.name = SafeText(name->text, host);
     }
     if (const auto* system = Member(root, "system", Json::Type::Object)) report.os = NullableText(*system, "os", "linux|windows|macos");
+    // Our writer is deterministic, so a genuine checkpoint is byte for byte what the fields read back would serialize to.
+    // Anything else (a missing object, an extra key, a value the filters would change) is rejected whole, never republished in part.
+    if (Serialize(report, host) != bytes) return std::nullopt;
     return report;
 }
 
@@ -964,6 +1011,54 @@ std::vector<fs::path> RecoverAbandonedRuns(const std::vector<fs::path>& director
     return recovered;
 }
 
+namespace {
+
+struct Component {
+    std::string name;
+    std::string commit;
+    int modified = -1;
+};
+
+std::mutex componentsMutex;
+
+std::vector<Component>& Components() {
+    static std::vector<Component> components;
+    return components;
+}
+
+}
+
+void RegisterComponent(std::string_view name, std::string_view commit, int modified) {
+    std::lock_guard guard(componentsMutex);
+    auto& components = Components();
+    for (auto& component : components) {
+        if (component.name == name) {
+            component.commit = commit;
+            component.modified = modified;
+            return;
+        }
+    }
+    components.push_back({std::string(name), std::string(commit), modified});
+}
+
+// `modified` is only known when every required library was built from the same commit as libc; otherwise it is unknown.
+BuildInfo Collector::Provenance() const {
+    BuildInfo build = settings.build;
+    if (settings.requiredComponents.empty() || !build.modified) return build;
+    std::lock_guard guard(componentsMutex);
+    bool modified = *build.modified;
+    for (const auto& name : settings.requiredComponents) {
+        const auto found = std::ranges::find(Components(), name, &Component::name);
+        if (found == Components().end() || !build.commit || found->commit != *build.commit || found->modified < 0) {
+            build.modified.reset();
+            return build;
+        }
+        modified = modified || found->modified != 0;
+    }
+    build.modified = modified;
+    return build;
+}
+
 Collector::Collector(Settings value) : settings(std::move(value)) {
     if (!Hex32(settings.runId)) settings.runId = GenerateRunId();
     host = CurrentHostIdentifiers();
@@ -1027,13 +1122,62 @@ bool Collector::Start() {
     }
     started_ = true;
     if (settings.worker) worker = std::thread([this] { Work(); });
+    NoteGame();
     return true;
 }
 
-void Collector::RefreshGame() {
+void Collector::NoteGame() {
+    try {
+        RefreshGame();
+        WriteCheckpoint();
+    } catch (...) {
+    }
+}
+
+void Collector::BeginWorker() {
+    try {
+        std::lock_guard guard(mutex);
+        if (!started_ || state != 0 || stopWorker || worker.joinable()) return;
+        worker = std::thread([this] { Work(); });
+    } catch (...) {
+    }
+}
+
+bool Collector::Resume() {
+    try {
+        std::thread old;
+        {
+            std::lock_guard guard(mutex);
+            if (!started_ || state != 2) return false;
+            old = std::move(worker);
+        }
+        if (old.joinable()) old.join();
+        bool busy = false;
+        auto acquired = FileLock::TryAcquire(lockPath, busy);
+        if (!acquired) return false;
+        lock = std::move(acquired);
+        {
+            std::lock_guard guard(mutex);
+            state = 0;
+            stopWorker = false;
+            workerBusy = false;
+        }
+        if (!WriteCheckpoint()) return false;
+        if (settings.worker) {
+            std::lock_guard guard(mutex);
+            worker = std::thread([this] { Work(); });
+        }
+        return true;
+    } catch (...) {
+        return false;
+    }
+}
+
+void Collector::RefreshGame(bool force) {
     {
         std::lock_guard guard(gameMutex);
-        if (gameKnown || !settings.game || gameAttempts >= 3) return;
+        // The worker gives up after a few failures; the end of a clean run may still try once more.
+        if (gameKnown || !settings.game || (!force && gameAttempts >= 5)) return;
         ++gameAttempts;
     }
     // The provider may take the metadata lock and parse files, so no collector lock is held while it runs.
@@ -1048,7 +1192,7 @@ void Collector::RefreshGame() {
 Report Collector::Snapshot(Exit exit, Stop stop, std::optional<std::int64_t> exitCode, bool recovered) const {
     Report report;
     report.generated = FormatUtc(std::chrono::system_clock::now());
-    report.build = settings.build;
+    report.build = Provenance();
     {
         std::lock_guard guard(gameMutex);
         report.game = gameCache;
@@ -1082,9 +1226,10 @@ Report Collector::Snapshot(Exit exit, Stop stop, std::optional<std::int64_t> exi
 bool Collector::WriteCheckpoint() {
     try {
         std::unique_lock guard(writeMutex, std::defer_lock);
-        if (!guard.try_lock_for(std::chrono::seconds(2))) return false;
+        if (!guard.try_lock_for(settings.lockWait)) return false;
         // A finish that has begun owns the files: a late checkpoint would be taken for a killed run.
         if (started_ && state != 0) return false;
+        if (settings.duringCheckpointWrite) settings.duringCheckpointWrite();
         const auto text = Serialize(Snapshot(Exit::Killed, Stop{Kind::Other, Reason::UncleanUnknown, std::nullopt}, std::nullopt, true), host);
         std::string error;
         return WriteAtomically(checkpointPath, text, settings.runId.substr(0, 8), error);
@@ -1141,9 +1286,16 @@ void Collector::Finish(Exit exit, Stop stop, std::optional<std::int64_t> exitCod
             changed.wait_for(guard, std::chrono::seconds(1), [this] { return !workerBusy; });
         }
         // Only a normal end reads the game's metadata; a failing thread may be holding the lock it needs.
-        if (exit == Exit::Clean) RefreshGame();
+        if (exit == Exit::Clean) RefreshGame(true);
         std::unique_lock files(writeMutex, std::defer_lock);
-        static_cast<void>(files.try_lock_for(std::chrono::seconds(2)));
+        if (!files.try_lock_for(settings.lockWait)) {
+            // A checkpoint write is stuck. Touching the same files now could race it, so leave the last checkpoint for the next start to recover.
+            std::fputs("[run-report] a checkpoint write did not finish; the report of this run is left to the next start\n", stderr);
+            std::lock_guard guard(mutex);
+            state = 2;
+            changed.notify_all();
+            return;
+        }
         try {
             const auto text = Serialize(Snapshot(exit, std::move(stop), exitCode, false), host);
             std::string error;
@@ -1162,7 +1314,7 @@ void Collector::Finish(Exit exit, Stop stop, std::optional<std::int64_t> exitCod
         } catch (...) {
             std::fputs("[run-report] could not write the report\n", stderr);
         }
-        if (files.owns_lock()) files.unlock();
+        files.unlock();
         std::lock_guard guard(mutex);
         state = 2;
         changed.notify_all();
@@ -1231,6 +1383,7 @@ bool StartRunReport() noexcept {
         if (*APS5_REPORT_RELEASE != '\0') settings.build.release = APS5_REPORT_RELEASE;
         if (APS5_REPORT_MODIFIED >= 0) settings.build.modified = APS5_REPORT_MODIFIED != 0;
         settings.game = ProvideGame;
+        settings.requiredComponents = {"libkernel", "libSceVideoOut", "libSceSystemService"};
         auto* created = new RunReport::Collector(std::move(settings));
         if (!created->Start()) {
             delete created;
@@ -1250,6 +1403,23 @@ bool StartRunReport() noexcept {
 
 extern "C" void LibcRunReportSetGameProvider_nid_no_patch(bool (*provider)(RunReportGame*)) {
     gameProvider.store(provider, std::memory_order_release);
+    // The game's identity goes into the checkpoint as soon as it can be read, so a run that fails early still names its game.
+    if (collector != nullptr) collector->NoteGame();
+}
+
+extern "C" void LibcRunReportResume_nid_no_patch() noexcept {
+    if (collector != nullptr) collector->Resume();
+}
+
+extern "C" void LibcRunReportBeginWorker_nid_no_patch() noexcept {
+    if (collector != nullptr) collector->BeginWorker();
+}
+
+extern "C" void LibcRunReportRegisterComponent_nid_no_patch(const char* name, const char* commit, int modified) noexcept {
+    try {
+        if (name != nullptr) RunReport::RegisterComponent(name, commit != nullptr ? commit : "", modified);
+    } catch (...) {
+    }
 }
 
 extern "C" void LibcRunReportQuitRequested_nid_no_patch() noexcept {
@@ -1270,3 +1440,13 @@ extern "C" void LibcRunReportFinishAbort_nid_no_patch(int kind) noexcept {
 extern "C" const char* LibcRunReportRelaunchEnvironment_nid_no_patch() noexcept {
     return relaunchChoice;
 }
+
+#ifdef _WIN32
+// ExitProcess, which the generated entry stub calls when the guest returns from its entry, detaches this library with a non-null
+// reserved argument. That is the one place every Windows exit passes through, so the report is finished here; the exit status is
+// not known at this point. Only file I/O runs: no thread is waited for and no library is loaded.
+extern "C" BOOL WINAPI DllMain(HINSTANCE, DWORD reason, LPVOID reserved) {
+    if (reason == DLL_PROCESS_DETACH && reserved != nullptr) FinishAtExit();
+    return TRUE;
+}
+#endif

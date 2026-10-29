@@ -3,6 +3,7 @@
 #include "prx/libkernel/AppMetadata/include/ParamSfoParser.hpp"
 #include "prx/libc/include/General.hpp"
 #include "prx/libc/include/RunReport.hpp"
+#include "prx/libc/include/RunReportComponent.hpp"
 
 #include <algorithm>
 #include <cstdint>
@@ -69,6 +70,8 @@ bool ProvideRunReportGame(RunReportGame* game) {
     std::memcpy(game->name, g_title, std::min(sizeof(g_title), sizeof(game->name) - 1u));
     return true;
 }
+
+APS5_RUN_REPORT_COMPONENT("libkernel")
 
 [[maybe_unused]] const bool g_runReportGameProvider = (LibcRunReportSetGameProvider_nid_no_patch(&ProvideRunReportGame), true);
 

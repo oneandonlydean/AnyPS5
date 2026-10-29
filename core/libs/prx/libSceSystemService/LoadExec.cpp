@@ -1,6 +1,7 @@
 #include "LoadExec.hpp"
 #include "prx/libc/include/General.hpp"
 #include "prx/libc/include/RunReport.hpp"
+#include "prx/libc/include/RunReportComponent.hpp"
 #include "prx/libc/include/Shutdown.hpp"
 #include <array>
 #include <algorithm>
@@ -29,6 +30,8 @@ extern char** environ;
 #include <spawn.h>
 #include <unistd.h>
 #endif
+
+APS5_RUN_REPORT_COMPONENT("libSceSystemService")
 
 namespace {
 
@@ -138,12 +141,13 @@ Handle Duplicate(HANDLE source, DWORD access) {
     try {
         LibcStartExit_nid_postfix();
         LibcRunShutdown_nid_postfix();
-        LibcRunReportFinishExit_nid_no_patch(0);
         std::fflush(nullptr);
+        LibcRunReportFinishExit_nid_no_patch(0);
         if (ResumeThread(thread.get()) == static_cast<DWORD>(-1))
             throw std::system_error(GetLastError(), std::system_category(), "LoadExec: starting the converted executable");
     } catch (...) {
         TerminateProcess(child.get(), 1);
+        LibcRunReportResume_nid_no_patch();
         throw;
     }
     thread.reset();
@@ -168,17 +172,23 @@ Handle Duplicate(HANDLE source, DWORD access) {
     LibcStartExit_nid_postfix();
     LibcRunShutdown_nid_postfix();
     std::fflush(nullptr);
-    if (const int host = HostStandardError_nid_no_patch(); host >= 0 && dup2(host, 2) != 2)
-        throw std::system_error(errno, std::generic_category(), "LoadExec: giving the host standard error back to descriptor 2");
-    std::filesystem::current_path(target.parent_path());
-    if ((descriptor > 3 && close_range(3, static_cast<unsigned>(descriptor - 1), 0) != 0) ||
-        close_range(static_cast<unsigned>(std::max(3, descriptor + 1)), ~0u, 0) != 0)
-        throw std::system_error(errno, std::generic_category(), "LoadExec: closing the old executable's descriptors");
-    // The report is finished at the last point where the replacement can still fail, and the choice made with --aps5-report goes along in the environment.
     if (const char* choice = LibcRunReportRelaunchEnvironment_nid_no_patch()) setenv("APS5_REPORT", choice, 1);
+    // The report is finished while the run still owns its lock and files, before close_range closes them. If the replacement then
+    // fails, the run goes on, so the report is reopened and the failure is thrown as before.
     LibcRunReportFinishExit_nid_no_patch(0);
-    fexecve(descriptor, pointers.data(), environ);
-    throw std::system_error(errno, std::generic_category(), "LoadExec: replacing the executable");
+    try {
+        if (const int host = HostStandardError_nid_no_patch(); host >= 0 && dup2(host, 2) != 2)
+            throw std::system_error(errno, std::generic_category(), "LoadExec: giving the host standard error back to descriptor 2");
+        std::filesystem::current_path(target.parent_path());
+        if ((descriptor > 3 && close_range(3, static_cast<unsigned>(descriptor - 1), 0) != 0) ||
+            close_range(static_cast<unsigned>(std::max(3, descriptor + 1)), ~0u, 0) != 0)
+            throw std::system_error(errno, std::generic_category(), "LoadExec: closing the old executable's descriptors");
+        fexecve(descriptor, pointers.data(), environ);
+        throw std::system_error(errno, std::generic_category(), "LoadExec: replacing the executable");
+    } catch (...) {
+        LibcRunReportResume_nid_no_patch();
+        throw;
+    }
 }
 #elif defined(__APPLE__)
 [[noreturn]] void Replace(const std::filesystem::path& target, const std::vector<std::string>& arguments) {
@@ -200,17 +210,22 @@ Handle Duplicate(HANDLE source, DWORD access) {
     LibcStartExit_nid_postfix();
     LibcRunShutdown_nid_postfix();
     std::fflush(nullptr);
-    if (const int host = HostStandardError_nid_no_patch(); host >= 0 && dup2(host, 2) != 2)
-        throw std::system_error(errno, std::generic_category(), "LoadExec: giving the host standard error back to descriptor 2");
-    for (const int standard : {STDIN_FILENO, STDOUT_FILENO, STDERR_FILENO}) {
-        if (fcntl(standard, F_GETFD) != -1 && posix_spawn_file_actions_addinherit_np(&actions, standard) != 0)
-            throw std::runtime_error("LoadExec: keeping the standard streams");
-    }
-    std::filesystem::current_path(target.parent_path());
     if (const char* choice = LibcRunReportRelaunchEnvironment_nid_no_patch()) setenv("APS5_REPORT", choice, 1);
     LibcRunReportFinishExit_nid_no_patch(0);
-    const int error = posix_spawn(nullptr, target.c_str(), &actions, &attributes, pointers.data(), *_NSGetEnviron());
-    throw std::system_error(error, std::generic_category(), "LoadExec: replacing the executable");
+    try {
+        if (const int host = HostStandardError_nid_no_patch(); host >= 0 && dup2(host, 2) != 2)
+            throw std::system_error(errno, std::generic_category(), "LoadExec: giving the host standard error back to descriptor 2");
+        for (const int standard : {STDIN_FILENO, STDOUT_FILENO, STDERR_FILENO}) {
+            if (fcntl(standard, F_GETFD) != -1 && posix_spawn_file_actions_addinherit_np(&actions, standard) != 0)
+                throw std::runtime_error("LoadExec: keeping the standard streams");
+        }
+        std::filesystem::current_path(target.parent_path());
+        const int error = posix_spawn(nullptr, target.c_str(), &actions, &attributes, pointers.data(), *_NSGetEnviron());
+        throw std::system_error(error, std::generic_category(), "LoadExec: replacing the executable");
+    } catch (...) {
+        LibcRunReportResume_nid_no_patch();
+        throw;
+    }
 }
 #endif
 

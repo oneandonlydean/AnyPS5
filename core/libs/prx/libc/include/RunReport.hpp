@@ -29,6 +29,12 @@ extern "C" void LibcRunReportFinishExit_nid_no_patch(int exitCode) noexcept;
 extern "C" void LibcRunReportFinishAbort_nid_no_patch(int kind) noexcept;
 // "0", "1" or null: what APS5_REPORT must be in a relaunched process so that the choice made with --aps5-report survives it.
 extern "C" const char* LibcRunReportRelaunchEnvironment_nid_no_patch() noexcept;
+// A relaunch finishes the report before it replaces the process; when the replacement fails this reopens the run.
+extern "C" void LibcRunReportResume_nid_no_patch() noexcept;
+// Starts the checkpoint worker where it could not be started during loading (Windows); a no-op elsewhere.
+extern "C" void LibcRunReportBeginWorker_nid_no_patch() noexcept;
+// Every runtime library built from the same checkout registers itself; a library from another build makes `modified` unknown.
+extern "C" void LibcRunReportRegisterComponent_nid_no_patch(const char* name, const char* commit, int modified) noexcept;
 
 namespace RunReport {
 
@@ -93,8 +99,15 @@ struct Settings {
     std::function<GameInfo()> game;
     // Called by Finish after the report is on disk and before the checkpoint is removed (tests only).
     std::function<void()> beforeCheckpointRemoval;
+    // Called while a checkpoint is being written and the write lock is held (tests only).
+    std::function<void()> duringCheckpointWrite;
+    // How long Finish waits for a checkpoint write that is in progress before it leaves the files alone.
+    std::chrono::milliseconds lockWait{2000};
+    // Component names that must have registered the same commit for `modified` to be known.
+    std::vector<std::string> requiredComponents;
 };
 
+void RegisterComponent(std::string_view name, std::string_view commit, int modified);
 std::string GenerateRunId();
 std::string FormatUtc(std::chrono::system_clock::time_point time);
 std::string Serialize(const Report& report);
@@ -145,10 +158,16 @@ public:
     const std::filesystem::path& CheckpointPath() const noexcept { return checkpointPath; }
     Report Snapshot(Exit exit, Stop stop, std::optional<std::int64_t> exitCode, bool recovered) const;
     bool WriteCheckpoint();
+    // Reopens a run that Finish has already finished (a relaunch whose replacement failed).
+    bool Resume();
+    void BeginWorker();
+    // Reads the game metadata now; a run that fails early still names its game.
+    void NoteGame();
 
 private:
     void Work();
-    void RefreshGame();
+    void RefreshGame(bool force = false);
+    BuildInfo Provenance() const;
 
     Settings settings;
     std::filesystem::path directory;

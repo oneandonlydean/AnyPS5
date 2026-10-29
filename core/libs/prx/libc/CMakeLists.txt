@@ -127,6 +127,17 @@ add_custom_target(run_report_revision
 add_dependencies(libc run_report_revision)
 target_include_directories(libc PRIVATE ${runReportRevisionRoot})
 
+# The libraries that register themselves with the run report are built against the same revision header.
+function(run_report_stamp_components root)
+    foreach(component libkernel libSceVideoOut libSceSystemService)
+        if(TARGET ${component})
+            target_include_directories(${component} PRIVATE ${root})
+            add_dependencies(${component} run_report_revision)
+        endif()
+    endforeach()
+endfunction()
+cmake_language(EVAL CODE "cmake_language(DEFER DIRECTORY [[${CMAKE_SOURCE_DIR}]] CALL run_report_stamp_components [[${runReportRevisionRoot}]])")
+
 set_source_files_properties(${CMAKE_CURRENT_SOURCE_DIR}/src/MathExact.cpp
         TARGET_DIRECTORY libc PROPERTIES COMPILE_OPTIONS "-frounding-math")
 
