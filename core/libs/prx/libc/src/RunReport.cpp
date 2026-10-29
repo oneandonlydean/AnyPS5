@@ -1347,11 +1347,41 @@ private:
         if (Literal("true")) { out.type = Json::Type::Bool; out.boolean = true; return true; }
         if (Literal("false")) { out.type = Json::Type::Bool; return true; }
         if (Literal("null")) return true;
-        const char* begin = text.data() + at;
-        const auto result = std::from_chars(begin, text.data() + text.size(), out.number);
-        if (result.ec != std::errc() || result.ptr == begin) return false;
         out.type = Json::Type::Number;
-        at += static_cast<std::size_t>(result.ptr - begin);
+        return NumberValue(out.number);
+    }
+
+    // The numbers the writer produces: an optional minus, digits and at most nine decimals, no exponent. libc++ has no floating-point
+    // from_chars and strtod reads the numeric locale, so the value is built from integers: a mantissa below 2^53 over a power of ten
+    // up to 1e9 is one correctly rounded division, the same double on every host.
+    bool NumberValue(double& value) {
+        std::size_t i = at;
+        const bool negative = i < text.size() && text[i] == '-';
+        if (negative) ++i;
+        const std::size_t integerStart = i;
+        std::uint64_t mantissa = 0;
+        const auto digits = [&](std::size_t& count) {
+            while (i < text.size() && text[i] >= '0' && text[i] <= '9') {
+                if (++count > 16) return false;
+                mantissa = mantissa * 10u + static_cast<std::uint64_t>(text[i] - '0');
+                ++i;
+            }
+            return true;
+        };
+        std::size_t integerDigits = 0, fractionDigits = 0;
+        if (!digits(integerDigits) || integerDigits == 0 || (integerDigits > 1 && text[integerStart] == '0')) return false;
+        if (i < text.size() && text[i] == '.') {
+            ++i;
+            std::size_t total = integerDigits;
+            if (!digits(total)) return false;
+            fractionDigits = total - integerDigits;
+            if (fractionDigits == 0 || fractionDigits > 9) return false;
+        }
+        if (mantissa > (std::uint64_t{1} << 53)) return false;
+        static constexpr double kPowers[] = {1.0, 1e1, 1e2, 1e3, 1e4, 1e5, 1e6, 1e7, 1e8, 1e9};
+        const double magnitude = static_cast<double>(mantissa) / kPowers[fractionDigits];
+        value = negative ? -magnitude : magnitude;
+        at = i;
         return true;
     }
 

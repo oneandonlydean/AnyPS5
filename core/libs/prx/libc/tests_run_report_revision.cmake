@@ -59,7 +59,11 @@ file(WRITE "${repo}/third/stray.txt" "x\n")
 expect(submodule-untracked "${repo}" 1)
 file(REMOVE "${repo}/third/stray.txt")
 expect(submodule-clean "${repo}" 0)
+# The build folder of a CI checkout sits inside the repository, so git would find it from here: git stops the search below a ceiling.
+get_filename_component(workParent "${WORK}" DIRECTORY)
+set(ENV{GIT_CEILING_DIRECTORIES} "${workParent}")
 expect(not-a-repo "${WORK}" -1)
+unset(ENV{GIT_CEILING_DIRECTORIES})
 
 message(STATUS "revision cases: ${cases}, failed: ${failures}")
 if(cases EQUAL 0 OR failures GREATER 0)
