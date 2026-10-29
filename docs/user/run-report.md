@@ -64,6 +64,10 @@ The pairs the schema enforces: `kind: none`, a clean exit and a reason of `guest
 
 `stop.message` is built from a fixed template, never a raw error string, and is at most 300 characters. `stop.source` is a source-tree path with a line number, or null when unknown (native crashes, for example).
 
+## What `system` holds
+
+`system.osVersion` is the operating system name and version (on Linux the distribution name from `os-release` and the kernel release), `system.cpu` is the CPU model name, `system.ramGiB` is the installed memory in whole GiB, and `system.gpu` is the graphics device the runtime selected: `vendor` (from the PCI vendor id: `AMD`, `NVIDIA`, `Intel`, `Apple` or `Other`), `name`, `driver` (the driver's own name and version text) and `vulkan` (the API version of the device). `gpu` is set when the device is selected, so it is null in a report of a run that stopped before that, and in a report recovered from a checkpoint written before it. These are model and version names, not names of the machine or its user: the host name and user name are never read, and the strings are still filtered for addresses, account numbers and paths. The Windows and macOS readers are written but have not been run yet.
+
 ## Which milestones a system records
 
 | System | `loaded`, `started` | `firstDraw`, `firstPresent` | `stage`, `framesPresented`, frame rate |

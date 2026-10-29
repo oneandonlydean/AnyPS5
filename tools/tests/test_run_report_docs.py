@@ -71,6 +71,17 @@ class MilestoneDocsTests(unittest.TestCase):
         text = (ROOT / ".github/DISCUSSION_TEMPLATE/game-bring-up.yml").read_text(encoding="utf-8")
         self.assertRegex(text, r"attach the file")
 
+    def test_usage_says_where_each_report_lands_and_what_a_killed_run_says(self):
+        text = (ROOT / "docs/user/USAGE.md").read_text(encoding="utf-8")
+        self.assertRegex(text, r"A run that was killed \(found at the next start next to the game\)")
+        self.assertRegex(text, r"`reports/<run id>/anyps5-report.json` in the run folder, not next to the executable")
+        self.assertIn("`kind: other`, `reason: unclean-unknown`", text)
+
+    def test_system_fields_are_documented(self):
+        text = (ROOT / "docs/user/run-report.md").read_text(encoding="utf-8")
+        for field in ("system.osVersion", "system.cpu", "system.ramGiB", "system.gpu"):
+            self.assertIn(field, text)
+
     def test_usage_says_the_same(self):
         text = (ROOT / "docs/user/USAGE.md").read_text(encoding="utf-8")
         self.assertRegex(text, r"either one the run did not reach or one this system does not record")

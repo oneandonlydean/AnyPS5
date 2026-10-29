@@ -15,6 +15,9 @@
 #include <regex>
 #include <set>
 #include <system_error>
+#if defined(__x86_64__) || defined(__i386__)
+#include <cpuid.h>
+#endif
 #include <tuple>
 
 #ifdef _WIN32
@@ -24,6 +27,13 @@
 #include <windows.h>
 #include <io.h>
 #else
+#include <sys/utsname.h>
+#ifdef __linux__
+#include <sys/sysinfo.h>
+#endif
+#ifdef __APPLE__
+#include <sys/sysctl.h>
+#endif
 #include <fcntl.h>
 #include <sys/file.h>
 #include <pwd.h>
@@ -208,6 +218,107 @@ bool Hex32(std::string_view text) {
     return text.size() == 32u && std::ranges::all_of(text, [](char c) { return (c >= '0' && c <= '9') || (c >= 'a' && c <= 'f'); });
 }
 
+}
+
+namespace {
+
+std::string CollapseSpaces(std::string_view text) {
+    std::string result;
+    bool space = true;
+    for (const char c : text) {
+        if (c == ' ' || c == '\t' || c == '\n' || c == '\r' || c == '\0') {
+            if (!space) result += ' ';
+            space = true;
+        } else {
+            result += c;
+            space = false;
+        }
+    }
+    while (!result.empty() && result.back() == ' ') result.pop_back();
+    return result;
+}
+
+// The marketing name of the CPU from the CPUID brand string, where the CPU has one.
+std::optional<std::string> CpuBrand() {
+#if defined(__x86_64__) || defined(__i386__)
+    unsigned eax = 0, ebx = 0, ecx = 0, edx = 0;
+    if (__get_cpuid(0x80000000u, &eax, &ebx, &ecx, &edx) && eax >= 0x80000004u) {
+        char brand[49] = {};
+        for (unsigned leaf = 0; leaf < 3u; ++leaf) {
+            __get_cpuid(0x80000002u + leaf, &eax, &ebx, &ecx, &edx);
+            std::memcpy(brand + leaf * 16u, &eax, 4);
+            std::memcpy(brand + leaf * 16u + 4u, &ebx, 4);
+            std::memcpy(brand + leaf * 16u + 8u, &ecx, 4);
+            std::memcpy(brand + leaf * 16u + 12u, &edx, 4);
+        }
+        auto text = CollapseSpaces(brand);
+        if (!text.empty()) return text;
+    }
+#endif
+#ifdef __linux__
+    std::ifstream cpuinfo("/proc/cpuinfo");
+    for (std::string line; std::getline(cpuinfo, line);) {
+        if (line.rfind("model name", 0) == 0 || line.rfind("Model", 0) == 0) {
+            const auto colon = line.find(':');
+            if (colon != std::string::npos) {
+                auto text = CollapseSpaces(line.substr(colon + 1u));
+                if (!text.empty()) return text;
+            }
+        }
+    }
+#endif
+    return std::nullopt;
+}
+
+std::int64_t WholeGiB(std::uint64_t bytes) {
+    return static_cast<std::int64_t>((bytes + (1ull << 29u)) >> 30u);
+}
+
+}
+
+SystemInfo ProbeHost() {
+    SystemInfo info;
+    info.cpu = CpuBrand();
+#if defined(__linux__)
+    std::string name;
+    std::ifstream release("/etc/os-release");
+    for (std::string line; std::getline(release, line);) {
+        if (line.rfind("PRETTY_NAME=", 0) == 0) {
+            name = line.substr(12u);
+            if (name.size() >= 2u && (name.front() == '"' || name.front() == '\'')) name = name.substr(1u, name.size() - 2u);
+            break;
+        }
+    }
+    utsname kernel{};
+    const std::string version = uname(&kernel) == 0 ? std::string(kernel.release) : std::string();
+    if (!name.empty() || !version.empty()) info.osVersion = CollapseSpaces(name.empty() ? "Linux " + version : name + (version.empty() ? "" : " (kernel " + version + ")"));
+    struct sysinfo memory{};
+    if (sysinfo(&memory) == 0) info.ramGiB = WholeGiB(static_cast<std::uint64_t>(memory.totalram) * memory.mem_unit);
+#elif defined(__APPLE__)
+    char buffer[256] = {};
+    std::size_t size = sizeof(buffer);
+    if (sysctlbyname("kern.osproductversion", buffer, &size, nullptr, 0) == 0) info.osVersion = "macOS " + CollapseSpaces(buffer);
+    std::uint64_t memory = 0;
+    size = sizeof(memory);
+    if (sysctlbyname("hw.memsize", &memory, &size, nullptr, 0) == 0) info.ramGiB = WholeGiB(memory);
+    size = sizeof(buffer);
+    std::memset(buffer, 0, sizeof(buffer));
+    if (!info.cpu && sysctlbyname("machdep.cpu.brand_string", buffer, &size, nullptr, 0) == 0) info.cpu = CollapseSpaces(buffer);
+#elif defined(_WIN32)
+    using RtlGetVersionFn = LONG(WINAPI*)(OSVERSIONINFOW*);
+    if (const HMODULE ntdll = GetModuleHandleW(L"ntdll.dll")) {
+        if (const auto function = reinterpret_cast<RtlGetVersionFn>(reinterpret_cast<void*>(GetProcAddress(ntdll, "RtlGetVersion")))) {
+            OSVERSIONINFOW version{};
+            version.dwOSVersionInfoSize = sizeof(version);
+            if (function(&version) == 0) info.osVersion = "Windows " + std::to_string(version.dwMajorVersion) + "." + std::to_string(version.dwMinorVersion) + " build " + std::to_string(version.dwBuildNumber);
+        }
+    }
+    MEMORYSTATUSEX memory{};
+    memory.dwLength = sizeof(memory);
+    if (GlobalMemoryStatusEx(&memory)) info.ramGiB = WholeGiB(memory.ullTotalPhys);
+#endif
+    if (info.ramGiB && *info.ramGiB < 1) info.ramGiB.reset();
+    return info;
 }
 
 std::string GenerateRunId() {
@@ -432,6 +543,23 @@ Report Sanitized(Report report, const HostIdentifiers& host) {
     }
     if (report.stop.message) report.stop.message = SafeText(*report.stop.message, host);
     if (report.os && *report.os != "linux" && *report.os != "windows" && *report.os != "macos") report.os.reset();
+    // The machine: model strings pass the same text filter as everything else; a value outside its schema pattern is left out.
+    // Model names are public (a distribution, a CPU, a GPU) and are not compared with the host's own names: a machine named after its
+    // distribution would otherwise lose its OS version. Addresses, account numbers, paths and e-mail addresses are still filtered.
+    const HostIdentifiers publicNames;
+    const auto text = [&](std::optional<std::string>& value) {
+        if (value && (value->empty() || !SafeText(*value, publicNames).has_value())) value.reset();
+    };
+    text(report.machine.osVersion);
+    text(report.machine.cpu);
+    if (report.machine.ramGiB && (*report.machine.ramGiB < 1 || *report.machine.ramGiB > 1048576)) report.machine.ramGiB.reset();
+    if (report.machine.gpu) {
+        auto& gpu = *report.machine.gpu;
+        text(gpu.name);
+        text(gpu.driver);
+        if (gpu.vendor && *gpu.vendor != "AMD" && *gpu.vendor != "NVIDIA" && *gpu.vendor != "Intel" && *gpu.vendor != "Apple" && *gpu.vendor != "Other") gpu.vendor.reset();
+        if (gpu.vulkan && !matches(gpu.vulkan, "[0-9]{1,3}\\.[0-9]{1,3}\\.[0-9]{1,5}")) gpu.vulkan.reset();
+    }
     if (!Hex32(report.runId)) report.runId = std::string(32u, '0');
     return report;
 }
@@ -548,10 +676,19 @@ std::string RenderReport(const Report& report) {
     json.EndObject();
     json.BeginObject("system");
     json.String("os", report.os);
-    json.Null("osVersion");
-    json.Null("cpu");
-    json.Null("ramGiB");
-    json.Null("gpu");
+    json.String("osVersion", report.machine.osVersion);
+    json.String("cpu", report.machine.cpu);
+    json.Int("ramGiB", report.machine.ramGiB);
+    if (report.machine.gpu) {
+        json.BeginObject("gpu");
+        json.String("vendor", report.machine.gpu->vendor);
+        json.String("name", report.machine.gpu->name);
+        json.String("driver", report.machine.gpu->driver);
+        json.String("vulkan", report.machine.gpu->vulkan);
+        json.EndObject();
+    } else {
+        json.Null("gpu");
+    }
     json.EndObject();
     json.BeginObject("run");
     json.String("id", std::string_view(report.runId));
@@ -1272,7 +1409,20 @@ std::optional<Report> ParseCheckpoint(std::string_view bytes, std::string_view i
         report.game.contentVersion = NullableText(*game, "contentVersion", "[0-9A-Za-z._-]{1,32}");
         if (const auto* name = Member(*game, "name", Json::Type::String)) report.game.name = SafeText(name->text, host);
     }
-    if (const auto* system = Member(root, "system", Json::Type::Object)) report.os = NullableText(*system, "os", "linux|windows|macos");
+    if (const auto* system = Member(root, "system", Json::Type::Object)) {
+        report.os = NullableText(*system, "os", "linux|windows|macos");
+        if (const auto* version = Member(*system, "osVersion", Json::Type::String)) report.machine.osVersion = version->text;
+        if (const auto* cpu = Member(*system, "cpu", Json::Type::String)) report.machine.cpu = cpu->text;
+        report.machine.ramGiB = IntegerOf(*system, "ramGiB");
+        if (const auto* gpu = Member(*system, "gpu", Json::Type::Object)) {
+            GpuInfo parsed;
+            if (const auto* vendor = Member(*gpu, "vendor", Json::Type::String)) parsed.vendor = vendor->text;
+            if (const auto* name = Member(*gpu, "name", Json::Type::String)) parsed.name = name->text;
+            if (const auto* driver = Member(*gpu, "driver", Json::Type::String)) parsed.driver = driver->text;
+            if (const auto* vulkan = Member(*gpu, "vulkan", Json::Type::String)) parsed.vulkan = vulkan->text;
+            report.machine.gpu = std::move(parsed);
+        }
+    }
     if (!ParseObservations(root, *run, report.observed)) return std::nullopt;
     // Our writer is deterministic, so a genuine checkpoint is byte for byte what the fields read back would serialize to.
     // Anything else (a missing object, an extra key, a value the filters would change) is rejected whole, never republished in part.
@@ -1515,6 +1665,12 @@ Collector::~Collector() {
 
 bool Collector::Start() {
     started = std::chrono::steady_clock::now();
+    {
+        // What the host is; read once. The GPU is added when the device code reports it.
+        auto probed = settings.machine ? *settings.machine : ProbeHost();
+        std::lock_guard guard(machineMutex);
+        machineInfo = std::move(probed);
+    }
     const auto executableDirectory = settings.executableDirectory.empty() ? fs::path() : Canonical(settings.executableDirectory);
     const auto userDirectory = settings.userStateDirectory.empty() ? fs::path() : Canonical(settings.userStateDirectory);
     const auto userReports = userDirectory.empty() ? fs::path() : userDirectory / "reports";
@@ -1671,6 +1827,10 @@ Report Collector::Snapshot(Exit exit, Stop stop, std::optional<std::int64_t> exi
     report.generated = FormatUtc(std::chrono::system_clock::now());
     report.build = Provenance();
     {
+        std::lock_guard guard(machineMutex);
+        report.machine = machineInfo;
+    }
+    {
         std::lock_guard guard(game->mutex);
         report.game = game->cache;
     }
@@ -1780,6 +1940,14 @@ void Collector::CheckpointSoon() {
 
 std::unique_lock<std::timed_mutex> Collector::LockTablesForTest() {
     return std::unique_lock<std::timed_mutex>(tables->mutex);
+}
+
+void Collector::NoteGpu(GpuInfo gpu) {
+    {
+        std::lock_guard guard(machineMutex);
+        machineInfo.gpu = std::move(gpu);
+    }
+    CheckpointSoon();
 }
 
 void Collector::NoteLost(int section) {
@@ -2229,6 +2397,20 @@ extern "C" void LibcRunReportFinishAbort_nid_no_patch(int kind) noexcept {
 
 extern "C" bool LibcRunReportEnabled_nid_no_patch() noexcept {
     return collector != nullptr;
+}
+
+extern "C" void LibcRunReportSetGpu_nid_no_patch(unsigned vendorId, const char* name, const char* driver, unsigned apiVersion) noexcept {
+    try {
+        if (collector == nullptr) return;
+        RunReport::GpuInfo gpu;
+        gpu.vendor = vendorId == 0x1002u ? "AMD" : vendorId == 0x10deu ? "NVIDIA" : vendorId == 0x8086u ? "Intel" : vendorId == 0x106bu ? "Apple" : "Other";
+        if (name != nullptr && *name != '\0') gpu.name = name;
+        if (driver != nullptr && *driver != '\0') gpu.driver = driver;
+        // VK_API_VERSION: variant 3 bits, major 7, minor 10, patch 12.
+        gpu.vulkan = std::to_string((apiVersion >> 22u) & 0x7fu) + "." + std::to_string((apiVersion >> 12u) & 0x3ffu) + "." + std::to_string(apiVersion & 0xfffu);
+        collector->NoteGpu(std::move(gpu));
+    } catch (...) {
+    }
 }
 
 extern "C" void LibcRunReportMilestone_nid_no_patch(int milestone) noexcept {

@@ -37,6 +37,11 @@ inline bool Take(const void* commands) {
     return false;
 }
 
+// How many buffers carry a mark on this thread (tests).
+inline std::size_t Count() {
+    return Local().count;
+}
+
 inline void Forget(const void* commands) {
     static_cast<void>(Take(commands));
 }

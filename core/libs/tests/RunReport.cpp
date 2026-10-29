@@ -767,6 +767,75 @@ void HostileFieldLiveAndRecoveredTest() {
 #endif
 }
 
+void SystemFieldsTest() {
+    Directory executable, user;
+    auto settings = Covered(executable.path, user.path, IdA);
+    settings.worker = true;
+    settings.checkpointInterval = std::chrono::milliseconds(10);
+    RunReport::SystemInfo machine;
+    machine.osVersion = "Test Linux 1 (kernel 6.1.0)";
+    machine.cpu = "Test CPU 9000 8-Core Processor";
+    machine.ramGiB = 32;
+    settings.machine = machine;
+    {
+        RunReport::Collector collector(std::move(settings));
+        Require(collector.Start(), "the collector did not start");
+        // Before the device code reports the GPU, system.gpu is null and the rest of the machine is there.
+        auto early = Read(collector.CheckpointPath());
+        Require(Contains(early, "\"osVersion\": \"Test Linux 1 (kernel 6.1.0)\"") && Contains(early, "\"ramGiB\": 32") && Contains(early, "\"gpu\": null"), "the machine fields are wrong before the GPU is known: " + early);
+        RunReport::GpuInfo gpu;
+        gpu.vendor = "NVIDIA";
+        gpu.name = "Test GPU 4090";
+        gpu.driver = "NVIDIA 575.64.03";
+        gpu.vulkan = "1.3.280";
+        collector.NoteGpu(gpu);
+        bool written = false;
+        for (int attempt = 0; attempt < 300 && !written; ++attempt) {
+            std::this_thread::sleep_for(std::chrono::milliseconds(10));
+            written = Contains(Read(collector.CheckpointPath()), "\"vulkan\": \"1.3.280\"");
+        }
+        Require(written, "the GPU did not reach the checkpoint");
+        collector.Finish(RunReport::Exit::Clean, {}, 0);
+        const auto text = Read(collector.ReportPath());
+        for (const char* part : {"\"vendor\": \"NVIDIA\"", "\"name\": \"Test GPU 4090\"", "\"driver\": \"NVIDIA 575.64.03\"", "\"vulkan\": \"1.3.280\"", "\"cpu\": \"Test CPU 9000 8-Core Processor\""}) {
+            Require(Contains(text, part), std::string("the report lacks ") + part + ": " + text);
+        }
+    }
+    // An address or an account number in a machine string never reaches the report. Model names are public and are not compared with
+    // the host's own names (a machine named after its distribution keeps its OS version).
+    Directory other, userOther;
+    auto hostile = Covered(other.path, userOther.path, IdB);
+    RunReport::SystemInfo named;
+    named.osVersion = "Linux 192.0.2.123 build";
+    named.cpu = "CPU acct123456789012";
+    named.gpu = RunReport::GpuInfo{std::string("Other"), std::string("GPU 10.1.2.3"), std::string("driver 1.0"), std::string("1.3.280")};
+    hostile.machine = named;
+    RunReport::Collector collector(std::move(hostile));
+    Require(collector.Start(), "the collector did not start");
+    collector.Finish(RunReport::Exit::Clean, {}, 0);
+    const auto text = Read(collector.ReportPath());
+    Require(!Contains(text, "192.0.2.123") && !Contains(text, "123456789012") && !Contains(text, "10.1.2.3"), "a machine string kept an address or an account number: " + text);
+    Require(Contains(text, "\"osVersion\": null") && Contains(text, "\"cpu\": null") && Contains(text, "\"driver\": \"driver 1.0\""), "a clean machine value was lost or an unsafe one kept: " + text);
+}
+
+void HostProbeTest() {
+#ifndef __linux__
+    throw NotRun("the host probe is checked on Linux here");
+#else
+    const auto host = RunReport::ProbeHost();
+    Require(host.ramGiB && *host.ramGiB >= 1, "the memory size of this host was not read");
+    Require(host.osVersion && !host.osVersion->empty(), "the operating system version of this host was not read");
+#if defined(__x86_64__) || defined(__i386__)
+    Require(host.cpu && !host.cpu->empty(), "the CPU model of this host was not read");
+#endif
+    // None of it is an address, an account number or a path.
+    const RunReport::HostIdentifiers names;
+    for (const auto& value : {host.osVersion, host.cpu}) {
+        if (value) Require(RunReport::SafeText(*value, names).has_value(), "a probed value would be filtered out of the report: " + *value);
+    }
+#endif
+}
+
 void NumericLocaleTest() {
 #ifdef _WIN32
     throw NotRun("locale names differ");
@@ -1526,6 +1595,16 @@ void LibraryFromSourceTest() {
     Require(!Contains(text, "libB") && !Contains(text, "/home/x"), "a deeper prx/ folder or a host path got into the report: " + text);
 }
 
+void ChildGpuTest() {
+    Directory directory;
+    RunChild(CopySelf(directory), directory.path, "gpu");
+    const auto text = Report(directory);
+    for (const char* part : {"\"vendor\": \"NVIDIA\"", "\"name\": \"Test GPU 4090\"", "\"driver\": \"NVIDIA 575.64.03\"", "\"vulkan\": \"1.3.280\""}) {
+        Require(Contains(text, part), std::string("the GPU the device code reported is not in the report: ") + part + ": " + text);
+    }
+    Require(!Contains(text, "\"cpu\": null") && !Contains(text, "\"ramGiB\": null") && !Contains(text, "\"osVersion\": null"), "the host fields of a real run are null: " + text);
+}
+
 void ChildAssertTest() {
     Directory directory;
     const int status = RunChild(CopySelf(directory), directory.path, "assert");
@@ -1576,11 +1655,15 @@ void Dump(const fs::path& directory) {
     o.unsupported = {{std::string("VOP3"), std::string("V_CVT_PK_U8_F32"), 256, std::vector<std::string>{"clamp"}, 150}, {std::nullopt, std::nullopt, 4000, std::nullopt, 2}};
     o.imageFormats = {{1, std::string("GuestFormat1"), RunReport::Status::Rejected, 0, 100}, {2, std::nullopt, RunReport::Status::Unknown, 5, 3}};
     o.descriptors = {{0, RunReport::Status::Accepted, 0, 900}, {6, RunReport::Status::Unknown, 3, 2}};
-    write("rich.json", rich);
     auto zero = SampleReport();
     zero.observed.coverage = {true, true, true, true, true, true};
     zero.observed.loaded = 1.0; zero.observed.started = 1.2; zero.observed.firstDraw = 3.0;
     write("zero-present.json", zero);
+    rich.machine.osVersion = "Test Linux 1 (kernel 6.1.0)";
+    rich.machine.cpu = "Test CPU 9000 8-Core Processor";
+    rich.machine.ramGiB = 32;
+    rich.machine.gpu = RunReport::GpuInfo{std::string("NVIDIA"), std::string("Test GPU 4090"), std::string("NVIDIA 575.64.03"), std::string("1.3.280")};
+    write("rich.json", rich);
     auto many = rich;
     many.observed.functions.clear();
     for (int index = 0; index < 400; ++index) many.observed.functions.push_back({std::string("libMany"), "function" + std::to_string(1000 + index), 1 + index % 7});
@@ -1634,6 +1717,11 @@ int main(int argc, char** argv) {
                 LibcTerminate_nid_no_patch(0);
             }
             if (mode == "return") return 5;
+            if (mode == "gpu") {
+                LibcRunReportSetGpu_nid_no_patch(0x10deu, "Test GPU 4090", "NVIDIA 575.64.03", (1u << 22u) | (3u << 12u) | 280u);
+                LibcRunReportFinishExit_nid_no_patch(0);
+                return 0;
+            }
             if (mode == "library-path") {
                 LibcRunReportMissingFunction_nid_no_patch("fnX_nid_postfix", "/home/x/core/libs/prx/libA/sub/prx/libB/c.cpp", 5);
                 LibcRunReportFinishExit_nid_no_patch(0);
@@ -1725,6 +1813,8 @@ int main(int argc, char** argv) {
         Run("source-boundary", SourceBoundaryTest);
         Run("build-identity-survives", BuildIdentitySurvivesTest);
         Run("junction", JunctionTest);
+        Run("system-fields", SystemFieldsTest);
+        Run("host-probe", HostProbeTest);
         Run("commit-with-hex-name", CommitWithHexNameTest);
         Run("search-only-ancestor", SearchOnlyAncestorTest);
         Run("format-stop-key", FormatStopKeyTest);
@@ -1743,6 +1833,7 @@ int main(int argc, char** argv) {
         Run("child-abort", ChildAbortTest);
         Run("child-std-terminate", ChildTerminateTest);
         Run("child-assert", ChildAssertTest);
+        Run("child-gpu", ChildGpuTest);
         Run("child-library-from-source", LibraryFromSourceTest);
         Run("child-missing-function", ChildMissingFunctionTest);
         Run("child-caught-missing-function", ChildCaughtMissingFunctionTest);

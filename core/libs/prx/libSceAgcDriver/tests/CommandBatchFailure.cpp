@@ -1,4 +1,5 @@
 #include "prx/libSceAgcDriver/Graphics/include/Resources.hpp"
+#include "prx/libSceAgcDriver/Graphics/include/GuestWorkMark.hpp"
 #include "prx/libSceAgcDriver/Execution/include/GuestMemory.hpp"
 #include "prx/libSceAgcDriver/Execution/include/PerformanceTimer.hpp"
 #include "AllocationFailure.hpp"
@@ -193,6 +194,71 @@ bool RunCase(const Context& original, Fault fault, bool wait, bool native) {
     return passed;
 }
 
+// The first-draw mark of the run report lives with the command buffer's batch: a successful submit consumes it, a batch that is released
+// without a successful submit (a failed submit, or never submitted) forgets it, and a later batch that is handed the same buffer handle
+// carries nothing. The fake allocator hands out the same handle every time, which is exactly the reuse case.
+bool RunMarkCases(const Context& original) {
+    namespace Mark = AgcDriver::Graphics::GuestWorkMark;
+    unsigned failures = 0;
+    const auto expect = [&](bool condition, const char* what) {
+        if (!condition) {
+            std::fprintf(stderr, "guest work mark: %s\n", what);
+            ++failures;
+        }
+    };
+    const void* const handle = reinterpret_cast<const void*>(std::uintptr_t{4});
+    const auto start = [&](Fault fault) {
+        probe = {};
+        probe.fault = fault;
+        activeDevice = original.device;
+        activeQueue = original.queue;
+        auto context = original;
+        context.deviceProc = DeviceProc;
+        while (Mark::Count() != 0) Mark::Forget(handle);
+        return context;
+    };
+    {   // a marked batch that submits: the mark is consumed by the submit, not before and not after
+        const auto context = start(Fault::None);
+        CommandBatch batch(context);
+        NoteGuestWorkOnCommandBuffer(batch.Handle());
+        expect(Mark::Count() == 1, "the mark was not recorded");
+        batch.Submit();
+        expect(Mark::Count() == 0, "a successful submit left the mark");
+        batch.Wait();
+    }
+    {   // a waited batch does not leave a mark for the next batch that gets the same handle
+        const auto context = start(Fault::None);
+        { CommandBatch first(context); NoteGuestWorkOnCommandBuffer(first.Handle()); first.SubmitAndWait(); }
+        CommandBatch second(context);
+        expect(second.Handle() == handle, "the fake did not hand out the same handle");
+        expect(!Mark::Take(second.Handle()), "a later batch with the same handle carried the earlier mark");
+    }
+    {   // a failed submit keeps no mark once the batch is released, so the next batch with this handle is not marked
+        const auto context = start(Fault::Submit);
+        try {
+            CommandBatch batch(context);
+            NoteGuestWorkOnCommandBuffer(batch.Handle());
+            batch.Submit();
+            expect(false, "the injected submit failure did not throw");
+        } catch (const std::runtime_error&) {
+        }
+        expect(Mark::Count() == 0, "a released batch whose submit failed left its mark");
+        expect(!Mark::Take(handle), "a failed batch's mark can be taken by the next batch");
+    }
+    {   // a batch that was marked and never submitted
+        const auto context = start(Fault::None);
+        { CommandBatch batch(context); NoteGuestWorkOnCommandBuffer(batch.Handle()); }
+        expect(Mark::Count() == 0, "an abandoned batch left its mark");
+    }
+    {   // the same handle recorded by two batches in turn: each carries only its own mark
+        const auto context = start(Fault::None);
+        { CommandBatch a(context); NoteGuestWorkOnCommandBuffer(a.Handle()); a.SubmitAndWait(); }
+        { CommandBatch b(context); NoteGuestWorkOnCommandBuffer(b.Handle()); expect(Mark::Count() == 1, "the second recording was not marked"); b.SubmitAndWait(); }
+        expect(Mark::Count() == 0, "a mark outlived its submit");
+    }
+    return failures == 0;
+}
+
 }
 
 void AgcDriver::Tests::RunCommandBatchFailureTests(const AgcDriver::Graphics::Context& context, bool native) {
@@ -202,5 +268,6 @@ void AgcDriver::Tests::RunCommandBatchFailureTests(const AgcDriver::Graphics::Co
         for (const auto wait : {false, true}) if (!RunCase(context, fault, wait, native)) ++failures;
     }
     for (const auto fault : {Fault::End, Fault::Submit}) if (!RunCase(context, fault, false, native)) ++failures;
+    if (!native && !RunMarkCases(context)) ++failures;
     Require(failures == 0, "command batch failure handling released pending work or lost its submission state");
 }

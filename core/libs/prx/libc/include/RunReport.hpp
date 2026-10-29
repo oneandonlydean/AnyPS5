@@ -66,6 +66,9 @@ extern "C" void LibcRunReportSetDescriptorCounters_nid_no_patch(const std::atomi
 extern "C" void LibcRunReportSetFormatCounters_nid_no_patch(const std::atomic<unsigned long long>* counters, unsigned count) noexcept;
 // The run ended on a shader instruction the recompiler cannot translate (the failure reached the driver as fatal).
 extern "C" void LibcRunReportUnsupportedShaderStop_nid_no_patch(const char* encoding, const char* opcode, long long opcodeValue, const char* file, int line) noexcept;
+// The graphics device the runtime selected: PCI vendor id, device name, driver text and the Vulkan API version word. Called once, after
+// the device is chosen; the report writes `system.gpu` from it (null when this was never called, e.g. the run stopped before GPU setup).
+extern "C" void LibcRunReportSetGpu_nid_no_patch(unsigned vendorId, const char* name, const char* driver, unsigned apiVersion) noexcept;
 // Writes the key a rejected format is filed under (the text its lookup throws) into `buffer`, always null-terminated, and returns its
 // length. Other libraries get the key through this call: C++ symbols of libc are not exported to them, only the _nid_no_patch names.
 extern "C" unsigned long LibcRunReportUnsupportedFormatKey_nid_no_patch(unsigned format, char* buffer, unsigned long size) noexcept;
@@ -154,6 +157,22 @@ struct BuildInfo {
     std::optional<bool> modified;
 };
 
+struct GpuInfo {
+    std::optional<std::string> vendor;
+    std::optional<std::string> name;
+    std::optional<std::string> driver;
+    std::optional<std::string> vulkan;
+};
+
+// The machine the run was on: operating system version, CPU model, total memory in whole GiB and the selected GPU. Model strings only:
+// nothing that names the machine or its user.
+struct SystemInfo {
+    std::optional<std::string> osVersion;
+    std::optional<std::string> cpu;
+    std::optional<std::int64_t> ramGiB;
+    std::optional<GpuInfo> gpu;
+};
+
 struct GameInfo {
     std::optional<std::string> titleId;
     std::optional<std::string> contentVersion;
@@ -165,6 +184,7 @@ struct Report {
     BuildInfo build;
     GameInfo game;
     std::optional<std::string> os;
+    SystemInfo machine;
     std::string runId;
     double seconds = 0.0;
     Exit exit = Exit::Clean;
@@ -207,6 +227,8 @@ struct Settings {
     std::vector<std::string> requiredComponents;
     // Hooks start the checkpoint worker when it could not be started during loading (Windows), the first time they ask for a checkpoint.
     bool deferredWorker = false;
+    // Replaces the probe of the host (tests).
+    std::optional<SystemInfo> machine;
     // Which sections this build collects; a section that is off is reported as not covered, not as empty.
     Coverage coverage;
 };
@@ -217,6 +239,8 @@ std::optional<std::string> SourceOf(std::string_view file, int line);
 // The key a rejected format is filed under: the text the lookup throws, without any prefix the thrower adds. An abort whose message
 // ends with it is the stop for that format.
 std::string UnsupportedFormatKey(unsigned format);
+// Reads the operating system version, the CPU model and the memory size of this host (the GPU is reported by the device code).
+SystemInfo ProbeHost();
 std::string GenerateRunId();
 std::string FormatUtc(std::chrono::system_clock::time_point time);
 std::string Serialize(const Report& report);
@@ -277,6 +301,8 @@ public:
     void NoteImageFormat(std::int64_t format, std::optional<std::string> name, Status status, int usage);
     void NoteDescriptor(int type, Status status, int usage);
     void NoteStop(Stop stop);
+    // The device the runtime selected (system.gpu); also requests a checkpoint.
+    void NoteGpu(GpuInfo gpu);
     // `prefixed`: the thrower puts a known prefix ("AGC graphics: ") in front of the message, so that form matches too. Every other
     // failure matches its message exactly: "read" must not be taken for the end of "pread".
     void NoteSoftStop(Stop stop, std::string terminatingMessage, bool prefixed = false);
@@ -329,6 +355,8 @@ private:
     bool started_ = false;
     struct GameState;
     std::shared_ptr<GameState> game;
+    mutable std::mutex machineMutex;
+    SystemInfo machineInfo;
     bool workerRunning = false;
     bool workerWanted = false;
     bool reportPublished = false;

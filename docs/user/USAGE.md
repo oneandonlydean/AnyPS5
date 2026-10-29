@@ -387,7 +387,16 @@ Every run of a converted game writes `anyps5-report.json` when it ends: what the
 
 The report is on by default. `--aps5-report=off` on the launch command line or `APS5_REPORT=0` in the environment turns it off, and `--aps5-report=on` or `APS5_REPORT=1` turns it on for a process that is not a converted game; the flag wins over the variable. The game sees the flag in its own arguments. With the report off nothing is collected and nothing is written.
 
-The report is written next to the game's executable. If that folder cannot be written it goes to the AnyPS5 data folder under `reports/<run id>/`. While a run is going, `anyps5-report.<run id>.ckpt` and `.lock` files are kept in the same folder; a run that is killed from outside leaves them there, and the next start turns them into a report marked `recovered` and `incomplete` (`exit: killed`, which means the run ended without writing a report, not that anything killed it).
+Where each kind of report lands (the "run folder" is the folder of the game's executable; the "data folder" is `$XDG_DATA_HOME/AnyPS5` or `~/.local/share/AnyPS5` on Linux, `%LOCALAPPDATA%\AnyPS5` on Windows, `~/Library/Application Support/AnyPS5` on macOS):
+
+| Report | Where |
+|---|---|
+| A run that ended normally | `anyps5-report.json` in the run folder |
+| The same, when the run folder cannot be written | `reports/<run id>/anyps5-report.json` in the data folder |
+| A run that was killed (found at the next start next to the game) | `reports/<run id>/anyps5-report.json` in the run folder, not next to the executable |
+| A run that was killed after the fallback to the data folder | `reports/<run id>/anyps5-report.json` in the data folder, beside its checkpoint |
+
+A report made from a checkpoint always has `exit: killed`, `recovered: true`, `incomplete: true` and the fixed stop `kind: other`, `reason: unclean-unknown`, with the message "The run ended without writing a report; this one was recovered from a checkpoint." It means the run ended without writing its own report; it does not say what ended it. While a run is going, `anyps5-report.<run id>.ckpt` and `.lock` files are kept in the same folder; a run that is killed from outside leaves them there, and the next start turns them into a report marked `recovered` and `incomplete` (`exit: killed`, which means the run ended without writing a report, not that anything killed it).
 
 Which milestones a run records depends on the system:
 
