@@ -93,6 +93,9 @@ private:
     VkDeviceMemory memory = VK_NULL_HANDLE;
 };
 
+// Guest draw commands were recorded into `commands`, a waited CommandBatch's buffer: its successful submit is the first-draw milestone.
+void NoteGuestWorkOnCommandBuffer(VkCommandBuffer commands);
+
 class CommandBatch {
 public:
     explicit CommandBatch(const Context& context);

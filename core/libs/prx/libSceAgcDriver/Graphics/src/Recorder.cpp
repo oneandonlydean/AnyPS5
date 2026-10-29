@@ -1284,10 +1284,10 @@ std::uint64_t Recorder::RecordedWorkSinceSubmit() {
     return workSinceSubmit.load(std::memory_order_relaxed);
 }
 
-void Recorder::NoteGuestWork() {
-    // Nothing is done with the report off; the answer cannot change after startup.
-    static const bool reporting = LibcRunReportEnabled_nid_no_patch();
-    if (reporting && open != nullptr) open->guestWork = true;
+bool Recorder::NoteGuestWork(VkCommandBuffer commands) {
+    if (open == nullptr || open->commands != commands) return false;
+    open->guestWork = true;
+    return true;
 }
 
 void Recorder::CountRecordedWork() {

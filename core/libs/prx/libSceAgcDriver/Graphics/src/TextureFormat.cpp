@@ -115,7 +115,8 @@ const FormatEntry& findFormatEntry(std::uint32_t guestFormat) {
         // 0 sampled .. 5 other: the lookup does not know the use, so it is reported as other. The stop names the format.
         LibcRunReportImageFormat_nid_no_patch(guestFormat, nullptr, 1, 5);
         LibcRunReportUnsupportedFormatStop_nid_no_patch(guestFormat, __FILE__, __LINE__);
-        Require(false, "unsupported guest texture format " + std::to_string(guestFormat));
+        // The same function builds the key the run report files the rejection under, so the two cannot drift apart.
+        Require(false, RunReport::UnsupportedFormatKey(guestFormat));
     }
     // Counted only while a report is collected; the answer cannot change after startup.
     static const bool reporting = LibcRunReportEnabled_nid_no_patch();

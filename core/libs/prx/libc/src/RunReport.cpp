@@ -1390,7 +1390,9 @@ struct Collector::Tables {
     std::vector<FormatEntry> imageFormats;
     std::vector<DescriptorEntry> descriptors;
     Truncated dropped;
-    std::set<std::string> droppedFunctionKeys, droppedUnsupportedKeys;
+    std::set<std::string> droppedFunctionKeys, droppedUnsupportedKeys, droppedFormatKeys;
+    // More distinct entries were dropped than the key sets remember: the counts are lower bounds and the report says it is incomplete.
+    bool droppedSaturated = false;
     // A failure that ended the run for certain (the driver reported it as fatal).
     std::optional<Stop> fatalStop;
     // Failures noted where they were thrown, each with the message of the exception it threw. The game may catch them.
@@ -1400,6 +1402,17 @@ struct Collector::Tables {
     };
     std::vector<Soft> softStops;
 };
+
+// A failure filed under the message of the error it threw. The same message is filed once, so a failure that repeats cannot fill the
+// list and hide a different one that comes later; the list keeps the most recent distinct ones.
+void AddSoft(Collector::Tables& tables, Stop stop, std::string message) {
+    if (message.empty()) return;
+    auto& list = tables.softStops;
+    const auto same = std::ranges::find(list, message, &Collector::Tables::Soft::message);
+    if (same != list.end()) return;
+    if (list.size() >= 8u) list.erase(list.begin());
+    list.push_back({std::move(stop), std::move(message)});
+}
 
 Collector::Collector(Settings value) : settings(std::move(value)), game(std::make_shared<GameState>()), tables(std::make_shared<Tables>()) {
     for (auto& nanos : milestoneNanos) nanos = -1;
@@ -1652,6 +1665,10 @@ std::int64_t NanosSince(std::chrono::steady_clock::time_point start) {
 }
 
 // The source of a call site as `core/...:line`, or nothing when the compile-time path is not inside the source tree.
+std::string UnsupportedFormatKey(unsigned format) {
+    return "unsupported guest texture format " + std::to_string(format);
+}
+
 std::optional<std::string> SourceOf(std::string_view file, int line) {
     // `core/` must start a path segment: `/x/notcore/a.cpp` is not inside the source tree.
     auto at = file.rfind("core/");
@@ -1668,6 +1685,8 @@ void Collector::CheckpointSoon() {
     if (!started_ || state != 0 || checkpointsRequested.fetch_add(1) >= 64) return;
     checkpointWanted = true;
     changed.notify_all();
+    // Where the worker could not start while the libraries loaded, the first request starts it (the hooks run on ordinary threads).
+    if (settings.deferredWorker) BeginWorker();
 }
 
 std::unique_lock<std::timed_mutex> Collector::LockTablesForTest() {
@@ -1715,6 +1734,8 @@ void Collector::NoteMissingFunction(std::string_view library, std::string_view n
         } else if (tables->droppedFunctionKeys.size() < 4096u) {
             // Entries dropped are counted once each, not once per call.
             if (tables->droppedFunctionKeys.insert(std::string(library) + "|" + std::string(name)).second) ++tables->dropped.functions;
+        } else {
+            tables->droppedSaturated = true;
         }
         // The game may catch this and go on, so it only names the stop of an abort that ends with this very message.
         Stop stop{Kind::MissingFunction, Reason::RuntimeStop, source.empty() ? std::nullopt : std::optional<std::string>(source), std::nullopt};
@@ -1722,7 +1743,7 @@ void Collector::NoteMissingFunction(std::string_view library, std::string_view n
         if (Matches(function, "[A-Za-z0-9_.$]{1,128}")) {
             stop.message = "The game called a function the runtime does not implement: " + (library.empty() ? std::string() : std::string(library) + ".") + function + ".";
         }
-        if (tables->softStops.size() < 8u) tables->softStops.push_back({std::move(stop), std::string(terminatingMessage)});
+        AddSoft(*tables, std::move(stop), std::string(terminatingMessage));
     }
     if (added) CheckpointSoon();
 }
@@ -1753,6 +1774,8 @@ void Collector::NoteUnsupportedInstruction(std::optional<std::string> encoding, 
         } else if (tables->droppedUnsupportedKeys.size() < 4096u) {
             const auto key = encoding.value_or("") + "|" + opcode.value_or("") + "|" + (opcodeValue ? std::to_string(*opcodeValue) : std::string());
             if (tables->droppedUnsupportedKeys.insert(key).second) ++tables->dropped.unsupported;
+        } else {
+            tables->droppedSaturated = true;
         }
     }
     if (added) CheckpointSoon();
@@ -1791,8 +1814,11 @@ void Collector::NoteImageFormat(std::int64_t format, std::optional<std::string> 
         } else if (list.size() < TrackedEntries) {
             list.push_back({format, std::move(name), status, usage, 1});
             added = true;
+        } else if (tables->droppedFormatKeys.size() < 4096u) {
+            // Entries dropped are counted once each, not once per call.
+            if (tables->droppedFormatKeys.insert(std::to_string(format) + "|" + std::to_string(static_cast<int>(status)) + "|" + std::to_string(usage)).second) ++tables->dropped.imageFormats;
         } else {
-            ++tables->dropped.imageFormats;
+            tables->droppedSaturated = true;
         }
     }
     if (added) CheckpointSoon();
@@ -1822,7 +1848,7 @@ void Collector::NoteStop(Stop stop) {
 void Collector::NoteSoftStop(Stop stop, std::string terminatingMessage) {
     std::unique_lock guard(tables->mutex, std::defer_lock);
     if (!guard.try_lock_for(settings.tableWait)) return;
-    if (tables->softStops.size() < 8u) tables->softStops.push_back({std::move(stop), std::move(terminatingMessage)});
+    AddSoft(*tables, std::move(stop), std::move(terminatingMessage));
 }
 
 std::optional<Stop> Collector::PendingStop() const {
@@ -1837,7 +1863,8 @@ std::optional<Stop> Collector::StopFor(std::string_view terminatingMessage) cons
     if (tables->fatalStop) return tables->fatalStop;
     if (terminatingMessage.empty()) return std::nullopt;
     for (const auto& soft : tables->softStops) {
-        if (soft.message == terminatingMessage) return soft.stop;
+        // The thrower may prefix its text (the graphics layer adds "AGC graphics: "); the registered key is the end of what it throws.
+        if (!soft.message.empty() && terminatingMessage.ends_with(soft.message)) return soft.stop;
     }
     return std::nullopt;
 }
@@ -1880,6 +1907,7 @@ Observations Collector::Observe() const {
         o.imageFormats.insert(o.imageFormats.end(), tables->imageFormats.begin(), tables->imageFormats.end());
         o.descriptors.insert(o.descriptors.end(), tables->descriptors.begin(), tables->descriptors.end());
         o.truncated = tables->dropped;
+        if (tables->droppedSaturated) o.lostObservations = true;
     } else {
         // A stuck writer: say that the lists are unknown rather than that they are empty.
         o.coverage.missing = o.coverage.unsupported = o.coverage.imageFormats = o.coverage.descriptors = false;
@@ -1889,7 +1917,7 @@ Observations Collector::Observe() const {
     if (lost[1] != 0 && o.coverage.unsupported) o.truncated.unsupported += 1;
     if (lost[2] != 0 && o.coverage.imageFormats) o.truncated.imageFormats += 1;
     if (lost[3] != 0 && o.coverage.descriptors) o.truncated.descriptors += 1;
-    o.lostObservations = lost[0] != 0 || lost[1] != 0 || lost[2] != 0 || lost[3] != 0;
+    o.lostObservations = o.lostObservations || lost[0] != 0 || lost[1] != 0 || lost[2] != 0 || lost[3] != 0;
     return o;
 }
 
@@ -2027,6 +2055,9 @@ bool StartRunReport() noexcept {
         // Every section is collected by this build's runtime. The loaded and started milestones come from the entry bridge of the
         // converted executable (macOS has it); where it is missing those two are left out, as unreached milestones are.
         settings.coverage = {true, true, true, true, true, true};
+#ifdef _WIN32
+        settings.deferredWorker = true;
+#endif
         auto* created = new RunReport::Collector(std::move(settings));
         if (!created->Start()) {
             delete created;
@@ -2189,7 +2220,7 @@ extern "C" void LibcRunReportUnsupportedFormatStop_nid_no_patch(unsigned format,
         if (collector == nullptr) return;
         RunReport::Stop stop{RunReport::Kind::UnsupportedFormat, RunReport::Reason::RuntimeStop, RunReport::SourceOf(file != nullptr ? file : "", line), "A guest image format is not supported (format " + std::to_string(format) + ")."};
         // The runtime throws "unsupported guest texture format N" and callers may catch it; only that message ends the run with this stop.
-        collector->NoteSoftStop(std::move(stop), "unsupported guest texture format " + std::to_string(format));
+        collector->NoteSoftStop(std::move(stop), RunReport::UnsupportedFormatKey(format));
     } catch (...) {
     }
 }

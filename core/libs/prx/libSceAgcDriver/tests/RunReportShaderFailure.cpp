@@ -3,12 +3,16 @@
 // counted as compiled. These run the real Recompile on real shader words.
 #include "Recompiler.hpp"
 #include "RdnaDecoder/DiagnosticSink.hpp"
+#include "prx/libSceAgcDriver/Graphics/include/TextureFormat.hpp"
+#include "prx/libc/include/RunReport.hpp"
 #include <spirv/unified1/spirv.hpp>
 #include <array>
 #include <atomic>
 #include <cstdint>
+#include <cstdlib>
 #include <cstdio>
 #include <exception>
+#include <filesystem>
 #include <span>
 #include <stdexcept>
 #include <string>
@@ -62,7 +66,37 @@ RecompileResult recompile(std::span<const std::uint32_t> code, bool useCache) {
     return Recompile(request);
 }
 
+// The text the graphics layer really throws for a rejected format finds the stop the run report filed for it.
+void verifyFormatStop() {
+    std::string text;
+    try {
+        static_cast<void>(AgcDriver::Graphics::ResolveTextureFormat(9999u));
+    } catch (const std::exception& error) {
+        text = error.what();
+    }
+    require(!text.empty(), "an unknown guest format was resolved");
+    RunReport::Settings settings;
+    settings.executableDirectory = std::filesystem::temp_directory_path() / "anyps5-run-report-format-stop";
+    std::filesystem::create_directories(settings.executableDirectory);
+    settings.worker = false;
+    RunReport::Collector collector(std::move(settings));
+    require(collector.Start(), "the collector did not start");
+    collector.NoteSoftStop(RunReport::Stop{RunReport::Kind::UnsupportedFormat, RunReport::Reason::RuntimeStop, std::nullopt, "A guest image format is not supported (format 9999)."}, RunReport::UnsupportedFormatKey(9999u));
+    const auto stop = collector.StopFor(text);
+    require(stop && stop->kind == RunReport::Kind::UnsupportedFormat, "the real message '" + text + "' did not find the stop of a rejected format");
+    collector.Finish(RunReport::Exit::Clean, {}, 0);
+    std::error_code ignored;
+    std::filesystem::remove_all(collector.ReportPath().parent_path(), ignored);
+}
+
 void verify() {
+    // The disk cache would turn a compile into a reuse; this test counts compiles, so it never reads one.
+#ifdef _WIN32
+    _putenv_s("ANYPS5_NO_SHADER_CACHE", "1");
+#else
+    setenv("ANYPS5_NO_SHADER_CACHE", "1", 1);
+#endif
+    verifyFormatStop();
     static const DiagnosticSink sink{.shader = Shader, .unsupportedInstruction = Unsupported};
     SetDiagnosticSink(&sink);
     for (const bool cache : {false, true}) {

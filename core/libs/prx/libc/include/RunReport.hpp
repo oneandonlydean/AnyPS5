@@ -202,6 +202,8 @@ struct Settings {
     std::chrono::milliseconds tableWait{200};
     // Component names that must have registered the same commit for `modified` to be known.
     std::vector<std::string> requiredComponents;
+    // Hooks start the checkpoint worker when it could not be started during loading (Windows), the first time they ask for a checkpoint.
+    bool deferredWorker = false;
     // Which sections this build collects; a section that is off is reported as not covered, not as empty.
     Coverage coverage;
 };
@@ -209,6 +211,9 @@ struct Settings {
 void RegisterComponent(std::string_view name, std::string_view commit, int modified);
 // A call site as `core/...:line` (the part of the compile-time path inside the source tree), or nothing.
 std::optional<std::string> SourceOf(std::string_view file, int line);
+// The key a rejected format is filed under: the text the lookup throws, without any prefix the thrower adds. An abort whose message
+// ends with it is the stop for that format.
+std::string UnsupportedFormatKey(unsigned format);
 std::string GenerateRunId();
 std::string FormatUtc(std::chrono::system_clock::time_point time);
 std::string Serialize(const Report& report);
@@ -292,7 +297,9 @@ private:
     void Work();
     void RefreshGame(bool force = false);
     BuildInfo Provenance() const;
+public:
     struct Tables;
+private:
     Observations Observe() const;
     void CheckpointSoon();
     void NoteLost(int section);

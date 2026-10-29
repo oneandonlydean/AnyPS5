@@ -975,6 +975,59 @@ void CheckpointDoesNotBlockHooksTest() {
     Require(returned, "an observation hook waited for a checkpoint write");
 }
 
+void FormatStopKeyTest() {
+    // The graphics layer throws "AGC graphics: " + the key; the key must still find the stop.
+    Directory executable, user;
+    RunReport::Collector collector(Covered(executable.path, user.path, IdA));
+    Require(collector.Start(), "the collector did not start");
+    RunReport::Stop stop{RunReport::Kind::UnsupportedFormat, RunReport::Reason::RuntimeStop, std::nullopt, "A guest image format is not supported (format 99)."};
+    collector.NoteSoftStop(stop, RunReport::UnsupportedFormatKey(99));
+    const auto found = collector.StopFor("AGC graphics: " + RunReport::UnsupportedFormatKey(99));
+    Require(found && found->kind == RunReport::Kind::UnsupportedFormat, "a prefixed message did not find the stop of a rejected format");
+    Require(!collector.StopFor("AGC graphics: " + RunReport::UnsupportedFormatKey(98)).has_value(), "another format's message found the stop");
+    Require(!collector.StopFor("AGC graphics: unrelated").has_value(), "an unrelated message found the stop");
+}
+
+void SoftStopDedupTest() {
+    Directory executable, user;
+    RunReport::Collector collector(Covered(executable.path, user.path, IdA));
+    Require(collector.Start(), "the collector did not start");
+    RunReport::Stop stop{RunReport::Kind::UnsupportedFormat, RunReport::Reason::RuntimeStop, std::nullopt, "A guest image format is not supported (format 7)."};
+    for (int index = 0; index < 50; ++index) collector.NoteSoftStop(stop, RunReport::UnsupportedFormatKey(7));
+    collector.NoteMissingFunction("libLater", "realFailure", "", "realFailure not implemented");
+    Require(collector.StopFor("realFailure not implemented").has_value(), "a failure that repeated hid a different one that came later");
+}
+
+void FormatOverflowTest() {
+    Directory executable, user;
+    RunReport::Collector collector(Covered(executable.path, user.path, IdA));
+    Require(collector.Start(), "the collector did not start");
+    for (int round = 0; round < 2; ++round) {
+        for (int format = 0; format < 600; ++format) collector.NoteImageFormat(format, std::nullopt, RunReport::Status::Accepted, 0);
+    }
+    collector.Finish(RunReport::Exit::Clean, {}, 0);
+    const auto text = Read(collector.ReportPath());
+    // 600 distinct entries, 100 listed: 500 dropped, however often they were seen.
+    Require(Contains(text, "\"imageFormats\": 500,"), "format overflow counted calls, not entries: " + text.substr(text.find("\"truncated\"")));
+}
+
+void DeferredWorkerTest() {
+    Directory executable, user;
+    auto settings = Covered(executable.path, user.path, IdA);
+    settings.worker = false;
+    settings.deferredWorker = true;
+    settings.checkpointInterval = std::chrono::milliseconds(10);
+    RunReport::Collector collector(std::move(settings));
+    Require(collector.Start(), "the collector did not start");
+    collector.NoteMilestone(2);
+    bool written = false;
+    for (int attempt = 0; attempt < 200 && !written; ++attempt) {
+        std::this_thread::sleep_for(std::chrono::milliseconds(10));
+        written = Contains(Read(collector.CheckpointPath()), "\"firstDraw\"");
+    }
+    Require(written, "no worker was started to write the checkpoint of an early milestone");
+}
+
 void SourceBoundaryTest() {
     Require(!RunReport::SourceOf("/x/notcore/a.cpp", 3) && !RunReport::SourceOf("/x/mycore/a.cpp", 3), "a path that only ends in core/ was taken for the source tree");
     Require(RunReport::SourceOf("/x/core/a.cpp", 3) == std::optional<std::string>("core/a.cpp:3") && RunReport::SourceOf("core/a.cpp", 3) == std::optional<std::string>("core/a.cpp:3"), "a source path was refused");
@@ -1362,6 +1415,10 @@ int main(int argc, char** argv) {
         Run("lost-observation", LostObservationTest);
         Run("checkpoint-does-not-block-hooks", CheckpointDoesNotBlockHooksTest);
         Run("source-boundary", SourceBoundaryTest);
+        Run("format-stop-key", FormatStopKeyTest);
+        Run("soft-stop-dedup", SoftStopDedupTest);
+        Run("format-overflow", FormatOverflowTest);
+        Run("deferred-worker", DeferredWorkerTest);
         Run("dropped-entries-are-distinct", DroppedEntriesAreDistinctTest);
 #ifndef _WIN32
         Run("child-exit", ChildExitTest);

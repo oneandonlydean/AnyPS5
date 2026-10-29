@@ -420,8 +420,9 @@ public:
     // so a batch is submitted after a bounded amount of work (APS5_BATCH_CAP).
     static std::uint64_t RecordedWorkSinceSubmit();
     static void CountRecordedWork();
-    // Guest draw or dispatch commands were just recorded into the open batch; the batch carries them to its submit (run report milestone).
-    void NoteGuestWork();
+    // Guest draw or dispatch commands were just recorded into `commands`. When those are the open batch's the batch carries them to its
+    // submit (run report milestone) and this returns true; otherwise they belong to another batch and nothing is marked.
+    bool NoteGuestWork(VkCommandBuffer commands);
 
     // The recorder of the current device, for code that only has guest addresses (the flush hook)
     // and for helpers that must not recycle resources the recorded work still uses.
