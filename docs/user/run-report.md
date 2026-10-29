@@ -26,6 +26,8 @@ If a run ends without writing its report (power loss, forced kill, a crash the r
 
 A value the runtime cannot know is `null`, never a guess. This applies to `anyps5.*`, every `game.*` and `system.*` field, the whole `system.gpu` object (null if the run stopped before the GPU was set up), `run.exitCode`, `stop.source`, and instruction details. Read null as "unknown", not as false or zero.
 
+Every text value in the report goes through the same filter for user names, host names, addresses and account numbers. A version made of four numbers separated by dots (`1.2.3.4`) looks like an IPv4 address, so it is left out (null) rather than risk writing an address; versions of three numbers (`01.002.000`) and release tags (`v0.1.3`) are kept. The commit and the run id are fixed-length hex and are checked by their pattern only, so the build identity is always there.
+
 `game.titleId` is copied only when it matches `PPSA` or `CUSA` style (four capital letters and five digits); otherwise it is null.
 
 ## Run

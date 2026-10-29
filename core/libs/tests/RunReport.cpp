@@ -122,7 +122,7 @@ void PrivacyTests() {
                                "connect 192.168.1.20", "mac 00:1a:2b:3c:4d:5e", "mac 00-1a-2b-3c-4d-5e", "v6 fe80:0:0:0:1:2:3:4", "line\nbreak", "tab\there", "", "bad utf8 \xc3\x28", "overlong \xc0\xaf"}) {
         Require(!RunReport::SafeText(unsafe, host).has_value(), std::string("an unsafe text was kept: ") + unsafe);
     }
-    Require(RunReport::SafeText(std::string(300, 'a'), host).has_value() && !RunReport::SafeText(std::string(301, 'a'), host).has_value(), "the 300 character cap is wrong");
+    Require(RunReport::SafeText(std::string(300, 'z'), host).has_value() && !RunReport::SafeText(std::string(301, 'z'), host).has_value(), "the 300 character cap is wrong");
     std::string wide;
     for (int index = 0; index < 300; ++index) wide += "\xc3\xa9";
     Require(RunReport::SafeText(wide, host).has_value(), "300 two-byte characters were refused");
@@ -526,6 +526,9 @@ void PrivacyIsolatedTest() {
                                "open /run/user/1000/x", "go to ~/Documents/saves", "account 123456789012", "see file:///etc/passwd", "set %USERPROFILE%\\x", "(/srv/data)", "http://example.org/x"}) {
         Require(!RunReport::SafeText(unsafe, host).has_value(), std::string("an unsafe text was kept: ") + unsafe);
     }
+    for (const char* glued : {"lib_192.0.2.123", "fn192.0.2.123", "v192.0.2.123", "x_10.1.2.3_y"}) {
+        Require(!RunReport::SafeText(glued, host).has_value(), std::string("an address glued to an identifier was kept: ") + glued);
+    }
     for (const char* safe : {"Tabby and abacus", "Mission: Impossible: Redux", "Face Off: Dead", "Part 1/2", "Strike & Fire", "Game 2049", "Alpha: Omega"}) {
         Require(RunReport::SafeText(safe, host).has_value(), std::string("a safe text was dropped: ") + safe);
     }
@@ -654,6 +657,114 @@ void StructuredFieldCanaryTest() {
     for (const char* canary : {"192.0.2.123", "123456789012", "canaryuser9"}) Require(!Contains(text, canary), std::string("a structured field kept the canary ") + canary + ": " + text);
     for (const char* kept : {"\"fn_ok\"", "\"libOk\"", "\"OP_OK\"", "\"clamp\"", "\"GuestFormat2\""}) Require(Contains(text, kept), std::string("a clean structured value was lost: ") + kept);
     Require(Contains(text, "\"contentVersion\": null") && Contains(text, "\"release\": null"), "a version or release with an address or account number was kept");
+}
+
+void EachStructuredFieldAloneTest() {
+    // One unsafe value at a time, next to clean ones: the unsafe value must be gone and nothing else may be lost, so a field that is
+    // not filtered cannot hide behind another field that is.
+    RunReport::HostIdentifiers host;
+    host.words = {"canaryuser9"};
+    const auto base = [] {
+        auto report = SampleReport();
+        auto& o = report.observed;
+        o.coverage = {true, true, true, true, true, true};
+        o.functions = {{std::string("libOk"), "fn_ok", 3}, {std::string("libOk"), "fn_companion", 2}};
+        o.unsupported = {{std::string("VOP3"), std::string("OP_OK"), 5, std::vector<std::string>{"clamp"}, 4}};
+        o.imageFormats = {{1, std::string("GuestFormat1"), RunReport::Status::Accepted, 0, 3}};
+        return report;
+    };
+    struct Case {
+        const char* name;
+        void (*apply)(RunReport::Report&, const std::string&);
+        const char* kept;
+    };
+    const Case cases[] = {
+        {"library", [](RunReport::Report& r, const std::string& v) { r.observed.functions[0].library = v; }, "\"fn_ok\""},
+        {"function", [](RunReport::Report& r, const std::string& v) { r.observed.functions[0].name = v; }, "\"fn_companion\""},
+        {"encoding", [](RunReport::Report& r, const std::string& v) { r.observed.unsupported[0].encoding = v; }, "\"OP_OK\""},
+        {"opcode", [](RunReport::Report& r, const std::string& v) { r.observed.unsupported[0].opcode = v; }, "\"VOP3\""},
+        {"modifier", [](RunReport::Report& r, const std::string& v) { r.observed.unsupported[0].modifiers = std::vector<std::string>{v}; }, "\"OP_OK\""},
+        {"format name", [](RunReport::Report& r, const std::string& v) { r.observed.imageFormats[0].name = v; }, "\"format\": 1"},
+        {"content version", [](RunReport::Report& r, const std::string& v) { r.game.contentVersion = v; }, "\"titleId\""},
+        {"release", [](RunReport::Report& r, const std::string& v) { r.build.release = "v" + v; }, "\"commit\""},
+    };
+    // The addresses come bare and glued to letters and underscores, as identifiers and versions carry them.
+    for (const auto& unsafe : {std::string("192.0.2.123"), std::string("lib_192.0.2.123"), std::string("fn192.0.2.123"), std::string("OP_192.0.2.123"), std::string("acct123456789012"), std::string("canaryuser9")}) {
+        for (const auto& item : cases) {
+            auto report = base();
+            item.apply(report, unsafe);
+            const auto text = RunReport::Serialize(report, host);
+            Require(!Contains(text, unsafe), std::string("the ") + item.name + " kept the unsafe value " + unsafe + ": " + text);
+            Require(Contains(text, item.kept), std::string("a clean value was lost with the unsafe ") + item.name + ": " + text);
+        }
+    }
+}
+
+// The same one-hostile-field cases through the hooks: the live report and the report recovered from the checkpoint of an abandoned run.
+void HostileFieldLiveAndRecoveredTest() {
+#ifdef _WIN32
+    throw NotRun("the abandoned-run recovery here uses POSIX files");
+#else
+    struct Field {
+        const char* name;
+        const char* clean;
+    };
+    const Field fields[] = {{"library", "libOk"}, {"function", "\"fn_other\""}, {"encoding", "OP_OK"}, {"opcode", "VOP3"}, {"format name", "\"format\": 1"}, {"content version", "\"titleId\""}, {"release", "\"commit\""}};
+    for (const std::string unsafe : {"192.0.2.123", "lib_192.0.2.123", "fn192.0.2.123", "fn_203.0.113.7_call", "a10.0.0.1b", "acct123456789012", "deadbeefcafe0123456"}) {
+        for (std::size_t index = 0; index < std::size(fields); ++index) {
+            const auto describe = std::string(fields[index].name) + " = " + unsafe;
+            const auto fill = [&](RunReport::Collector& collector) {
+                const bool library = index == 0, function = index == 1, encoding = index == 2, opcode = index == 3, format = index == 4;
+                collector.NoteMissingFunction(library ? unsafe : "libOk", function ? unsafe : "fn_ok", "", "x");
+                collector.NoteMissingFunction("libOk", "fn_other", "", "y");
+                collector.NoteUnsupportedInstruction(encoding ? unsafe : "VOP3", opcode ? unsafe : "OP_OK", 5, "");
+                collector.NoteUnsupportedInstruction("VOP2", "OP_OTHER", 6, "");
+                collector.NoteImageFormat(1, format ? std::optional<std::string>(unsafe) : std::optional<std::string>("GuestFormat1"), RunReport::Status::Accepted, 0);
+                collector.NoteMilestone(2);
+            };
+            const auto settingsFor = [&](Directory& executable, Directory& user, const char* id) {
+                auto settings = Covered(executable.path, user.path, id);
+                settings.worker = true;
+                settings.checkpointInterval = std::chrono::milliseconds(10);
+                settings.build.commit = std::string(40, 'a');
+                if (index == 5) settings.game = [&] { RunReport::GameInfo game; game.titleId = "PPSA12345"; game.contentVersion = unsafe; return game; };
+                if (index == 6) settings.build.release = "v" + unsafe;
+                return settings;
+            };
+            const auto check = [&](const std::string& text, const char* where) {
+                Require(!Contains(text, unsafe), std::string(where) + " kept the unsafe " + describe + ": " + text);
+                Require(Contains(text, std::string(40, 'a')), std::string(where) + " lost the commit next to the unsafe " + describe + ": " + text);
+                Require(Contains(text, fields[index].clean), std::string(where) + " lost the clean value next to the unsafe " + describe + ": " + text);
+                // The entries that carry no hostile value are untouched.
+                Require(Contains(text, "\"fn_other\"") && Contains(text, "\"OP_OTHER\""), std::string(where) + " lost an entry that had no unsafe value, for " + describe + ": " + text);
+            };
+            Directory executable, user;
+            {
+                RunReport::Collector live(settingsFor(executable, user, IdA));
+                Require(live.Start(), "the collector did not start");
+                fill(live);
+                live.Finish(RunReport::Exit::Clean, {}, 0);
+                check(Read(live.ReportPath()), "the live report");
+            }
+            Directory other, userOther;
+            {
+                RunReport::Collector abandoned(settingsFor(other, userOther, IdB));
+                Require(abandoned.Start(), "the collector did not start");
+                fill(abandoned);
+                for (int attempt = 0; attempt < 300; ++attempt) {
+                    if (Contains(Read(abandoned.CheckpointPath()), "\"firstDraw\"")) break;
+                    std::this_thread::sleep_for(std::chrono::milliseconds(10));
+                }
+            }
+            RunReport::Collector next(Covered(other.path, userOther.path, "cccccccccccccccccccccccccccccccc"));
+            Require(next.Start(), "the next collector did not start");
+            const auto recovered = Read(other.path / "reports" / IdB / "anyps5-report.json");
+            Require(Contains(recovered, "\"recovered\": true"), "no recovered report for " + describe);
+            check(recovered, "the recovered report");
+            next.Finish(RunReport::Exit::Clean, {}, 0);
+        }
+    }
+#endif
 }
 
 void NumericLocaleTest() {
@@ -1138,6 +1249,26 @@ void DeferredWorkerTest() {
     Require(written, "no worker was started to write the checkpoint of an early milestone");
 }
 
+void BuildIdentitySurvivesTest() {
+    // The commit and the run id are long hex; the text filter must not touch them. Versions of three numbers survive; a version of four
+    // numbers is indistinguishable from an IPv4 address and is left out (null) rather than risk the leak.
+    RunReport::HostIdentifiers host;
+    host.words = {"canaryuser9"};
+    auto report = SampleReport();
+    report.build.commit = std::string("0123456789abcdef0123456789abcdef01234567");
+    report.runId = "0123456789abcdef0123456789abcdef";
+    report.build.release = "v0.1.3";
+    report.game.contentVersion = "01.002.000";
+    auto text = RunReport::Serialize(report, host);
+    for (const char* kept : {"\"commit\": \"0123456789abcdef0123456789abcdef01234567\"", "\"id\": \"0123456789abcdef0123456789abcdef\"", "\"release\": \"v0.1.3\"", "\"contentVersion\": \"01.002.000\""}) {
+        Require(Contains(text, kept), std::string("build identity was lost: ") + kept + ": " + text);
+    }
+    report.game.contentVersion = "1.2.3.4";
+    report.build.release = "v1.2.3.4";
+    text = RunReport::Serialize(report, host);
+    Require(Contains(text, "\"contentVersion\": null") && Contains(text, "\"release\": null") && Contains(text, "\"commit\": \"0123456789abcdef"), "a four-number version was kept, or the commit was lost with it: " + text);
+}
+
 void JunctionTest() {
 #ifndef _WIN32
     throw NotRun("junctions are a Windows feature");
@@ -1566,6 +1697,8 @@ int main(int argc, char** argv) {
         Run("privacy-sweep", PrivacySweepTest);
         Run("privacy-sweep-everything", PrivacySweepEverythingTest);
         Run("structured-field-canary", StructuredFieldCanaryTest);
+        Run("each-structured-field-alone", EachStructuredFieldAloneTest);
+        Run("hostile-field-live-and-recovered", HostileFieldLiveAndRecoveredTest);
         Run("numeric-locale", NumericLocaleTest);
         Run("ancestor-link", AncestorLinkTest);
         Run("metadata-host-token", MetadataHostTokenTest);
@@ -1590,6 +1723,7 @@ int main(int argc, char** argv) {
         Run("lost-observation", LostObservationTest);
         Run("checkpoint-does-not-block-hooks", CheckpointDoesNotBlockHooksTest);
         Run("source-boundary", SourceBoundaryTest);
+        Run("build-identity-survives", BuildIdentitySurvivesTest);
         Run("junction", JunctionTest);
         Run("commit-with-hex-name", CommitWithHexNameTest);
         Run("search-only-ancestor", SearchOnlyAncestorTest);

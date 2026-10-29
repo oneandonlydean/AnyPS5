@@ -260,7 +260,8 @@ std::optional<std::string> SafeText(std::string_view text, const HostIdentifiers
     if (text.empty() || !ValidUtf8(text, characters) || characters > MaxTextCharacters) return std::nullopt;
     if (std::ranges::any_of(text, [](unsigned char character) { return character < 0x20u || character == 0x7fu; })) return std::nullopt;
     if (NamesHost(text, host)) return std::nullopt;
-    static const std::regex addresses(R"((\b\d{1,3}(\.\d{1,3}){3}\b)|(([0-9A-Fa-f]{2}[:-]){5}[0-9A-Fa-f]{2})|((^|[^0-9A-Za-z:])(([0-9A-Fa-f]{1,4})?:){2,7}[0-9A-Fa-f]{0,4}($|[^0-9A-Za-z:]))|(\d{8,}))");
+    // The IPv4 form must not depend on word boundaries: "lib_192.0.2.123", "fn192.0.2.123" and "v192.0.2.123" have none before the number.
+    static const std::regex addresses(R"(((^|[^0-9])\d{1,3}(\.\d{1,3}){3}($|[^0-9]))|(([0-9A-Fa-f]{2}[:-]){5}[0-9A-Fa-f]{2})|((^|[^0-9A-Za-z:])(([0-9A-Fa-f]{1,4})?:){2,7}[0-9A-Fa-f]{0,4}($|[^0-9A-Za-z:]))|(\d{8,})|([0-9A-Fa-f]{16,}))");
     static const std::regex paths(R"((^|[\s"'(=,;:|<>\[{])(/[^\s/]|~/|%[A-Za-z_]+%|[A-Za-z]:[\\/]|\\\\|file:))");
     const std::string owned(text);
     if (owned.find('@') != std::string::npos || owned.find("://") != std::string::npos) return std::nullopt;
