@@ -8,6 +8,8 @@
 #include <cstdio>
 #include <cstdlib>
 
+#include "prx/libc/include/RunReport.hpp"
+
 namespace {
 
 struct GuestStart {
@@ -19,6 +21,7 @@ std::atomic<bool> mainLoopRunning {false};
 
 void* RunGuest(void* argument) {
     const auto start = *static_cast<const GuestStart*>(argument);
+    LibcRunReportMilestone_nid_no_patch(1);
     start.entry(start.block, nullptr);
     std::fprintf(stderr, "guest entry returned\n");
     std::abort();
@@ -33,6 +36,7 @@ extern "C" {
 [[noreturn]] void Aps5StartGuest_nid_no_patch(void (*entry)(void*, void*), void* block) {
     static GuestStart start;
     start = {entry, block};
+    LibcRunReportMilestone_nid_no_patch(0);
     pthread_attr_t attributes;
     if (pthread_attr_init(&attributes) != 0) std::abort();
     const auto stackSize = std::max<std::size_t>(pthread_get_stacksize_np(pthread_self()), 8u << 20);

@@ -13,6 +13,10 @@
 #include "general/ExportMacros.hpp"
 
 extern "C" [[noreturn]] void NotImplemented_nid_no_patch(const char* funcName);
+// The same, with the call site, so the run report can name the library and the source line. Callers keep writing
+// NotImplemented_nid_no_patch(name); the macro adds the site.
+extern "C" [[noreturn]] void NotImplementedAt_nid_no_patch(const char* funcName, const char* file, int line);
+#define NotImplemented_nid_no_patch(name) NotImplementedAt_nid_no_patch(name, __FILE__, __LINE__)
 extern "C" std::uint64_t NotImplementedCalls_nid_no_patch();
 extern "C" void CxaFinalize_nid_no_patch(void* dsoHandle);
 extern "C" bool StopAtPrefixLetter_nid_no_patch(const char* str, char** endptr, int base);

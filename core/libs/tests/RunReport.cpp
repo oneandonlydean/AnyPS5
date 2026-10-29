@@ -1,3 +1,4 @@
+#include "prx/libc/include/General.hpp"
 #include "prx/libc/include/RunReport.hpp"
 #include "prx/libc/include/Shutdown.hpp"
 
@@ -909,8 +910,11 @@ void TypedStopTest() {
     RunReport::Collector collector(Covered(executable.path, user.path, IdA));
     Require(collector.Start(), "the collector did not start");
     collector.NoteUnsupportedInstruction("VOP3", "V_CVT_PK_U8_F32", 256, "core/shader/recompiler/Translator/src/Vop3.cpp:812");
+    // Meeting an unsupported instruction is not a stop: the recompiler also meets them in shaders it prepares and never uses.
+    Require(!collector.PendingStop(), "an unsupported instruction alone became the stop");
+    collector.NoteUnsupportedShaderStop("VOP3", "V_CVT_PK_U8_F32", "core/shader/recompiler/Translator/src/Vop3.cpp:812");
     const auto stop = collector.PendingStop();
-    Require(stop && stop->kind == RunReport::Kind::UnsupportedShader && stop->reason == RunReport::Reason::RuntimeStop, "the failure did not become a typed stop");
+    Require(stop && stop->kind == RunReport::Kind::UnsupportedShader && stop->reason == RunReport::Reason::RuntimeStop, "the fatal failure did not become a typed stop");
     collector.NoteMissingFunction("libX", "later", "core/libs/prx/libX/a.cpp:3");
     Require(collector.PendingStop()->kind == RunReport::Kind::UnsupportedShader, "a later failure replaced the first stop");
     collector.Finish(RunReport::Exit::Abort, *stop, std::nullopt);
@@ -1059,6 +1063,17 @@ void ChildTerminateTest() {
     Require(Contains(text, "\"exit\": \"abort\"") && Contains(text, "\"reason\": \"crash\""), "std::terminate did not write an abort report: " + text);
 }
 
+void ChildMissingFunctionTest() {
+    Directory directory;
+    const int status = RunChild(CopySelf(directory), directory.path, "missing-function-after-milestone");
+    Require(WIFSIGNALED(status) && WTERMSIG(status) == SIGABRT, "an unimplemented function did not end in the abort it always did");
+    const auto text = Report(directory);
+    for (const char* part : {"\"kind\": \"missing-function\"", "\"reason\": \"runtime-stop\"", "\"exit\": \"abort\"", "\"name\": \"sceNpTestCall\"", "\"calls\": 1",
+                             "\"source\": \"core/libs/tests/RunReport.cpp:", "\"stage\": \"presents\"", "\"framesPresented\": 1", "\"compiled\": 1", "\"missing\": true"}) {
+        Require(Contains(text, part), std::string("the report of the missing function lacks ") + part + ": " + text);
+    }
+}
+
 void ChildAssertTest() {
     Directory directory;
     const int status = RunChild(CopySelf(directory), directory.path, "assert");
@@ -1167,6 +1182,14 @@ int main(int argc, char** argv) {
                 LibcTerminate_nid_no_patch(0);
             }
             if (mode == "return") return 5;
+            if (mode == "missing-function-after-milestone") {
+                LibcRunReportMilestone_nid_no_patch(2);
+                LibcRunReportFramePresented_nid_no_patch();
+                LibcRunReportShader_nid_no_patch(0);
+                LibcRunReportMilestone_nid_no_patch(3);
+                // The guest does not catch it: an exception out of a noexcept function is std::terminate, as for a real stub call.
+                [] () noexcept { NotImplemented_nid_no_patch("sceNpTestCall_nid_postfix"); }();
+            }
             if (mode == "abort") abort_nid_postfix(0, 0, 0, 0, 0, 0);
             if (mode == "std-terminate") std::terminate();
             if (mode == "assert") LibcRuntimeAssertion("file", 1, "function", "condition");
@@ -1237,6 +1260,7 @@ int main(int argc, char** argv) {
         Run("child-abort", ChildAbortTest);
         Run("child-std-terminate", ChildTerminateTest);
         Run("child-assert", ChildAssertTest);
+        Run("child-missing-function", ChildMissingFunctionTest);
 #endif
         std::printf("run report tests: %d passed, %d failed, %d not run\n", passed, failed, notRun);
         if (passed + failed + notRun == 0) {

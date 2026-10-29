@@ -266,6 +266,8 @@ function(add_shader_recompiler target runtimeTarget)
             RayTracingStrict
             RayTracingMiss
             ReadWholeFile
+            # Reviewed: the run report sink only receives counts and diagnostics; it cannot change what a recompile produces.
+            SetDiagnosticSink
             Recompile
             RecompileCacheKey::ContextHash
             RecompileResult

@@ -1719,13 +1719,25 @@ void Collector::NoteUnsupportedInstruction(std::optional<std::string> encoding, 
         } else {
             ++tables->dropped.unsupported;
         }
-        if (!tables->pendingStop) {
-            Stop stop{Kind::UnsupportedShader, Reason::RuntimeStop, source.empty() ? std::nullopt : std::optional<std::string>(source), std::nullopt};
-            stop.message = encoding && opcode ? "Shader uses an unsupported " + *encoding + " instruction (" + *opcode + ")." : "Shader uses an instruction the runtime does not support.";
-            tables->pendingStop = std::move(stop);
-        }
     }
     if (added) CheckpointSoon();
+}
+
+// A failure that reached the driver as fatal. Seeing an unsupported instruction is not enough: the recompiler also meets them
+// while it prepares shaders it may never use.
+void Collector::NoteUnsupportedShaderStop(std::optional<std::string> encoding, std::optional<std::string> opcode, std::string_view source) {
+    Stop stop{Kind::UnsupportedShader, Reason::RuntimeStop, source.empty() ? std::nullopt : std::optional<std::string>(source), std::nullopt};
+    stop.message = encoding && opcode ? "Shader uses an unsupported " + *encoding + " instruction (" + *opcode + ")." : encoding ? "Shader uses an unsupported " + *encoding + " instruction." : "Shader uses an instruction the runtime does not support.";
+    NoteStop(std::move(stop));
+}
+
+void Collector::SetDescriptorCounters(const std::atomic<unsigned long long>* counters) {
+    descriptorCounters = counters;
+}
+
+void Collector::SetFormatCounters(const std::atomic<unsigned long long>* counters, unsigned count) {
+    formatCounterCount = count;
+    formatCounters = counters;
 }
 
 void Collector::NoteImageFormat(std::int64_t format, std::optional<std::string> name, Status status, int usage) {
@@ -1792,12 +1804,26 @@ Observations Collector::Observe() const {
     o.shadersCompiled = compiled;
     o.shadersFailed = failedShaders;
     if (settings.coverage.shaders) o.cacheHits = cacheHitCount.load();
+    if (const auto* counters = descriptorCounters.load()) {
+        for (int type = 0; type < 7; ++type) {
+            for (int usage = 0; usage < 4; ++usage) {
+                const auto count = counters[type * 4 + usage].load(std::memory_order_relaxed);
+                if (count != 0) o.descriptors.push_back({type, Status::Accepted, usage, static_cast<std::int64_t>(count)});
+            }
+        }
+    }
+    if (const auto* counters = formatCounters.load()) {
+        for (unsigned format = 0; format < formatCounterCount.load(); ++format) {
+            const auto count = counters[format].load(std::memory_order_relaxed);
+            if (count != 0) o.imageFormats.push_back({static_cast<std::int64_t>(format), std::nullopt, Status::Accepted, 5, static_cast<std::int64_t>(count)});
+        }
+    }
     std::unique_lock guard(tables->mutex, std::defer_lock);
     if (guard.try_lock_for(std::chrono::milliseconds(200))) {
         o.functions = tables->functions;
         o.unsupported = tables->unsupported;
-        o.imageFormats = tables->imageFormats;
-        o.descriptors = tables->descriptors;
+        o.imageFormats.insert(o.imageFormats.end(), tables->imageFormats.begin(), tables->imageFormats.end());
+        o.descriptors.insert(o.descriptors.end(), tables->descriptors.begin(), tables->descriptors.end());
         o.truncated = tables->dropped;
     } else {
         // A stuck writer: say that the lists are unknown rather than that they are empty.
@@ -1937,6 +1963,9 @@ bool StartRunReport() noexcept {
         if (APS5_REPORT_MODIFIED >= 0) settings.build.modified = APS5_REPORT_MODIFIED != 0;
         settings.game = ProvideGame;
         settings.requiredComponents = {"libkernel", "libSceVideoOut", "libSceSystemService"};
+        // Every section is collected by this build's runtime. The loaded and started milestones come from the entry bridge of the
+        // converted executable (macOS has it); where it is missing those two are left out, as unreached milestones are.
+        settings.coverage = {true, true, true, true, true, true};
         auto* created = new RunReport::Collector(std::move(settings));
         if (!created->Start()) {
             delete created;
@@ -2058,6 +2087,23 @@ extern "C" void LibcRunReportImageFormat_nid_no_patch(unsigned format, const cha
         if (collector == nullptr) return;
         collector->NoteImageFormat(format, name != nullptr ? std::optional<std::string>(name) : std::nullopt,
                                    static_cast<RunReport::Status>(status >= 0 && status < 3 ? status : 2), usage >= 0 && usage < 6 ? usage : 5);
+    } catch (...) {
+    }
+}
+
+extern "C" void LibcRunReportSetDescriptorCounters_nid_no_patch(const std::atomic<unsigned long long>* counters) noexcept {
+    if (collector != nullptr) collector->SetDescriptorCounters(counters);
+}
+
+extern "C" void LibcRunReportSetFormatCounters_nid_no_patch(const std::atomic<unsigned long long>* counters, unsigned count) noexcept {
+    if (collector != nullptr) collector->SetFormatCounters(counters, count);
+}
+
+extern "C" void LibcRunReportUnsupportedShaderStop_nid_no_patch(const char* encoding, const char* opcode, long long, const char* file, int line) noexcept {
+    try {
+        if (collector == nullptr) return;
+        const auto source = RunReport::SourceOf(file != nullptr ? file : "", line);
+        collector->NoteUnsupportedShaderStop(encoding != nullptr ? std::optional<std::string>(encoding) : std::nullopt, opcode != nullptr ? std::optional<std::string>(opcode) : std::nullopt, source.value_or(""));
     } catch (...) {
     }
 }

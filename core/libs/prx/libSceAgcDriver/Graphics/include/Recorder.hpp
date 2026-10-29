@@ -420,6 +420,8 @@ public:
     // so a batch is submitted after a bounded amount of work (APS5_BATCH_CAP).
     static std::uint64_t RecordedWorkSinceSubmit();
     static void CountRecordedWork();
+    // A guest draw or dispatch packet was recorded; the next submitted batch carries it (run report milestone).
+    static void CountGuestDraw();
 
     // The recorder of the current device, for code that only has guest addresses (the flush hook)
     // and for helpers that must not recycle resources the recorded work still uses.

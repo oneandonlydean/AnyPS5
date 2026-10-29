@@ -15,6 +15,8 @@
 #include "prx/libc/include/GuestAllocations.hpp"
 #include "ShaderDiskCache.hpp"
 #include "prx/libc/include/GuestArena.hpp"
+#include "prx/libc/include/RunReport.hpp"
+#include "RdnaDecoder/include/RdnaDecoder/RdnaInstruction.hpp"
 #include "prx/libc/include/GuestWriteWatch.hpp"
 #include <atomic>
 #include <cstdint>
@@ -309,6 +311,15 @@ void Driver::ReportFailure(std::exception_ptr error) {
             worker.queued.store(0, std::memory_order_release);
         }
         if (first) PrintFailure(error);
+    }
+    if (first) {
+        // A fatal failure from the shader recompiler is the reason the run ends; the run report names it.
+        try {
+            std::rethrow_exception(error);
+        } catch (const ShaderRecompiler::UnsupportedInstructionError& unsupported) {
+            LibcRunReportUnsupportedShaderStop_nid_no_patch(unsupported.encoding, nullptr, unsupported.opcodeValue, unsupported.file, unsupported.line);
+        } catch (...) {
+        }
     }
     changed.notify_all();
 }

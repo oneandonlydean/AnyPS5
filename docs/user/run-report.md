@@ -60,6 +60,15 @@ The pairs the schema enforces: `kind: none`, a clean exit and a reason of `guest
 
 `stop.message` is built from a fixed template, never a raw error string, and is at most 300 characters. `stop.source` is a source-tree path with a line number, or null when unknown (native crashes, for example).
 
+## What the runtime counts
+
+- `milestones.firstDraw` is set when a batch that carries a recorded guest draw or dispatch has been accepted by the GPU queue. `firstPresent` and `framesPresented` count guest display buffers that the swapchain queue accepted (a suboptimal one too); internal clears, test pixels and rejected presents are not counted. `loaded` and `started` come from the entry bridge of the converted executable; only the macOS bridge reports them so far, so on other systems those two are left out.
+- `missing.functions` counts calls to a function the runtime does not implement. The library is the folder the stub is compiled in; a call from older code that does not say where it is made has a null library. The name is the exported name without the runtime's suffix; a name that does not fit the schema is not listed and is counted in `truncated.functions`.
+- `shaders.compiled` and `failed` count compilations where they happen (once per variant); reuse of a variant, in memory or from the disk cache, counts as a cache hit.
+- `shaders.unsupported` lists instructions the recompiler could not translate, by encoding family and numeric opcode (the name is null). It also lists instructions met in shaders that were prepared and never used, so an entry does not by itself mean the run stopped on it; the stop says that.
+- `shaders.imageFormats` counts how often each guest format was resolved for use (the use is `other`), plus the formats the runtime rejected. `shaders.descriptors` counts the bindings of shaders as they were prepared for a draw; the count measures use, not distinct shaders.
+- `stop` names a typed failure only when it ended the run: an unimplemented function, a shader instruction the recompiler could not translate (reported as fatal by the driver) or an unsupported image format. Any other abort stays `other`.
+
 ## Lists, coverage and truncation
 
 - `missing.functions[]`: `library` can be null. `calls` counts calls that reached the missing function. The first one usually ends the run, so 1 is common; this is not a list of everything unimplemented.

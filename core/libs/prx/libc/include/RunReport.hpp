@@ -55,6 +55,12 @@ extern "C" void LibcRunReportUnsupportedInstruction_nid_no_patch(const char* enc
 extern "C" void LibcRunReportImageFormat_nid_no_patch(unsigned format, const char* name, int status, int usage) noexcept;
 // type: 0 UniformBuffer .. 6 Sampler in schema order. status as above. usage: 0 read, 1 write, 2 atomic, 3 other.
 extern "C" void LibcRunReportDescriptor_nid_no_patch(int type, int status, int usage) noexcept;
+// Lock-free counters kept by the library that sees the events: 7 descriptor types x 4 usages (row-major), and one per guest image
+// format. The run report reads them when it writes a report; they are never reset.
+extern "C" void LibcRunReportSetDescriptorCounters_nid_no_patch(const std::atomic<unsigned long long>* counters) noexcept;
+extern "C" void LibcRunReportSetFormatCounters_nid_no_patch(const std::atomic<unsigned long long>* counters, unsigned count) noexcept;
+// The run ended on a shader instruction the recompiler cannot translate (the failure reached the driver as fatal).
+extern "C" void LibcRunReportUnsupportedShaderStop_nid_no_patch(const char* encoding, const char* opcode, long long opcodeValue, const char* file, int line) noexcept;
 // A guest image format the runtime cannot handle ended the run.
 extern "C" void LibcRunReportUnsupportedFormatStop_nid_no_patch(unsigned format, const char* file, int line) noexcept;
 
@@ -252,6 +258,9 @@ public:
     void NoteImageFormat(std::int64_t format, std::optional<std::string> name, Status status, int usage);
     void NoteDescriptor(int type, Status status, int usage);
     void NoteStop(Stop stop);
+    void NoteUnsupportedShaderStop(std::optional<std::string> encoding, std::optional<std::string> opcode, std::string_view source);
+    void SetDescriptorCounters(const std::atomic<unsigned long long>* counters);
+    void SetFormatCounters(const std::atomic<unsigned long long>* counters, unsigned count);
     // The stop a typed failure recorded, used by an abort that has no better explanation.
     std::optional<Stop> PendingStop() const;
     bool WriteCheckpoint();
@@ -302,6 +311,9 @@ private:
     std::atomic<std::int64_t> lastFrameNanos{-1};
     std::atomic<std::int64_t> compiled{0}, failedShaders{0}, cacheHitCount{0};
     std::atomic<int> checkpointsRequested{0};
+    std::atomic<const std::atomic<unsigned long long>*> descriptorCounters{nullptr};
+    std::atomic<const std::atomic<unsigned long long>*> formatCounters{nullptr};
+    std::atomic<unsigned> formatCounterCount{0};
     HostIdentifiers host;
 };
 
