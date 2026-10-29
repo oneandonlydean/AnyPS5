@@ -34,6 +34,7 @@
 #ifdef __APPLE__
 #include <sys/sysctl.h>
 #endif
+#include <climits>
 #include <fcntl.h>
 #include <sys/file.h>
 #include <pwd.h>
@@ -997,6 +998,8 @@ private:
 };
 #else
 // Opens `folder` one component at a time with O_NOFOLLOW, so a link anywhere in the chain (not only in the last name) fails the open.
+// The one exception is a link directly under "/" that root owns (macOS /var, /tmp and /etc, a usr-merged /bin or /lib, an ostree /home):
+// only root can make or change one, so following it hands nothing to whoever controls the rest of the path.
 int OpenFolderNoFollow(const fs::path& folder) {
     const auto absolute = fs::absolute(folder).lexically_normal();
     std::vector<fs::path> parts;
@@ -1010,6 +1013,7 @@ int OpenFolderNoFollow(const fs::path& folder) {
     constexpr int passThrough = O_RDONLY;
 #endif
     int current = ::open("/", O_RDONLY | O_DIRECTORY | O_CLOEXEC);
+    int rootLinks = 0;
     for (std::size_t index = 0; index < parts.size(); ++index) {
         if (current < 0) return -1;
         const bool last = index + 1u == parts.size();
@@ -1018,6 +1022,24 @@ int OpenFolderNoFollow(const fs::path& folder) {
 #ifdef O_PATH
         if (next < 0 && last && errno == EACCES) next = ::openat(current, parts[index].c_str(), O_PATH | O_DIRECTORY | O_NOFOLLOW | O_CLOEXEC);
 #endif
+        if (next < 0 && index == 0 && rootLinks < 8) {
+            struct stat entry {};
+            char target[PATH_MAX];
+            const ssize_t length = ::fstatat(current, parts[0].c_str(), &entry, AT_SYMLINK_NOFOLLOW) == 0 && S_ISLNK(entry.st_mode) && entry.st_uid == 0
+                    ? ::readlinkat(current, parts[0].c_str(), target, sizeof(target) - 1u) : -1;
+            if (length > 0) {
+                // Walk the link's target from "/" (a relative target is relative to "/" too), then the rest of the path.
+                std::vector<fs::path> spliced;
+                for (const auto& part : fs::path(std::string(target, static_cast<std::size_t>(length))).relative_path()) {
+                    if (!part.empty() && part != ".") spliced.push_back(part);
+                }
+                spliced.insert(spliced.end(), parts.begin() + 1, parts.end());
+                parts = std::move(spliced);
+                ++rootLinks;
+                index = static_cast<std::size_t>(-1);
+                continue;
+            }
+        }
         ::close(current);
         current = next;
     }
@@ -1063,9 +1085,20 @@ bool WriteAtomically(const fs::path& target, std::string_view bytes, std::string
         error = "writing the temporary file failed";
         return false;
     }
-    if (!MoveFileExW(temporary.c_str(), target.c_str(), MOVEFILE_REPLACE_EXISTING | MOVEFILE_WRITE_THROUGH)) {
+    // A reader (the next start, a virus scanner, a file indexer) that has the destination open without delete sharing makes the replace
+    // fail for as long as it holds the file, which is a moment; a few short retries get past it instead of losing this write.
+    DWORD replaceError = 0;
+    bool replaced = false;
+    for (int attempt = 0; attempt < 20 && !replaced; ++attempt) {
+        replaced = MoveFileExW(temporary.c_str(), target.c_str(), MOVEFILE_REPLACE_EXISTING | MOVEFILE_WRITE_THROUGH) != 0;
+        if (replaced) break;
+        replaceError = GetLastError();
+        if (replaceError != ERROR_ACCESS_DENIED && replaceError != ERROR_SHARING_VIOLATION && replaceError != ERROR_LOCK_VIOLATION) break;
+        Sleep(5);
+    }
+    if (!replaced) {
         DeleteFileW(temporary.c_str());
-        error = "replacing the destination failed";
+        error = "replacing the destination failed (Windows error " + std::to_string(replaceError) + ")";
         return false;
     }
     return true;
@@ -1119,6 +1152,17 @@ bool WriteAtomically(const fs::path& target, std::string_view bytes, std::string
     ::close(folder);
     if (!flushed) error = "flushing the destination folder failed";
     return flushed;
+#endif
+}
+
+bool FolderIsReachable(const fs::path& folder) {
+#ifdef _WIN32
+    PinnedChain chain;
+    return chain.Pin(folder);
+#else
+    const int descriptor = OpenFolderNoFollow(folder);
+    if (descriptor >= 0) ::close(descriptor);
+    return descriptor >= 0;
 #endif
 }
 

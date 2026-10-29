@@ -18,6 +18,7 @@
 #include <vector>
 
 #ifndef _WIN32
+#include <sys/stat.h>
 #include <sys/wait.h>
 #include <unistd.h>
 #endif
@@ -306,7 +307,8 @@ void WorkerTests() {
     const auto first = Read(collector.CheckpointPath());
     std::string later = first;
     for (int attempt = 0; attempt < 100 && later == first; ++attempt) {
-        std::this_thread::sleep_for(std::chrono::milliseconds(20));
+        // Not the writer's own period: two 20 ms loops can stay in step on a coarse timer and meet at the same moment every time.
+        std::this_thread::sleep_for(std::chrono::milliseconds(17 + attempt % 7));
         later = Read(collector.CheckpointPath());
     }
     Require(later != first && Contains(later, "\"recovered\": true"), "the checkpoint worker did not refresh the checkpoint");
@@ -1132,6 +1134,22 @@ void AncestorLinkTest() {
     std::string bytes;
     Require(!RunReport::ReadBounded(directory.path / "link" / "sub" / "anyps5-report.json", 100, bytes), "a read went through a symbolic link above the parent folder");
     Require(RunReport::ReadBounded(directory.path / "real" / "sub" / "anyps5-report.json", 100, bytes) && bytes == "x\n", "a read through real folders failed");
+#endif
+}
+
+void RootLinkTest() {
+#ifdef _WIN32
+    throw NotRun("no root-owned links under the root here");
+#else
+    // A link directly under "/" that root owns (macOS /var, a usr-merged /lib) is followed; the links below it that a user makes are not (AncestorLinkTest).
+    std::error_code error;
+    for (const auto& entry : fs::directory_iterator("/", error)) {
+        struct stat named {};
+        if (::lstat(entry.path().c_str(), &named) != 0 || !S_ISLNK(named.st_mode) || named.st_uid != 0 || !fs::is_directory(entry.path(), error)) continue;
+        Require(RunReport::FolderIsReachable(entry.path()), "a root-owned link under / was refused: " + entry.path().string());
+        return;
+    }
+    throw NotRun("no root-owned link to a folder under /");
 #endif
 }
 
@@ -2050,6 +2068,7 @@ int main(int argc, char** argv) {
         Run("hostile-field-live-and-recovered", HostileFieldLiveAndRecoveredTest);
         Run("numeric-locale", NumericLocaleTest);
         Run("ancestor-link", AncestorLinkTest);
+        Run("root-link", RootLinkTest);
         Run("metadata-host-token", MetadataHostTokenTest);
         Run("path-delimiters", PathDelimiterTest);
         Run("finish-with-stalled-write", FinishWithStalledWriteTest);

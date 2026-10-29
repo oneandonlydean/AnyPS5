@@ -278,6 +278,8 @@ std::filesystem::path ExecutableDirectory();
 std::filesystem::path UserStateDirectory();
 bool WriteAtomically(const std::filesystem::path& target, std::string_view bytes, std::string_view uniqueName, std::string& error);
 bool ReadBounded(const std::filesystem::path& path, std::size_t limit, std::string& bytes);
+// Whether `folder` can be opened with the same no-link walk the two calls above make; the tests use it for the root-owned links under "/".
+bool FolderIsReachable(const std::filesystem::path& folder);
 // Checkpoints directly in `directories` are recovered to <directory>/reports/<id>/; those in the run-id folders directly
 // below `nestedRoots` are recovered in place, next to the checkpoint.
 std::vector<std::filesystem::path> RecoverAbandonedRuns(const std::vector<std::filesystem::path>& directories, std::string& warnings, const std::vector<std::filesystem::path>& nestedRoots = {});
