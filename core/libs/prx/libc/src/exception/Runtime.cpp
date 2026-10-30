@@ -6,6 +6,7 @@
 #include <cstdarg>
 #include <cstdio>
 #include <cstring>
+#include <exception>
 #include <limits>
 #ifdef _WIN32
 #include <windows.h>
@@ -83,7 +84,19 @@ static void RawLog(const char* format, ...) {
             RawLog("terminate called after throwing an instance of '%s'\n", displayName);
         std::free(demangled);
     } else {
-        RawLog("terminate called without an active exception\n");
+#ifdef __APPLE__
+        // The library's own code throws through the host's runtime on macOS, so the exception that ended the run is the host's, not one of this runtime's.
+        static char hostWhat[512];
+        try {
+            if (const auto current = std::current_exception()) std::rethrow_exception(current);
+        } catch (const std::exception& error) {
+            std::snprintf(hostWhat, sizeof(hostWhat), "%s", error.what());
+            terminatingWhat = hostWhat;
+            RawLog("terminate called after throwing an exception\n  what():  %s\n", hostWhat);
+        } catch (...) {
+        }
+#endif
+        if (terminatingWhat == nullptr) RawLog("terminate called without an active exception\n");
     }
     LibcRunReportFinishAbortWith_nid_no_patch(static_cast<int>(RunReport::Kind::Other), terminatingWhat);
     std::abort();
