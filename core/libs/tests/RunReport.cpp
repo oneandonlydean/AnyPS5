@@ -310,14 +310,21 @@ void WorkerTests() {
     settings.checkpointInterval = std::chrono::milliseconds(20);
     RunReport::Collector collector(std::move(settings));
     Require(collector.Start(), "the collector did not start");
-    const auto first = Read(collector.CheckpointPath());
-    std::string later = first;
-    for (int attempt = 0; attempt < 100 && later == first; ++attempt) {
+    // A read that lands while the worker replaces the file (Windows refuses the open for a moment) gives an empty string: that is no checkpoint
+    // yet, neither as the first state nor as the refreshed one.
+    const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(10);
+    std::string first, later;
+    for (int attempt = 0; first.empty() && std::chrono::steady_clock::now() < deadline; ++attempt) {
+        first = Read(collector.CheckpointPath());
+        if (first.empty()) std::this_thread::sleep_for(std::chrono::milliseconds(5));
+    }
+    Require(!first.empty(), "the checkpoint could not be read after the collector started");
+    for (int attempt = 0; std::chrono::steady_clock::now() < deadline && (later.empty() || later == first || !Contains(later, "\"recovered\": true")); ++attempt) {
         // Not the writer's own period: two 20 ms loops can stay in step on a coarse timer and meet at the same moment every time.
         std::this_thread::sleep_for(std::chrono::milliseconds(17 + attempt % 7));
         later = Read(collector.CheckpointPath());
     }
-    Require(later != first && Contains(later, "\"recovered\": true"), "the checkpoint worker did not refresh the checkpoint");
+    Require(!later.empty() && later != first && Contains(later, "\"recovered\": true"), "the checkpoint worker did not refresh the checkpoint (last read " + std::to_string(later.size()) + " bytes, first " + std::to_string(first.size()) + " bytes)");
     collector.Finish(RunReport::Exit::Clean, {}, 0);
     Require(!fs::exists(collector.CheckpointPath()), "the checkpoint survived a finish with a worker");
 }
