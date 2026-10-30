@@ -55,6 +55,10 @@ static void RawLog(const char* format, ...) {
 
 [[noreturn]] static void DefaultTerminate() {
     const char* terminatingWhat = nullptr;
+#ifdef __APPLE__
+    char hostWhat[512] = {};
+    bool hostException = false;
+#endif
     if (globals.caught && Native(globals.caught->unwind.exception_class)) {
         Header* primary = Primary(globals.caught);
         const char* typeName = primary->type ? primary->type->name() : nullptr;
@@ -86,17 +90,23 @@ static void RawLog(const char* format, ...) {
     } else {
 #ifdef __APPLE__
         // The library's own code throws through the host's runtime on macOS, so the exception that ended the run is the host's, not one of this runtime's.
-        static char hostWhat[512];
+        // The copy lives in this handler's frame (another thread may be terminating too) and only a whole copy counts as the identity of the stop:
+        // a message cut at the buffer size could equal the key of an earlier, caught message.
         try {
             if (const auto current = std::current_exception()) std::rethrow_exception(current);
         } catch (const std::exception& error) {
-            std::snprintf(hostWhat, sizeof(hostWhat), "%s", error.what());
-            terminatingWhat = hostWhat;
+            hostException = true;
+            const int length = std::snprintf(hostWhat, sizeof(hostWhat), "%s", error.what());
+            if (length >= 0 && static_cast<std::size_t>(length) < sizeof(hostWhat)) terminatingWhat = hostWhat;
             RawLog("terminate called after throwing an exception\n  what():  %s\n", hostWhat);
         } catch (...) {
         }
 #endif
-        if (terminatingWhat == nullptr) RawLog("terminate called without an active exception\n");
+#ifdef __APPLE__
+        if (terminatingWhat == nullptr && !hostException) RawLog("terminate called without an active exception\n");
+#else
+        RawLog("terminate called without an active exception\n");
+#endif
     }
     LibcRunReportFinishAbortWith_nid_no_patch(static_cast<int>(RunReport::Kind::Other), terminatingWhat);
     std::abort();
