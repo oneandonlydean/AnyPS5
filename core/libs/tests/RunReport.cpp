@@ -1908,6 +1908,14 @@ void ChildMissingFunctionTest() {
     }
 }
 
+void ChildLongPrefixTest() {
+    Directory directory;
+    const int status = RunChild(CopySelf(directory), directory.path, "long-prefix");
+    Require(WIFSIGNALED(status) && WTERMSIG(status) == SIGABRT, "the abort did not keep its signal");
+    const auto text = Report(directory);
+    Require(Contains(text, "\"kind\": \"other\"") && !Contains(text, "\"kind\": \"missing-function\""), "a longer message that begins with a caught key became that key's stop: " + text);
+}
+
 void ChildCaughtMissingFunctionTest() {
     Directory directory;
     const int status = RunChild(CopySelf(directory), directory.path, "caught-missing-function");
@@ -2073,6 +2081,16 @@ int main(int argc, char** argv) {
                 LibcRunReportMilestone_nid_no_patch(2);
                 abort_nid_postfix(0, 0, 0, 0, 0, 0);
             }
+            if (mode == "long-prefix") {
+                // The caught key is 511 bytes; the message that ends the run is longer and begins with all of it. A copy cut at 511 bytes would equal the key.
+                const std::string name(495, 'f');
+                try { NotImplemented_nid_no_patch(name.c_str()); } catch (const std::exception&) {}
+                LibcRunReportMilestone_nid_no_patch(2);
+#ifdef __APPLE__
+                std::set_terminate([] { _ZSt9terminatev_nid_postfix(); });
+#endif
+                [] (const std::string& longer) noexcept { throw std::runtime_error(longer); }(name + " not implemented" + "X not implemented");
+            }
             if (mode == "enabled") {
                 std::ofstream("enabled.txt") << (LibcRunReportEnabled_nid_no_patch() ? "1" : "0");
                 return 0;
@@ -2192,6 +2210,7 @@ int main(int argc, char** argv) {
         Run("child-library-from-source", LibraryFromSourceTest);
         Run("child-missing-function", ChildMissingFunctionTest);
         Run("child-caught-missing-function", ChildCaughtMissingFunctionTest);
+        Run("child-long-prefix", ChildLongPrefixTest);
         Run("child-enabled", ChildEnabledTest);
 #endif
         std::printf("run report tests: %d passed, %d failed, %d not run\n", passed, failed, notRun);
